@@ -64,7 +64,8 @@ The package entry (`src/main/ts/index.ts`) exports:
   native or daemon text, no secrets), `setWorkerDistPath`, `setWasmModuleUrl` and
   `terminateWorker`;
 * the types `ZephyrWalletData`, `ZephyrDaemonConnection`, `ZephyrWalletSyncResult`,
-  `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, `ZephyrWalletErrorCode` and
+  `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, `ZephyrAssetBalances` (the map by
+  asset), `ZephyrAccountBalances` (the map by subaddress index), `ZephyrWalletErrorCode` and
   `ZephyrWalletErrorDiagnostic`.
 
 By default each wallet runs in its own worker with its own WebAssembly instance

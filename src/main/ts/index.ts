@@ -59,5 +59,6 @@ export type {
   ZephyrWalletConstructionOptions,
   ZephyrNetworkTypeInput
 } from "./wallet/ZephyrWallet";
+export type { ZephyrAssetBalances, ZephyrAccountBalances } from "./common/ZephyrBalances";
 export { default as ZephyrWalletError } from "./common/ZephyrWalletError";
 export type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./common/ZephyrWalletError";
