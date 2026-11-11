@@ -91,5 +91,8 @@ that wallet's worker.
   webpack 5 only.
 * The runtime dependencies are the packages the entry's modules load. The HTTP transport has no
   authentication or proxy support: credentials and proxies are rejected by the address contract and
-  again by the transport. The shipped declarations need no Node.js types. The browser entry bundles
+  again by the transport. In Node.js and Electron it never uses a proxy, also not one named by the
+  process environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`): a daemon request goes
+  directly to the configured address. In a browser the browser's own proxy settings apply, which a
+  page cannot see or change. The shipped declarations need no Node.js types. The browser entry bundles
   what it needs and loads none of the runtime dependencies at run time.

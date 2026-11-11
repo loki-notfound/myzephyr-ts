@@ -72,6 +72,11 @@ The library contains no default daemon and no deployment-specific host.
 
 ## Proxies in front of a daemon
 
+This section is about a reverse proxy that you address as the daemon. The library itself never
+connects through a forward proxy: in Node.js and Electron it ignores the proxy variables of the
+process environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) and connects to the
+configured daemon address directly; in a browser the browser's own settings apply.
+
 * Forward these read-only paths: `/json_rpc`, `/getheight` (also `/get_height`), `/getinfo`
   (`/get_info`), `/getblocks.bin` (`/get_blocks.bin`), `/gethashes.bin` (`/get_hashes.bin`),
   `/get_transaction_pool_hashes.bin` and `/get_o_indexes.bin`. A public node should run in

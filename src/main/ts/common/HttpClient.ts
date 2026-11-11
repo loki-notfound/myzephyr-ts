@@ -76,7 +76,8 @@ export default class HttpClient {
    * The daemon address contract (ZephyrDaemonAddress.ts) rejects credentials and proxies before any
    * native call, and the bridge passes neither, so a request never carries them. This client has no
    * authentication or proxy support either: a request that names credentials or a proxy is
-   * rejected with the contract's diagnostic before anything is sent.
+   * rejected with the contract's diagnostic before anything is sent, and a proxy named by the
+   * process environment is never used (see axiosRequest).
    */
   protected static rejectUnsupported(request: any): void {
     if ((request?.username !== undefined && request.username !== "") || (request?.password !== undefined && request.password !== "")) throw ZephyrWalletError.unsupported("DAEMON_CREDENTIALS");
@@ -296,7 +297,11 @@ export default class HttpClient {
   }
 
   // one request, with the shared agents in Node.js (a browser has no agents); axios rejects a status
-  // outside 2xx with the response attached, which requestAxios passes on as a response
+  // outside 2xx with the response attached, which requestAxios passes on as a response. proxy: false
+  // switches off axios's proxy support in Node.js, including the proxy it would otherwise take from
+  // the process environment (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY and their lower-case forms):
+  // a request goes directly to the configured daemon or not at all. Browsers apply their own proxy
+  // settings, which a page cannot see or change.
   protected static async axiosRequest(method: string, url: string, body: any, rejectUnauthorized?: boolean, cancelToken?: any) {
     const nodeAgents = LibraryUtils.isNodeRuntime();
     return axios.request({
@@ -309,6 +314,7 @@ export default class HttpClient {
       httpAgent: url.startsWith("https") || !nodeAgents ? undefined : HttpClient.getHttpAgent(),
       httpsAgent: url.startsWith("https") && nodeAgents ? HttpClient.getHttpsAgent(rejectUnauthorized) : undefined,
       timeout: HttpClient.getNonAgentTimeout(),
+      proxy: false,
       cancelToken: cancelToken,
       data: body,
       transformResponse: res => res,
