@@ -1,54 +1,55 @@
 {
-  "name": "monero-ts",
-  "description": "A TypeScript library for using Monero",
-  "version": "0.11.22",
+  "name": "@loki-notfound/zephyr-ts",
+  "description": "TypeScript wallet library for Zephyr: a port of monero-ts onto the signed zephyr-backports core",
+  "version": "2.3.0-sec.2-ts.1",
+  "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/woodser/monero-ts.git"
+    "url": "git+https://github.com/loki-notfound/myzephyr-ts.git"
   },
-  "private": false,
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "homepage": "https://github.com/loki-notfound/myzephyr-ts#readme",
+  "bugs": {
+    "url": "https://github.com/loki-notfound/myzephyr-ts/issues"
+  },
+  "main": "./dist/src/main/ts/index.js",
+  "types": "./dist/src/main/ts/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main/ts/index.d.ts",
+      "default": "./dist/src/main/ts/index.js"
+    },
+    "./zephyr.wasm": "./dist/zephyr.wasm",
+    "./zephyr.worker.js": "./dist/zephyr.worker.js",
+    "./package.json": "./package.json"
+  },
+  "imports": {
+    "#zephyr-sdk/zephyr.js": "./dist/zephyr.js",
+    "#zephyr-sdk/zephyr.digest.js": "./dist/zephyr.digest.js"
+  },
   "browser": {
     "socks-proxy-agent": false
   },
   "files": [
-    "dist/",
-    "!dist/src/test/**",
+    "dist/zephyr.js",
+    "dist/zephyr.wasm",
+    "dist/zephyr.digest.js",
+    "dist/zephyr.worker.js",
+    "dist/zephyr.worker.js.LICENSE.txt",
+    "dist/src/main/",
+    "docs/LIMITATIONS.md",
+    "docs/DEPLOYMENT.md",
     "README.md",
-    "package.json",
-    "tsconfig.json",
-    ".babelrc",
-    "CMakeListst.txt",
     "LICENSE.txt"
   ],
-  "imports": {
-    "#monero-ts/monero.js": "./dist/monero.js"
-  },
   "scripts": {
-    "start": "todo",
-    "build_web_worker": "webpack --config ./webpack.worker.js",
-    "build_web_tests": "webpack --config ./webpack.tests.js",
-    "test": "npm run build_commonjs && node --enable-source-maps node_modules/mocha/bin/_mocha --require @babel/register \"dist/src/test/TestAll\" --timeout 900000000 --exit",
-    "test_ci": "npm test -- --grep \"\\bCI\\b\" --timeout 600000",
-    "test_browser": "npm run build_commonjs && ./bin/build_browser_tests.sh --no-serve && node dist/src/test/utils/RunBrowserTests.js",
-    "test_browser_ci": "npm run test_browser -- --grep \"\\bCI\\b\" --timeout 600000",
-    "typedoc": "typedoc ./index.ts --out ./docs/typedocs --excludePrivate --disableSources",
-    "build_commonjs": "babel ./src  --extensions \".js,.ts\" --out-dir ./dist/src && babel ./index.ts  --extensions \".ts\" --out-dir ./dist",
-    "check_babel_version": "babel -V"
-  },
-  "build": {
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "woodser",
-        "repo": "monero-ts"
-      }
-    ]
+    "build": "bin/build.sh",
+    "test:offline": "bin/test_offline.sh",
+    "test:network": "bin/test_network.sh",
+    "pack:check": "bin/pack.sh"
   },
   "engines": {
-    "node": ">=10.0.0"
+    "node": ">=22"
   },
   "dependencies": {
     "@babel/runtime": "^7.23.2",

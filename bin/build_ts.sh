@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Install the locked npm dependencies and build the TypeScript layer (run bin/build_wasm.sh first):
+#   dist/zephyr.digest.js, dist/zephyr.test.digest.js  SHA-256 of dist/zephyr.wasm and of the test
+#                module, embedded in the JavaScript and checked before the module is compiled
+#   type check   tsc with tsconfig.json (must report no diagnostic)
+#   dist/src/    Babel output of src/ (CommonJS for Node; dist/src/test/ is test output, never shipped)
+#   dist/**.d.ts declarations of the public entry and the modules it uses (tsconfig.types.json)
+#   dist/zephyr.worker.js  the browser wallet worker (webpack.worker.js)
+#   dist/lifecycle-consumer/ browser test pages and the browser test worker (webpack.lifecycle-consumer.js)
+#
+# Environment (optional): OFFLINE=1 installs from the npm cache only (npm ci --offline).
+set -euo pipefail
+. "$(dirname "$0")/pins.sh"
+cd "$ROOT"
+export TZ=UTC
+LOGS=$ROOT/build/logs; mkdir -p "$LOGS"
+[ -s dist/zephyr.js ] && [ -s dist/zephyr.wasm ] || die "dist/zephyr.js and dist/zephyr.wasm are missing; run bin/build_wasm.sh first"
+[ -s dist/zephyr.test.js ] && [ -s dist/zephyr.test.wasm ] || die "dist/zephyr.test.js and dist/zephyr.test.wasm are missing; run bin/build_wasm.sh first"
+
+log "embedded module digests"
+digest_module() { # module output
+  local h; h=$(sha256sum "$1" | cut -d' ' -f1)
+  printf '// SHA-256 of %s, written by bin/build_ts.sh; the runtime checks the module against it before compiling.\nmodule.exports = "%s";\n' "$(basename "$1")" "$h" > "$2"
+  echo "$2: $h"
+}
+digest_module dist/zephyr.wasm dist/zephyr.digest.js
+digest_module dist/zephyr.test.wasm dist/zephyr.test.digest.js
+
+log "npm ci"
+offline=(); [ "${OFFLINE:-0}" = 1 ] && offline=(--offline)
+npm ci "${offline[@]}" --ignore-scripts --no-audit --no-fund > "$LOGS/npm-ci.log" 2>&1 || { tail -n 20 "$LOGS/npm-ci.log"; die "npm ci failed"; }
+
+log "type check (tsconfig.json)"
+node_modules/.bin/tsc -p tsconfig.json --noEmit > "$LOGS/tsc.log" 2>&1 || { head -n 40 "$LOGS/tsc.log"; die "type check failed"; }
+
+log "Babel (src -> dist/src)"
+rm -rf dist/src
+node_modules/.bin/babel ./src --extensions ".js,.ts" --out-dir ./dist/src > "$LOGS/babel.log" 2>&1 || { tail -n 20 "$LOGS/babel.log"; die "Babel failed"; }
+
+log "declarations (tsconfig.types.json)"
+node_modules/.bin/tsc -p tsconfig.types.json > "$LOGS/tsc-types.log" 2>&1 || { head -n 40 "$LOGS/tsc-types.log"; die "declaration build failed"; }
+
+log "browser wallet worker (webpack.worker.js)"
+node_modules/.bin/webpack --config ./webpack.worker.js > "$LOGS/webpack-worker.log" 2>&1 || { tail -n 30 "$LOGS/webpack-worker.log"; die "worker bundle failed"; }
+! grep -q 'ERROR' "$LOGS/webpack-worker.log" || die "worker bundle reported an error"
+
+log "browser test pages and test worker (webpack.lifecycle-consumer.js)"
+rm -rf dist/lifecycle-consumer
+NODE_OPTIONS=--max-old-space-size=6144 node_modules/.bin/webpack --config ./webpack.lifecycle-consumer.js > "$LOGS/webpack-test.log" 2>&1 || { tail -n 30 "$LOGS/webpack-test.log"; die "test bundles failed"; }
+! grep -q 'ERROR' "$LOGS/webpack-test.log" || die "test bundles reported an error"
+
+log "release bundle check: no test instrumentation in shipped files"
+for f in dist/zephyr.js dist/zephyr.worker.js dist/src/main/ts/index.js dist/src/main/ts/common/ZephyrWebWorker.js dist/src/main/ts/common/LibraryUtils.js; do
+  for token in __zephyrTsTestHooks __testInstall __testNativeChangePassword __testReply test_heap_in_use __testCrash __measure; do
+    ! grep -q "$token" "$f" || die "$f contains test-only $token"
+  done
+done
+log "embedded digest check"
+H=$(sha256sum dist/zephyr.wasm | cut -d' ' -f1)
+grep -qF "\"$H\"" dist/zephyr.digest.js || die "dist/zephyr.digest.js does not carry the SHA-256 of dist/zephyr.wasm"
+grep -qF "$H" dist/zephyr.worker.js || die "the browser worker does not embed the SHA-256 of dist/zephyr.wasm"
+echo "TypeScript build complete"

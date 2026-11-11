@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "dist",
+    "types": ["node", "jquery"]
+  },
+  "include": [],
+  "files": ["src/main/ts/index.ts"]
+}
