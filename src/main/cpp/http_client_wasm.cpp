@@ -9,12 +9,14 @@
 
 using namespace std;
 
-EM_JS(const char*, js_send_json_request, (int client, const char* uri, const char* username, const char* password, const char* proxy_uri, const char* reject_unauthorized_fn_id, const char* method, const char* body, std::chrono::milliseconds timeout), {
-  //console.log("EM_JS js_send_json_request(" + UTF8ToString(uri) + ", " + UTF8ToString(username) + ", " + UTF8ToString(password) + ", " + UTF8ToString(method) + ")");
-
+// The JavaScript transport. Each request is bounded by timeout_ms (the core's timeout
+// for the call, capped by the bridge, see effective_timeout_ms) and cancelled when it expires. A
+// failed request reports only {"error":"transport"}: no error text, URI, header or body of a
+// failed request is copied into the module. A response reports its status code, headers and body
+// for the core to parse; the status text supplied by the server is not copied.
+EM_JS(const char*, js_send_json_request, (int client, const char* uri, const char* username, const char* password, const char* proxy_uri, const char* reject_unauthorized_fn_id, const char* method, const char* body, int timeout_ms), {
   const HttpClient = this.HttpClient;
   const LibraryUtils = this.LibraryUtils;
-  const GenUtils = this.GenUtils;
 
   // use asyncify to synchronously return to C++
   return Asyncify.handleSleep(function(wakeUp) {
@@ -23,60 +25,47 @@ EM_JS(const char*, js_send_json_request, (int client, const char* uri, const cha
     const cancellation = HttpClient.createCancelToken();
     if (!Module.httpRequestCancels) Module.httpRequestCancels = {};
     Module.httpRequestCancels[client] = cancellation.cancel;
-
-    // make request and process response or error
     let wakeUpCalled = false;
-    HttpClient.request({
-      method: UTF8ToString(method),
-      uri: UTF8ToString(uri),
-      username: UTF8ToString(username),
-      password: UTF8ToString(password),
-      body: UTF8ToString(body),
-      proxyUri: UTF8ToString(proxy_uri) || undefined,
-      cancelToken: cancellation.token,
-      resolveWithFullResponse: true,
-      rejectUnauthorized: LibraryUtils.isRejectUnauthorized(UTF8ToString(reject_unauthorized_fn_id)),
-    }).then(resp => {
-
-      // build response container
-      let respContainer = {
-        code: resp.statusCode,
-        message: resp.statusText,
-        body: resp.body,
-        headers: resp.headers
-      };
-
-      // serialize response container to heap // TODO: more efficient way?
-      let respStr = JSON.stringify(respContainer);
-      let lengthBytes = Module.lengthBytesUTF8(respStr) + 1;
-      let ptr = Module._malloc(lengthBytes);
-      Module.stringToUTF8(respStr, ptr, lengthBytes);
-      delete Module.httpRequestCancels[client];
+    const finish = function(str) {
+      if (wakeUpCalled) return; // a late settlement after a timeout or cancellation is ignored
       wakeUpCalled = true;
-      wakeUp(ptr);
-    }).catch(err => {
-      if (wakeUpCalled) {
-        console.error("Error caught in JS after previously calling wakeUp(): " + err);
-        throw new Error("Error caught in JS after previously calling wakeUp(): " + err);
-      }
-      let str = err.message ? err.message : ("" + err); // get error message
-      str = JSON.stringify({error: str});               // wrap error in object
+      clearTimeout(timer);
+      if (Module.httpRequestCancels[client] === cancellation.cancel) delete Module.httpRequestCancels[client];
       let lengthBytes = Module.lengthBytesUTF8(str) + 1;
       let ptr = Module._malloc(lengthBytes);
       Module.stringToUTF8(str, ptr, lengthBytes);
-      delete Module.httpRequestCancels[client];
-      wakeUpCalled = true;
       wakeUp(ptr);
+    };
+    const timer = setTimeout(function() { cancellation.cancel(); finish(JSON.stringify({error: "transport"})); }, timeout_ms);
+
+    // make request and process response or error
+    let request;
+    try {
+      request = HttpClient.request({
+        method: UTF8ToString(method),
+        uri: UTF8ToString(uri),
+        username: UTF8ToString(username),
+        password: UTF8ToString(password),
+        body: UTF8ToString(body),
+        proxyUri: UTF8ToString(proxy_uri) || undefined,
+        cancelToken: cancellation.token,
+        resolveWithFullResponse: true,
+        rejectUnauthorized: LibraryUtils.isRejectUnauthorized(UTF8ToString(reject_unauthorized_fn_id)),
+      });
+    } catch (err) {
+      request = Promise.reject(err);
+    }
+    request.then(resp => {
+      finish(JSON.stringify({code: resp.statusCode, message: "", body: typeof resp.body === "string" ? resp.body : "", headers: resp.headers || {}}));
+    }).catch(err => {
+      finish(JSON.stringify({error: "transport"})); // the error and its text are not read
     });
   });
 });
 
-EM_JS(const char*, js_send_binary_request, (int client, const char* uri, const char* username, const char* password, const char* proxy_uri, const char* reject_unauthorized_fn_id, const char* method, const char* body, int body_length, std::chrono::milliseconds timeout), {
-  //console.log("EM_JS js_send_binary_request(" + UTF8ToString(uri) + ", " + UTF8ToString(username) + ", " + UTF8ToString(password) + ", " + UTF8ToString(method) + ")");
-
+EM_JS(const char*, js_send_binary_request, (int client, const char* uri, const char* username, const char* password, const char* proxy_uri, const char* reject_unauthorized_fn_id, const char* method, const char* body, int body_length, int timeout_ms), {
   const HttpClient = this.HttpClient;
   const LibraryUtils = this.LibraryUtils;
-  const GenUtils = this.GenUtils;
 
   // use asyncify to synchronously return to C++
   return Asyncify.handleSleep(function(wakeUp) {
@@ -85,70 +74,48 @@ EM_JS(const char*, js_send_binary_request, (int client, const char* uri, const c
     const cancellation = HttpClient.createCancelToken();
     if (!Module.httpRequestCancels) Module.httpRequestCancels = {};
     Module.httpRequestCancels[client] = cancellation.cancel;
-
-    // read binary data from heap to Uint8Array
-    let ptr = body;
-    let length = body_length;
-    let view = new Uint8Array(length);
-    for (let i = 0; i < length; i++) {
-      view[i] = Module.HEAPU8[ptr / Uint8Array.BYTES_PER_ELEMENT + i];
-    }
-
-    // make request and process response or error
     let wakeUpCalled = false;
-    HttpClient.request({
-      method: UTF8ToString(method),
-      uri: UTF8ToString(uri),
-      username: UTF8ToString(username),
-      password: UTF8ToString(password),
-      body: view,
-      proxyUri: UTF8ToString(proxy_uri) || undefined,
-      cancelToken: cancellation.token,
-      resolveWithFullResponse: true,
-      rejectUnauthorized: LibraryUtils.isRejectUnauthorized(UTF8ToString(reject_unauthorized_fn_id)),
-    }).then(resp => {
-
-      // write binary body to heap to pass back pointer
-      let respBin = resp.body;
-      if (!(respBin instanceof Uint8Array)) {
-        console.error("resp is not uint8array");
-        console.error(respBin);
-      }
-      let nDataBytes = respBin.length * respBin.BYTES_PER_ELEMENT;
-      let bodyPtr = Module._malloc(nDataBytes);
-      let heap = new Uint8Array(Module.HEAPU8.buffer, bodyPtr, nDataBytes);
-      heap.set(new Uint8Array(respBin.buffer, respBin.byteOffset, nDataBytes));
-
-      // build response container
-      let respContainer = {
-        code: resp.statusCode,
-        message: resp.statusText,
-        headers: resp.headers,
-        bodyPtr: bodyPtr,
-        bodyLength: respBin.length
-      };
-
-      // serialize response container to heap // TODO: more efficient way?
-      let respStr = JSON.stringify(respContainer);
-      let lengthBytes = Module.lengthBytesUTF8(respStr) + 1;
-      let ptr = Module._malloc(lengthBytes);
-      Module.stringToUTF8(respStr, ptr, lengthBytes);
-      delete Module.httpRequestCancels[client];
+    const finish = function(str) {
+      if (wakeUpCalled) return; // a late settlement after a timeout or cancellation is ignored
       wakeUpCalled = true;
-      wakeUp(ptr);
-    }).catch(err => {
-      if (wakeUpCalled) {
-        console.error("Error caught in JS after previously calling wakeUp(): " + err);
-        throw new Error("Error caught in JS after previously calling wakeUp(): " + err);
-      }
-      let str = err.message ? err.message : ("" + err); // get error message
-      str = JSON.stringify({error: str});               // wrap error in object
+      clearTimeout(timer);
+      if (Module.httpRequestCancels[client] === cancellation.cancel) delete Module.httpRequestCancels[client];
       let lengthBytes = Module.lengthBytesUTF8(str) + 1;
       let ptr = Module._malloc(lengthBytes);
       Module.stringToUTF8(str, ptr, lengthBytes);
-      delete Module.httpRequestCancels[client];
-      wakeUpCalled = true;
       wakeUp(ptr);
+    };
+    const timer = setTimeout(function() { cancellation.cancel(); finish(JSON.stringify({error: "transport"})); }, timeout_ms);
+
+    // copy the binary request body out of the heap
+    let view = Module.HEAPU8.slice(body, body + body_length);
+
+    // make request and process response or error
+    let request;
+    try {
+      request = HttpClient.request({
+        method: UTF8ToString(method),
+        uri: UTF8ToString(uri),
+        username: UTF8ToString(username),
+        password: UTF8ToString(password),
+        body: view,
+        proxyUri: UTF8ToString(proxy_uri) || undefined,
+        cancelToken: cancellation.token,
+        resolveWithFullResponse: true,
+        rejectUnauthorized: LibraryUtils.isRejectUnauthorized(UTF8ToString(reject_unauthorized_fn_id)),
+      });
+    } catch (err) {
+      request = Promise.reject(err);
+    }
+    request.then(resp => {
+      if (wakeUpCalled) return;
+      // write the binary body to the heap; a body that is not bytes is passed as empty
+      let respBin = resp.body instanceof Uint8Array ? resp.body : new Uint8Array(0);
+      let bodyPtr = respBin.length > 0 ? Module._malloc(respBin.length) : 0;
+      if (respBin.length > 0) Module.HEAPU8.set(respBin, bodyPtr);
+      finish(JSON.stringify({code: resp.statusCode, message: "", headers: resp.headers || {}, bodyPtr: bodyPtr, bodyLength: respBin.length}));
+    }).catch(err => {
+      finish(JSON.stringify({error: "transport"})); // the error and its text are not read
     });
   });
 });
@@ -158,6 +125,27 @@ EM_JS(void, js_cancel_http_request, (int client), {
     Module.httpRequestCancels[client]("Wallet is closing");
   }
 });
+
+// Request bound: the core's timeout for the call, at least 1 s, and at most 30 s for
+// a JSON request or 120 s for a binary request (blocks and hashes; up to 1,000 blocks per answer).
+// The core asks for 3.5 minutes on its node RPC calls; the caps keep a silent node from holding a
+// wallet's queue that long. The JavaScript transport cancels a request when it expires; the core
+// then sees a failed request.
+static const long long MIN_REQUEST_TIMEOUT_MS = 1000;
+static const long long MAX_JSON_REQUEST_TIMEOUT_MS = 30000;
+static const long long MAX_BINARY_REQUEST_TIMEOUT_MS = 120000;
+static int effective_timeout_ms(std::chrono::milliseconds timeout, bool binary) {
+  long long ms = (long long) timeout.count();
+  long long cap = binary ? MAX_BINARY_REQUEST_TIMEOUT_MS : MAX_JSON_REQUEST_TIMEOUT_MS;
+  if (ms < MIN_REQUEST_TIMEOUT_MS) ms = MIN_REQUEST_TIMEOUT_MS;
+  if (ms > cap) ms = cap;
+  return (int) ms;
+}
+
+// scheme, host and port from the core, then the bridge's validated base path, then the core's endpoint path
+std::string http_client_wasm::request_uri(const boost::string_ref path) const {
+  return string(m_ssl_enabled ? "https" : "http") + "://" + m_host + ":" + m_port + m_route->base_path + string(path.data(), path.size());
+}
 
 bool http_client_wasm::shutdown() {
   m_is_shutdown = true;
@@ -184,6 +172,7 @@ void http_client_wasm::set_auto_connect(bool auto_connect) {
 
 bool http_client_wasm::connect(std::chrono::milliseconds timeout) {
   if (m_is_shutdown) return false;
+  if (m_host.empty()) return false; // no daemon configured: never reach the JavaScript transport
   m_is_connected = true;    // TODO: do something!
   return true;
 }
@@ -229,13 +218,14 @@ void build_http_header_info(const boost::property_tree::ptree& headers_node, htt
 bool http_client_wasm::invoke_json(const boost::string_ref path, const boost::string_ref method, const boost::string_ref body, std::chrono::milliseconds timeout, const http_response_info** ppresponse_info, const fields_list& additional_params) {
 
   // make json request through javascript
-  string uri = string(m_ssl_enabled ? "https" : "http") + "://" + m_host + ":" + m_port + string(path);
-  string password = string(m_user->password.data(), m_user->password.size());
-  const char* resp_str = js_send_json_request((int) this, uri.data(), m_user->username.data(), password.data(), m_proxy_uri.data(), m_reject_unauthorized_fn_id.data(), method.data(), body.data(), timeout);
-  if (resp_str == nullptr) {
-      cout << "Aborting this op." << endl;
-      return false;
-  }
+  string uri = request_uri(path);
+  string username = m_user ? m_user->username : string();
+  string password = m_user ? string(m_user->password.data(), m_user->password.size()) : string();
+  string method_str(method.data(), method.size());
+  string body_str(body.data(), body.size());
+  m_route->last_failure = 1;
+  const char* resp_str = js_send_json_request((int) this, uri.c_str(), username.c_str(), password.c_str(), m_proxy_uri.c_str(), m_reject_unauthorized_fn_id.c_str(), method_str.c_str(), body_str.c_str(), effective_timeout_ms(timeout, false));
+  if (resp_str == nullptr) return false;
 
   // deserialize response to property tree
   std::istringstream iss = std::istringstream(std::string(resp_str));
@@ -250,8 +240,9 @@ bool http_client_wasm::invoke_json(const boost::string_ref path, const boost::st
   // build response object
   m_response_info.clear();
   m_response_info.m_mime_tipe = "application/json";
-  m_response_info.m_response_comment = resp_node.get<string>("message");
+  m_response_info.m_response_comment = string();
   m_response_info.m_response_code = resp_node.get<int>("code");
+  m_route->last_failure = m_response_info.m_response_code >= 200 && m_response_info.m_response_code < 300 ? 0 : 2;
   m_response_info.m_http_ver_hi = 0;
   m_response_info.m_http_ver_lo = 0;
   build_http_header_info(resp_node.get_child("headers"), m_response_info.m_header_info);
@@ -269,13 +260,13 @@ bool http_client_wasm::invoke_json(const boost::string_ref path, const boost::st
 bool http_client_wasm::invoke_binary(const boost::string_ref path, const boost::string_ref method, const boost::string_ref body, std::chrono::milliseconds timeout, const http_response_info** ppresponse_info, const fields_list& additional_params) {
 
   // make binary request through javascript
-  string uri = string(m_ssl_enabled ? "https" : "http") + "://" + m_host + ":" + m_port + string(path);
-  string password = string(m_user->password.data(), m_user->password.size());
-  const char* resp_str = js_send_binary_request((int) this, uri.data(), m_user->username.data(), password.data(), m_proxy_uri.data(), m_reject_unauthorized_fn_id.data(), method.data(), body.data(), body.length(), timeout);
-  if (resp_str == nullptr) {
-      cout << "Aborting this op." << endl;
-      return false;
-  }
+  string uri = request_uri(path);
+  string username = m_user ? m_user->username : string();
+  string password = m_user ? string(m_user->password.data(), m_user->password.size()) : string();
+  string method_str(method.data(), method.size());
+  m_route->last_failure = 1;
+  const char* resp_str = js_send_binary_request((int) this, uri.c_str(), username.c_str(), password.c_str(), m_proxy_uri.c_str(), m_reject_unauthorized_fn_id.c_str(), method_str.c_str(), body.data(), (int) body.size(), effective_timeout_ms(timeout, true));
+  if (resp_str == nullptr) return false;
 
   // deserialize response to property tree
   std::istringstream iss = std::istringstream(std::string(resp_str));
@@ -290,24 +281,23 @@ bool http_client_wasm::invoke_binary(const boost::string_ref path, const boost::
   // build response object
   m_response_info.clear();
   m_response_info.m_mime_tipe = "application/octet_stream";
-  m_response_info.m_response_comment = resp_node.get<string>("message");
+  m_response_info.m_response_comment = string();
   m_response_info.m_response_code = resp_node.get<int>("code");
+  m_route->last_failure = m_response_info.m_response_code >= 200 && m_response_info.m_response_code < 300 ? 0 : 2;
   m_response_info.m_http_ver_hi = 0;
   m_response_info.m_http_ver_lo = 0;
   build_http_header_info(resp_node.get_child("headers"), m_response_info.m_header_info);
 
-  // read binary body from response pointer
+  // read binary body from response pointer, then free it
   int body_ptr = resp_node.get<int>("bodyPtr");
   int body_length = resp_node.get<int>("bodyLength");
-  m_response_info.m_body = string((char*) body_ptr, body_length);
+  m_response_info.m_body = body_length > 0 ? string((char*) body_ptr, body_length) : string();
+  if (body_ptr != 0) free((char*) body_ptr);
 
   // set response argument
   if (ppresponse_info && m_response_info.m_response_code != 401) {
     *ppresponse_info = std::addressof(m_response_info);
   }
-
-  // free binary from heap
-  free((char*) body_ptr);
 
   // return true iff 200
   return m_response_info.m_response_code == 200;
@@ -317,35 +307,35 @@ bool http_client_wasm::invoke(const boost::string_ref path, const boost::string_
   //cout << "invoke(" << path << ", " << method << ", ...)" << endl;
   if (m_is_shutdown) return false;
 
+  // An unset daemon host (offline wallets) fails like an unreachable daemon before any request
+  // is built, so the core's probes never reach HttpClient. The core itself is unchanged.
+  if (m_host.empty()) return false;
+
   if(!is_connected())
   {
     if (!m_auto_connect && false)
     {
-      MWARNING("Auto connect attempt to " << m_host << ":" << m_port << " disabled");
       return false;
     }
     MDEBUG("Reconnecting...");
     if(!connect(timeout))
     {
-      MDEBUG("Failed to connect to " << m_host << ":" << m_port);
       return false;
     }
   }
 
   // invoke http call
-  string path_str = path.data();
-  bool is_binary = (0 == path_str.compare(path_str.length() - 4, 4, string(".bin")));
+  string path_str(path.data(), path.size());
+  bool is_binary = path_str.size() >= 4 && 0 == path_str.compare(path_str.size() - 4, 4, string(".bin"));
   if (is_binary) return invoke_binary(path, method, body, timeout, ppresponse_info, additional_params);
   else return invoke_json(path, method, body, timeout, ppresponse_info, additional_params);
 }
 
 bool http_client_wasm::invoke_get(const boost::string_ref path, std::chrono::milliseconds timeout, const std::string& body, const http_response_info** ppresponse_info, const fields_list& additional_params) {
-  cout << "invoke_get()" << endl;
   return http_client_wasm::invoke(path, "GET", body, timeout, ppresponse_info, additional_params);
 }
 
 bool http_client_wasm::invoke_post(const boost::string_ref path, const std::string& body, std::chrono::milliseconds timeout, const http_response_info** ppresponse_info, const fields_list& additional_params) {
-  cout << "invoke_post()" << endl;
   return http_client_wasm::invoke(path, "POST", body, timeout, ppresponse_info, additional_params);
 }
 

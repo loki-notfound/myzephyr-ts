@@ -1,0 +1,23 @@
+Description: select the portable "cn" wallet-crypto backend
+Category: build-only; no change to wallet behavior
+Origin: zephyr-javascript README, "Building WebAssembly binaries from source", step 5
+Provenance: build-only patch of the zephyr-backports WebAssembly build, original file SHA-256
+ b7fd0af5761ccc24924279a6d9c293516806181e29ee4e2954b75d9da3b22fa7 (the diff below is unchanged)
+Drop-when: zephyr-javascript passes -DMONERO_WALLET_CRYPTO_LIBRARY=cn itself
+
+zephyr-javascript README, build step 5: set MONERO_WALLET_CRYPTO_LIBRARY to "cn"
+(the default "auto" selects a native backend; "cn" is the portable one).
+
+diff --git a/src/crypto/wallet/CMakeLists.txt b/src/crypto/wallet/CMakeLists.txt
+index e724b3e96..1570dc26b 100644
+--- a/src/crypto/wallet/CMakeLists.txt
++++ b/src/crypto/wallet/CMakeLists.txt
+@@ -30,7 +30,7 @@
+ #
+ # Possibly user defined values.
+ #
+-set(MONERO_WALLET_CRYPTO_LIBRARY "auto" CACHE STRING "Select a wallet crypto library")
++set(MONERO_WALLET_CRYPTO_LIBRARY "cn" CACHE STRING "Select a wallet crypto library")
+ 
+ #
+ # If the user specified "auto", detect best library defaulting to internal.

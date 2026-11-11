@@ -1,8 +1,8 @@
 /**
- * Provides a bridge from WebAssembly to the Monero wallet.
+ * Provides a bridge from WebAssembly to the Zephyr wallet.
  */
-#ifndef monero_wasm_bridge_h
-#define monero_wasm_bridge_h
+#ifndef zephyr_wasm_bridge_h
+#define zephyr_wasm_bridge_h
 
 #include <emscripten/bind.h>
 #include <string>
@@ -17,21 +17,29 @@ namespace tools {
   }
 }
 
-namespace monero_wasm_bridge
+namespace zephyr_wasm_bridge
 {
 
   // ------------------------------ UTILITIES ---------------------------------
 
-  void set_log_level(int level);
+  // Retained bindings report failures with the fixed error protocol of zephyr_wasm_bridge.cpp
+  // ({"error":"<IDENTIFIER>"} or -1); no native exception text reaches JavaScript.
+  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC };
+  const char* classify_current_exception(int context); // only inside a catch handler
+  const char* probe_password_state(int handle, const string& old_password, const string& new_password);
+
+  string set_log_level(int level);
   string get_integrated_address_util(int network_type, const string& standard_address, const string& payment_id);
   string validate_address(const string& address, int network_type);
-  string get_exception_message(int exception_ptr);
+#if defined(ZEPHYR_WASM_BRIDGE_UNPORTED) // not part of the supported surface; targets monero-cpp APIs the fixed core lacks or is not yet adapted
+  string get_exception_message(int exception_ptr); // not bound: native exception text must not reach JavaScript
   string malloc_binary_from_json(const string& args_string);
   string binary_to_json(const string& args_string);
   string binary_blocks_to_json(const string& args_string);
 
   // ------------------------- STATIC WALLET UTILS ----------------------------
 
+#endif // ZEPHYR_WASM_BRIDGE_UNPORTED
   void open_wallet_full(const string& password, int network_type, const string& keys_data, const string& cache_data, const string& daemon_uri, const string& daemon_username, const string& daemon_password, const string& reject_unauthorized_fn_id, bool regtest, emscripten::val callback);
   void create_full_wallet(const string& config_json, const string& reject_unauthorized_fn_id, emscripten::val callback);
   string get_full_wallet_seed_languages();
@@ -43,12 +51,26 @@ namespace monero_wasm_bridge
 
   // ----------------------- WALLET INSTANCE METHODS --------------------------
 
-  bool is_view_only(int handle);
-  void set_daemon_connection(int handle, const string& uri, const string& username, const string& password, const string& proxy_uri, int is_trusted, emscripten::val callback);
+  int is_view_only(int handle); // 1, 0, or -1 on failure
+#if defined(ZEPHYR_WASM_BRIDGE_UNPORTED) // not part of the supported surface; targets monero-cpp APIs the fixed core lacks or is not yet adapted
   string get_daemon_connection(int handle);
   bool is_daemon_trusted(int handle);
-  void is_connected_to_daemon(int handle, emscripten::val callback);
   void get_daemon_max_peer_height(int handle, emscripten::val callback);
+#endif // ZEPHYR_WASM_BRIDGE_UNPORTED
+  // read-only daemon access: daemon connection with an optional base path, heights, one
+  // blocking sync and the asset balance maps (decimal strings); full wallets only
+  void set_daemon_connection(int handle, const string& uri, const string& base_path, emscripten::val callback);
+  void is_connected_to_daemon(int handle, emscripten::val callback);
+  void get_daemon_height(int handle, emscripten::val callback);
+  void set_restore_height_from_daemon(int handle, emscripten::val callback);
+  string get_height(int handle);
+  void sync(int handle, const string& start_height, emscripten::val callback);
+  string get_balance_wallet(int handle);
+  string get_unlocked_balance_wallet(int handle);
+  string get_balance_account(int handle, const uint32_t account_idx);
+  string get_unlocked_balance_account(int handle, const uint32_t account_idx);
+  string get_balance_asset(int handle, const string& asset_type, const uint32_t account_idx, bool has_subaddress, const uint32_t subaddress_idx);
+  string get_unlocked_balance_asset(int handle, const string& asset_type, const uint32_t account_idx, bool has_subaddress, const uint32_t subaddress_idx);
   string get_version(int handle);
   string get_seed(int handle);
   string get_seed_language(int handle);
@@ -56,17 +78,18 @@ namespace monero_wasm_bridge
   string get_private_view_key(int handle);
   string get_public_spend_key(int handle);
   string get_private_spend_key(int handle);
-  string get_address(int handle, const uint32_t account_idx, const uint32_t subaddress_idx);
+  string get_address(int handle, const uint32_t account_idx, const uint32_t subaddress_idx); // indices are validated as uint32 before dispatch
   string get_address_index(int handle, const string& address);
   string get_integrated_address(int handle, const string& standard_address = "", const string& payment_id = "");
   string decode_integrated_address(int handle, const string& integrated_address);
-  void get_height(int handle, emscripten::val callback);
-  void get_daemon_height(int handle, emscripten::val callback);
+#if defined(ZEPHYR_WASM_BRIDGE_UNPORTED) // not part of the supported surface; targets monero-cpp APIs the fixed core lacks or is not yet adapted
   void get_height_by_date(int handle, uint16_t year, uint8_t month, uint8_t day, emscripten::val callback);
   void is_daemon_synced(int handle, emscripten::val callback);
   void is_synced(int handle, emscripten::val callback);
-  int get_network_type(int handle);
-  long get_restore_height(int handle);
+#endif // ZEPHYR_WASM_BRIDGE_UNPORTED
+  int get_network_type(int handle); // 0, 1, 2, or -1 on failure
+  string get_restore_height(int handle); // exact decimal text of the core uint64_t height
+#if defined(ZEPHYR_WASM_BRIDGE_UNPORTED) // not part of the supported surface; targets monero-cpp APIs the fixed core lacks or is not yet adapted
   void set_restore_height(int handle, long restore_height);
 //  long get_daemon_height(int handle);
 //  long get_daemon_max_peer_height(int handle);
@@ -74,16 +97,11 @@ namespace monero_wasm_bridge
   //void remove_listener(int handle, monero_wallet_listener& listener);
   //set<monero_wallet_listener*> get_listeners(int handle);
   void set_listener(int wallet_handle, int old_listener_handle, emscripten::val callback, emscripten::val on_sync_progress = emscripten::val::undefined(), emscripten::val on_new_block = emscripten::val::undefined(), emscripten::val on_balances_changed = emscripten::val::undefined(), emscripten::val on_output_received = emscripten::val::undefined(), emscripten::val on_output_spent = emscripten::val::undefined());
-  void sync(int handle, long start_height, emscripten::val callback);
   void stop_syncing(int handle);
   void scan_txs(int handle, const string& args, emscripten::val callback);
   void rescan_spent(int handle, emscripten::val callback);
   void rescan_blockchain(int handle, emscripten::val callback);
-  string get_balance_wallet(int handle);
-  string get_balance_account(int handle, const uint32_t account_idx);
   string get_balance_subaddress(int handle, const uint32_t account_idx, const uint32_t subaddress_idx);
-  string get_unlocked_balance_wallet(int handle);
-  string get_unlocked_balance_account(int handle, const uint32_t account_idx);
   string get_unlocked_balance_subaddress(int handle, const uint32_t account_idx, const uint32_t subaddress_idx);
   string get_accounts(int handle, bool include_subaddresses = false, const string& tag = "");
   string get_account(int handle, uint32_t account_idx, bool include_subaddresses = false);
@@ -98,7 +116,7 @@ namespace monero_wasm_bridge
   void import_outputs(int handle, const string& outputs_hex, emscripten::val callback);
   void export_key_images(int handle, bool all, emscripten::val callback);
   void import_key_images(int handle, const string& key_images_str, emscripten::val callback);
-  //  emscripten::function("get_new_key_images_from_last_import", &monero_wasm_bridge::get_new_key_images_from_last_import);
+  //  emscripten::function("get_new_key_images_from_last_import", &zephyr_wasm_bridge::get_new_key_images_from_last_import);
   void freeze_output(int handle, const string& key_image, emscripten::val callback);
   void thaw_output(int handle, const string& key_image, emscripten::val callback);
   void is_output_frozen(int handle, const string& key_image, emscripten::val callback);
@@ -145,10 +163,16 @@ namespace monero_wasm_bridge
   void import_multisig_hex(int handle, const string& args, emscripten::val callback);
   void sign_multisig_tx_hex(int handle, const string& multisig_tx_hex, emscripten::val callback);
   void submit_multisig_tx_hex(int handle, const string& signed_multisig_tx_hex, emscripten::val callback);
+#endif // ZEPHYR_WASM_BRIDGE_UNPORTED
   void change_wallet_password(int handle, const string& old_password, const string& new_password, emscripten::val callback);
   void close(int handle, bool save, int listener_handle, emscripten::val callback);
+  // return {"pointer","length"} of a malloc() block the caller releases once with _free(), or {"error"}
   string get_keys_file_buffer(int handle, string password, bool view_only);
   string get_cache_file_buffer(int handle);
+
+#if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)
+  int test_heap_in_use(); // test module only: bytes in use by the C allocator
+#endif
 }
 
-#endif /* monero_wasm_bridge_h */
+#endif /* zephyr_wasm_bridge_h */

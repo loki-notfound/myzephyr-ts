@@ -1,0 +1,21 @@
+Description: add the missing #include <map> to monero_wallet_model.h
+Category: build-only; needed with Boost newer than 1.76; no change to wallet behavior
+Provenance: build-only patch of the zephyr-backports WebAssembly build, original file SHA-256
+ a55718fc9d5b3901e0dde380114a4e156e2bfeed2af11973c73c6b0b8700db64 (the diff below is unchanged)
+Drop-when: upstream adds the include, or Boost is pinned back to 1.76
+
+monero_wallet_model.h uses std::map without including <map>; Boost 1.76 provided it
+transitively, Boost 1.77 and later do not.
+
+diff --git a/src/wallet/monero_wallet_model.h b/src/wallet/monero_wallet_model.h
+index 6b88dfa..21d6f22 100644
+--- a/src/wallet/monero_wallet_model.h
++++ b/src/wallet/monero_wallet_model.h
+@@ -53,6 +53,7 @@
+ #pragma once
+ 
+ #include "daemon/monero_daemon_model.h"
++#include <map>
+ 
+ using namespace monero;
+ 
