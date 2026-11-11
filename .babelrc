@@ -21,6 +21,7 @@
     "build",
     "browser_build",
     "dist",
-    "configs"
+    "configs",
+    "src/main/ts/index.browser.ts"
   ]
 }

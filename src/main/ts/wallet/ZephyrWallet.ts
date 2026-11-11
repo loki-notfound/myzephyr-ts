@@ -457,19 +457,23 @@ export async function getNetworkGuardReport(): Promise<ZephyrNetworkGuardReport>
     workerReports: reports, workersUnreported: unreported };
 }
 
-/** Configure where the worker is loaded from (browser URL or Node path). */
+/**
+ * Configure where the wallet worker script is loaded from: a URL in the browser (default: the
+ * zephyr.worker.js beside the browser entry, which a bundler emits and rewrites), a file path in
+ * Node (default: the file in the package). Without an argument the default is restored.
+ */
 export function setWorkerDistPath(path: string): void {
   LibraryUtils.setWorkerDistPath(path);
 }
 
 /**
- * Configure where the WebAssembly module (zephyr.wasm) is loaded from: a URL in the browser (default
- * "/zephyr.wasm" on the page's origin), a file path in Node (default: the file in the package). The
- * module is compiled once per runtime and shared with every wallet worker; a missing or unusable
- * file rejects the first construction with NATIVE_ERROR and WASM_MODULE_UNAVAILABLE (not
- * readable), WASM_MODULE_UNVERIFIED (no Web Crypto digest in this runtime), WASM_MODULE_MISMATCH
- * (not the zephyr.wasm whose SHA-256 the build embedded) or WASM_MODULE_REJECTED (does not
- * compile). Without an argument the default is restored.
+ * Configure where the WebAssembly module (zephyr.wasm) is loaded from: a URL in the browser (default:
+ * the zephyr.wasm beside the browser entry, which a bundler emits and rewrites), a file path in Node
+ * (default: the file in the package). The module is compiled once per runtime and shared with
+ * every wallet worker; a missing or unusable file rejects the first construction with NATIVE_ERROR
+ * and WASM_MODULE_UNAVAILABLE (not readable), WASM_MODULE_UNVERIFIED (no Web Crypto digest in this
+ * runtime), WASM_MODULE_MISMATCH (not the zephyr.wasm whose SHA-256 the build embedded) or
+ * WASM_MODULE_REJECTED (does not compile). Without an argument the default is restored.
  */
 export function setWasmModuleUrl(location?: string): void {
   LibraryUtils.setWasmModuleLocation(location);

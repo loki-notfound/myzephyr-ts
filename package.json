@@ -17,6 +17,7 @@
   "exports": {
     ".": {
       "types": "./dist/src/main/ts/index.d.ts",
+      "browser": "./dist/zephyr-ts.browser.mjs",
       "default": "./dist/src/main/ts/index.js"
     },
     "./zephyr.wasm": "./dist/zephyr.wasm",
@@ -36,6 +37,7 @@
     "dist/zephyr.digest.js",
     "dist/zephyr.worker.js",
     "dist/zephyr.worker.js.LICENSE.txt",
+    "dist/zephyr-ts.browser.mjs",
     "dist/src/main/",
     "docs/LIMITATIONS.md",
     "docs/DEPLOYMENT.md",

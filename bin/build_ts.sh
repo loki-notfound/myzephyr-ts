@@ -5,7 +5,8 @@
 #   type check   tsc with tsconfig.json (must report no diagnostic)
 #   dist/src/    Babel output of src/ (CommonJS for Node; dist/src/test/ is test output, never shipped)
 #   dist/**.d.ts declarations of the public entry and the modules it uses (tsconfig.types.json)
-#   dist/zephyr.worker.js  the browser wallet worker (webpack.worker.js)
+#   dist/zephyr.worker.js, dist/zephyr-ts.browser.mjs  the browser wallet worker and the browser
+#                entry, an ES module (webpack.browser.js)
 #   dist/lifecycle-consumer/ browser test pages and the browser test worker (webpack.lifecycle-consumer.js)
 #
 # Environment (optional): OFFLINE=1 installs from the npm cache only (npm ci --offline).
@@ -40,9 +41,23 @@ node_modules/.bin/babel ./src --extensions ".js,.ts" --out-dir ./dist/src > "$LO
 log "declarations (tsconfig.types.json)"
 node_modules/.bin/tsc -p tsconfig.types.json > "$LOGS/tsc-types.log" 2>&1 || { head -n 40 "$LOGS/tsc-types.log"; die "declaration build failed"; }
 
-log "browser wallet worker (webpack.worker.js)"
-node_modules/.bin/webpack --config ./webpack.worker.js > "$LOGS/webpack-worker.log" 2>&1 || { tail -n 30 "$LOGS/webpack-worker.log"; die "worker bundle failed"; }
-! grep -q 'ERROR' "$LOGS/webpack-worker.log" || die "worker bundle reported an error"
+log "browser wallet worker and browser entry (webpack.browser.js)"
+rm -f dist/zephyr-ts.browser.mjs
+node_modules/.bin/webpack --config ./webpack.browser.js > "$LOGS/webpack-browser.log" 2>&1 || { tail -n 30 "$LOGS/webpack-browser.log"; die "browser bundles failed"; }
+! grep -q 'ERROR' "$LOGS/webpack-browser.log" || die "browser bundles reported an error"
+log "browser entry check: an ES module that names no Node.js module and keeps its asset URLs"
+node - dist/zephyr-ts.browser.mjs <<'JS' || die "the browser entry is not self-contained"
+const s = require("fs").readFileSync(process.argv[2], "utf8");
+const bad = [];
+if (/^\s*import\s/m.test(s) || /\bimport\s*\(/.test(s)) bad.push("an import of another module");
+// a require of a module name outside a comment (webpack resolved every other require into the bundle)
+if (s.split("\n").some((l) => !/^\s*(\/\/|\*|\/\*)/.test(l) && /(?<![.\w$])require\s*\(\s*["'][^"']+["']\s*\)/.test(l.replace(/\/\/.*$/, "")))) bad.push("a require call");
+for (const u of ["./zephyr.worker.js", "./zephyr.wasm"]) if (s.split("new URL(\"" + u + "\", import.meta.url)").length !== 2) bad.push("the default URL of " + u);
+if ((s.match(/import\.meta/g) || []).length !== 2) bad.push("another use of import.meta");
+if (!/^export \{/m.test(s)) bad.push("no export statement");
+if (bad.length) { console.log(bad.join("; ")); process.exit(1); }
+console.log("dist/zephyr-ts.browser.mjs: " + s.length + " bytes, self-contained");
+JS
 
 log "browser test pages and test worker (webpack.lifecycle-consumer.js)"
 rm -rf dist/lifecycle-consumer
@@ -50,7 +65,7 @@ NODE_OPTIONS=--max-old-space-size=6144 node_modules/.bin/webpack --config ./webp
 ! grep -q 'ERROR' "$LOGS/webpack-test.log" || die "test bundles reported an error"
 
 log "release bundle check: no test instrumentation in shipped files"
-for f in dist/zephyr.js dist/zephyr.worker.js dist/src/main/ts/index.js dist/src/main/ts/common/ZephyrWebWorker.js dist/src/main/ts/common/LibraryUtils.js; do
+for f in dist/zephyr.js dist/zephyr.worker.js dist/zephyr-ts.browser.mjs dist/src/main/ts/index.js dist/src/main/ts/common/ZephyrWebWorker.js dist/src/main/ts/common/LibraryUtils.js; do
   for token in __zephyrTsTestHooks __testInstall __testNativeChangePassword __testReply test_heap_in_use __testCrash __measure; do
     ! grep -q "$token" "$f" || die "$f contains test-only $token"
   done
@@ -59,4 +74,5 @@ log "embedded digest check"
 H=$(sha256sum dist/zephyr.wasm | cut -d' ' -f1)
 grep -qF "\"$H\"" dist/zephyr.digest.js || die "dist/zephyr.digest.js does not carry the SHA-256 of dist/zephyr.wasm"
 grep -qF "$H" dist/zephyr.worker.js || die "the browser worker does not embed the SHA-256 of dist/zephyr.wasm"
+grep -qF "$H" dist/zephyr-ts.browser.mjs || die "the browser entry does not embed the SHA-256 of dist/zephyr.wasm"
 echo "TypeScript build complete"

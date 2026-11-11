@@ -38,9 +38,11 @@ OpenSSL 3.6.5 headers and Unbound 1.19.1 headers are fetched by the build.
    dependencies and links `dist/zephyr.js` with `dist/zephyr.wasm` (release) and
    `dist/zephyr.test.js` with `dist/zephyr.test.wasm` (test module with instrumentation, for the
    test suites only);
-4. `bin/build_ts.sh`: `npm ci`, a TypeScript check, the Babel output in `dist/src/`, the
-   declarations of the package entry, the browser worker `dist/zephyr.worker.js` and the browser
-   test pages; it checks that no shipped file contains test instrumentation.
+4. `bin/build_ts.sh`: `npm ci`, a TypeScript check, the Babel output in `dist/src/` (the Node.js
+   build), the declarations of the package entry, the browser worker `dist/zephyr.worker.js` and
+   the browser entry `dist/zephyr-ts.browser.mjs` (`webpack.browser.js`), and the browser test
+   pages; it checks that the browser entry loads no other module and that no shipped file contains
+   test instrumentation.
 
 It ends by writing `dist/SHA256SUMS` and `dist/MANIFEST.json` (the source commit, every pinned input
 and the output identities). The build applies the core patches inside the submodule's
@@ -50,7 +52,7 @@ working tree and places dependency sources there; `.gitmodules` marks the submod
 The compile runs from the repository root with relative paths (`bin/relpath_launcher.sh`) and maps
 the root to a fixed name, so the outputs do not depend on where the repository is checked out. On
 the same toolchain, two builds of the same commit produce identical `dist/zephyr.js`,
-`dist/zephyr.wasm` and `dist/zephyr.worker.js`.
+`dist/zephyr.wasm`, `dist/zephyr.worker.js` and `dist/zephyr-ts.browser.mjs`.
 
 ## Offline build from local copies
 
@@ -69,9 +71,10 @@ Each step can take its inputs from local copies; the identities are checked in t
     bin/pack.sh
 
 packs the npm package into `build/package/` (nothing is published) and checks the tarball against
-its allowlist: the package entry and the modules it loads with their declarations, the release
-glue, `zephyr.wasm`, the browser worker with its license file, `README.md`, `LICENSE.txt` and the
-two documents in `docs/`. The exports map exposes only the entry, `zephyr.wasm`,
+its allowlist: the package entry and the modules it loads with their declarations, the browser
+entry, the release glue, `zephyr.wasm`, the browser worker with its license file, `README.md`,
+`LICENSE.txt` and the two documents in `docs/`. The exports map exposes only the entry (the
+CommonJS build, and the browser entry under the `browser` condition), `zephyr.wasm`,
 `zephyr.worker.js` and `package.json`.
 
 ## Offline tests

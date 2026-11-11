@@ -313,10 +313,11 @@ export default class HttpClient {
       var CryptoJS = require('crypto-js');
     }
 
-    // route through socks proxy if configured, otherwise use direct agents
+    // route through socks proxy if configured, otherwise use direct agents (Node only: a browser has no agents)
     const socksAgent = proxyUri ? HttpClient.getSocksAgent(proxyUri, rejectUnauthorized !== false) : undefined;
-    const httpAgent = socksAgent ?? (url.startsWith("https") ? undefined : HttpClient.getHttpAgent());
-    const httpsAgent = socksAgent ?? (url.startsWith("https") ? HttpClient.getHttpsAgent(rejectUnauthorized) : undefined);
+    const nodeAgents = LibraryUtils.isNodeRuntime();
+    const httpAgent = socksAgent ?? (url.startsWith("https") || !nodeAgents ? undefined : HttpClient.getHttpAgent());
+    const httpsAgent = socksAgent ?? (url.startsWith("https") && nodeAgents ? HttpClient.getHttpsAgent(rejectUnauthorized) : undefined);
 
     const generateCnonce = function(): string {
       const characters = 'abcdef0123456789';

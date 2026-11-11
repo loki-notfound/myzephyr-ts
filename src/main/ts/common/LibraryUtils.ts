@@ -38,8 +38,9 @@ export default class LibraryUtils {
   static WORKER_LOADER?: () => Worker = undefined;
 
   /**
-   * Location of the separately shipped WebAssembly module (zephyr.wasm). Browser: a URL, by default
-   * "/zephyr.wasm" on the page's origin. Node: the file beside the package's glue (dist/zephyr.wasm).
+   * Location of the separately shipped WebAssembly module (zephyr.wasm). Browser entry: the file
+   * beside the bundle (see setDefaultAssetLocations). Node: the file beside the package's glue
+   * (dist/zephyr.wasm). A browser bundle of the Node entry: "/zephyr.wasm" on the page's origin.
    */
   static WASM_LOCATION_DEFAULT: string = GenUtils.isBrowser() || !LibraryUtils.isNodeRuntime() ? "/zephyr.wasm" : function() {
     let file = path.join(path.normalize(__dirname), "../../../../zephyr.wasm"); // dist/src/main/ts/common -> dist
@@ -136,6 +137,19 @@ export default class LibraryUtils {
     LibraryUtils.WASM_COMPILED = undefined;
     LibraryUtils.WASM_COMPILED_VALUE = undefined;
     LibraryUtils.retireUtilityWorker(); // the utility worker holds the module of the old location
+  }
+
+  /**
+   * Set the default locations of the worker script and of the module. The browser entry calls this
+   * once, when it is loaded, with URLs relative to its own module, which bundlers recognize and
+   * rewrite to the files they emit. A location already set with setWorkerDistPath or
+   * setWasmModuleLocation is kept; a later call without an argument restores these defaults.
+   */
+  static setDefaultAssetLocations(workerUrl: string, wasmUrl: string): void {
+    if (LibraryUtils.WORKER_DIST_PATH === LibraryUtils.WORKER_DIST_PATH_DEFAULT) LibraryUtils.WORKER_DIST_PATH = workerUrl;
+    LibraryUtils.WORKER_DIST_PATH_DEFAULT = workerUrl;
+    if (LibraryUtils.WASM_LOCATION === LibraryUtils.WASM_LOCATION_DEFAULT) LibraryUtils.WASM_LOCATION = wasmUrl;
+    LibraryUtils.WASM_LOCATION_DEFAULT = wasmUrl;
   }
 
   /**
@@ -308,8 +322,8 @@ export default class LibraryUtils {
   }
   
   /**
-   * Set the path to load the worker. Defaults to "/zephyr.worker.js" in the browser
-   * and "./ZephyrWebWorker.js" in node.
+   * Set the path to load the worker. Defaults to the zephyr.worker.js beside the browser entry in
+   * the browser (see setDefaultAssetLocations) and to ZephyrWebWorker.js in the package in Node.
    * 
    * @param {string} workerDistPath - path to load the worker
    */
@@ -323,7 +337,7 @@ export default class LibraryUtils {
    * Set the worker loader closure to customize worker loading.
    * Takes precedence over default loading mechanisms.
    *
-   * Could be as simple as `() => new Worker(new URL("monero-ts/dist/zephyr.worker.js", import.meta.url));` for browsers.
+   * Could be as simple as `() => new Worker(workerUrl)` for browsers.
    *
    * @param {function} loader - loader function which instantiates a worker
    */

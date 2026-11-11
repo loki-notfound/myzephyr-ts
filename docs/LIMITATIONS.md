@@ -87,7 +87,8 @@ that wallet's worker.
   leak goes away with the construction's worker.
 * No funded test has been run: balances are verified in shape, not in amounts.
 * Runtime coverage so far: Node.js 22 and headless Chromium on Linux x86_64. Firefox, Safari,
-  Electron, Windows and macOS have not been tested.
+  Electron, Windows and macOS have not been tested. The browser entry is tested with Vite 8 and
+  webpack 5 only.
 * The package still declares runtime dependencies inherited from monero-ts that the supported
   functions do not need (`ajv`, `crypto-js`, `decimal.js`, `net`, `tls`, `socks-proxy-agent`,
   `text-encoding`, and `@types/node` as a runtime dependency); they are installed with the package

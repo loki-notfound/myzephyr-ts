@@ -101,15 +101,20 @@ try {
 await reopened.close();
 ```
 
-In Node.js the worker script and `zephyr.wasm` are found inside the package. In a browser, serve
-`zephyr.worker.js` and `zephyr.wasm` from the package (`@loki-notfound/zephyr-ts/zephyr.worker.js`
-and `@loki-notfound/zephyr-ts/zephyr.wasm`) and tell the library where they are, before the first
-construction:
+The package has one entry with two builds, chosen by the conditions of its exports map. Node.js
+(`require` and `import`) gets the CommonJS build, which finds the worker script and `zephyr.wasm`
+inside the package. A browser bundler gets `dist/zephyr-ts.browser.mjs` through the `browser`
+condition: one ES module, built from the same sources, that needs no Node.js built-in, polyfill or
+bundler setting. It names the worker script and `zephyr.wasm` with
+`new URL("./...", import.meta.url)`, so the bundler emits both files with the application and the
+library loads them from there. Vite 8 (development server and production build, without a
+configuration file) and webpack 5 (without any resolve fallback) are tested. To serve the two files
+from another place, set their URLs before the first construction:
 
 ```typescript
 import { setWorkerDistPath, setWasmModuleUrl } from "@loki-notfound/zephyr-ts";
-setWorkerDistPath("/assets/zephyr.worker.js"); // default "/zephyr.worker.js"
-setWasmModuleUrl("/assets/zephyr.wasm");       // default "/zephyr.wasm"
+setWorkerDistPath("/static/zephyr.worker.js");
+setWasmModuleUrl("/static/zephyr.wasm");
 ```
 
 The page needs a Content-Security-Policy that allows WebAssembly compilation and the daemon

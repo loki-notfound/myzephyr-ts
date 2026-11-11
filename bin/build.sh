@@ -10,7 +10,7 @@ bash "$HERE/build_wasm.sh"
 bash "$HERE/build_ts.sh"
 . "$HERE/pins.sh"
 cd "$ROOT"
-sha256sum dist/zephyr.js dist/zephyr.wasm dist/zephyr.digest.js dist/zephyr.worker.js dist/zephyr.test.js dist/zephyr.test.wasm wasm_exception_whitelist.txt > dist/SHA256SUMS
+sha256sum dist/zephyr.js dist/zephyr.wasm dist/zephyr.digest.js dist/zephyr.worker.js dist/zephyr-ts.browser.mjs dist/zephyr.test.js dist/zephyr.test.wasm wasm_exception_whitelist.txt > dist/SHA256SUMS
 cat dist/SHA256SUMS
 # build manifest: the source commit, every pinned input and the output identities
 export ZEPHYR_COMMIT ZEPHYR_TAG ZEPHYR_CPP_COMMIT ZEPHYR_CPP_TAG RANDOMX_COMMIT RAPIDJSON_COMMIT BACKPORTS_KEY_FINGERPRINT EMSDK_COMMIT EMSCRIPTEN_VERSION \
@@ -21,7 +21,7 @@ const fs = require("fs"); const crypto = require("crypto"); const e = process.en
 const sha = (f) => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
 const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const outputs = {};
-for (const f of ["dist/zephyr.js", "dist/zephyr.wasm", "dist/zephyr.digest.js", "dist/zephyr.worker.js", "dist/zephyr.test.js", "dist/zephyr.test.wasm"]) outputs[f] = { bytes: fs.statSync(f).size, sha256: sha(f) };
+for (const f of ["dist/zephyr.js", "dist/zephyr.wasm", "dist/zephyr.digest.js", "dist/zephyr.worker.js", "dist/zephyr-ts.browser.mjs", "dist/zephyr.test.js", "dist/zephyr.test.wasm"]) outputs[f] = { bytes: fs.statSync(f).size, sha256: sha(f) };
 const manifest = {
   package: { name: pkg.name, version: pkg.version },
   source: { commit: e.SOURCE_COMMIT, uncommittedChanges: Number(e.SOURCE_DIRTY) },

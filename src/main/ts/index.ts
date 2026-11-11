@@ -1,5 +1,6 @@
 /**
- * Entry module of the package @loki-notfound/zephyr-ts: the supported wallet surface.
+ * Entry module of the package @loki-notfound/zephyr-ts: the supported wallet surface. Node.js loads
+ * its CommonJS build; browser bundlers load index.browser.ts, which exports the same names.
  *
  * Wallet lifecycle: random, seed and keys creation, open from keys and cache bytes, address and key
  * getters, byte serialization, pathless password change and close. Every other capability is

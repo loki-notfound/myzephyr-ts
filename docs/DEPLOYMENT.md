@@ -1,18 +1,33 @@
 # Deployment notes
 
 How to serve zephyr-ts in a web application and how to reach a daemon from it. Node.js and
-Electron main-process code reach the daemon directly; only the CORS and policy sections are
-browser-specific.
+Electron main-process code reach the daemon directly; only the bundling, CORS and policy sections
+are browser-specific.
 
-## Files to serve
+## Bundling and the files the page loads
 
-Serve two files from the package next to your application and point the library to them before
-the first wallet is constructed:
+The package exports two builds of one entry. Node.js gets the CommonJS build in `dist/src/`. A
+bundler that resolves the `browser` condition of the exports map gets `dist/zephyr-ts.browser.mjs`:
+one ES module with no import of another module, so it needs no Node.js built-in, polyfill, alias
+or fallback in your bundler configuration. It contains the library, the WebAssembly glue and small
+browser implementations of `assert`, `process` and `Buffer` that the shared sources use; leave it
+unminified in your sources and let your bundler minify it.
 
-* `zephyr.worker.js` (`@loki-notfound/zephyr-ts/zephyr.worker.js`): the wallet worker, set with
-  `setWorkerDistPath(url)` (default `/zephyr.worker.js`);
-* `zephyr.wasm` (`@loki-notfound/zephyr-ts/zephyr.wasm`): the WebAssembly module, set with
-  `setWasmModuleUrl(url)` (default `/zephyr.wasm`).
+Two files stay separate, and the page loads them at run time:
+
+* `zephyr.worker.js`: the wallet worker, a classic worker script started with `new Worker(url)`;
+* `zephyr.wasm`: the WebAssembly module.
+
+The browser entry names both with `new URL("./zephyr.worker.js", import.meta.url)` and
+`new URL("./zephyr.wasm", import.meta.url)`. Vite and webpack 5 recognize this form: they emit both
+files with your application (with content hashes in their names) and rewrite the URLs, so nothing
+needs to be configured. Vite copies both files unchanged; webpack's production minimizer minifies
+the already minified worker script once more, and that copy works the same. Tested: Vite 8 with its development server and its production build,
+without a configuration file, and webpack 5 without any resolve fallback, both in Chromium. To
+serve the files from another place, set their URLs before the first construction with
+`setWorkerDistPath(url)` and `setWasmModuleUrl(url)` (`@loki-notfound/zephyr-ts/zephyr.worker.js`
+and `@loki-notfound/zephyr-ts/zephyr.wasm` name them in the package). The worker script must have
+the page's origin, as for every worker.
 
 The page fetches `zephyr.wasm` once, compiles it once and passes the compiled module to every
 wallet worker; workers never fetch or compile it themselves. The module is compiled from its
@@ -32,14 +47,8 @@ secure context (`https://` or `localhost`). On a plain `http://` origin the page
 module, and the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_UNVERIFIED` before
 anything is compiled: serve the wallet over `https://`.
 
-## Bundling for the browser
-
-The package entry is CommonJS built for Node.js. A browser bundle of it needs the Node.js
-fallbacks the library's own browser builds use (see `webpack.base.js` in the repository): `fs`
-mapped to `memfs`, browser versions of `path`, `stream`, `http`, `https`, `crypto`, `os`, `url`,
-`util`, `zlib`, `assert`, `buffer` and `process`, and `worker_threads`, `ws`, `perf_hooks`,
-`child_process` and `web-worker` left external. These polyfill packages are not dependencies of the
-package; add them to your application. The wallet worker `zephyr.worker.js` is already bundled.
+A bundler that ignores the `browser` condition would take the CommonJS build, which is meant for
+Node.js and Electron main processes and is not supported in a browser bundle.
 
 ## Daemon address forms
 
