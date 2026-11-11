@@ -1,0 +1,330 @@
+import ZephyrConnectionManager from "../../common/ZephyrConnectionManager";
+import ZephyrNetworkType from "../../daemon/model/ZephyrNetworkType";
+import ZephyrRpcConnection from "../../common/ZephyrRpcConnection";
+import ZephyrUtils from "../../common/ZephyrUtils";
+
+/**
+ * Configuration to create a Zephyr wallet.
+ */
+export default class ZephyrWalletConfig {
+
+  /** Path to the wallet to open or create. */
+  path: string;
+
+  /** Password of the wallet to open or create. */
+  password: string;
+
+  /** Network type of the wallet to open or create. */
+  networkType: ZephyrNetworkType;
+
+  /** Server config to monerod or monero-wallet-rpc. */
+  server: string | Partial<ZephyrRpcConnection>;
+
+  /** Indicates if the server is trusted (defaults to trusted if local address). */
+  isTrustedDaemon: boolean;
+
+  /** Govern the wallet's server connection. */
+  connectionManager: ZephyrConnectionManager;
+
+  /** Seed of the wallet to ceate (random wallet created if neither seed nor keys given). */
+  seed: string;
+
+  /** Offset to derive a new seed from the given seed to recover a secret wallet. */
+  seedOffset: string;
+
+  /** Indicates if the wallet seed is multisig. */
+  isMultisig: boolean;
+
+  /** Primary address of the wallet to create (only provide if restoring from keys). */
+  primaryAddress: string;
+
+  /** Private view key of the wallet to create. */
+  privateViewKey: string;
+
+  /** Private spend key of the wallet to create. */
+  privateSpendKey: string;
+
+  /** Block height to start scanning from (defaults to 0 unless generating random wallet). */
+  restoreHeight: number;
+
+  /** Language of the wallet's seed phrase (defaults to "English" or auto-detected). */
+  language: string;
+
+  /** Specifies if the currently open RPC wallet should be saved before being closed. */
+  saveCurrent: boolean;
+
+  /** Proxies wallet operations to a worker in order to not block the main thread (default true). */
+  proxyToWorker: boolean;
+
+  /** File system compatible with Node.js `fs.promises` API (defaults to disk or in-memory FS if browser). */
+  fs: any;
+
+  /** Wallet keys data to open. */
+  keysData: Uint8Array;
+
+  /** Wallet cache data to open. */
+  cacheData: Uint8Array;
+
+  /** Number of accounts to scan (optional). */
+  accountLookahead: number;
+
+  /** Number of subaddresses to scan per account (optional). */
+  subaddressLookahead: number;
+
+  /** Specifies if the wallet should operate in regtest mode. */
+  regtest: boolean;
+
+  /** Command to start monero-wallet-rpc as a child process. */
+  cmd: string[];
+  
+  /**
+   * Construct a configuration to open or create a wallet.
+   * 
+   * @param {Partial<ZephyrWalletConfig>} [config] - ZephyrWalletConfig or equivalent config object
+   * @param {string} [config.path] - path of the wallet to open or create
+   * @param {string} [config.password] - password of the wallet to open
+   * @param {string|number} [config.networkType] - network type of the wallet to open (one of "mainnet", "testnet", "stagenet" or ZephyrNetworkType.MAINNET|TESTNET|STAGENET)
+   * @param {string} [config.seed] - seed of the wallet to create (optional, random wallet created if neither seed nor keys given)
+   * @param {string} [config.seedOffset] - the offset used to derive a new seed from the given seed to recover a secret wallet from the seed phrase
+   * @param {boolean} [config.isMultisig] - restore multisig wallet from seed
+   * @param {string} [config.primaryAddress] - primary address of the wallet to create (only provide if restoring from keys)
+   * @param {string} [config.privateViewKey] - private view key of the wallet to create (optional)
+   * @param {string} [config.privateSpendKey] - private spend key of the wallet to create (optional)
+   * @param {number} [config.restoreHeight] - block height to start scanning from (defaults to 0 unless generating random wallet)
+   * @param {string} [config.language] - language of the wallet's seed phrase (defaults to "English" or auto-detected)
+   * @param {number} [config.accountLookahead] -  number of accounts to scan (optional)
+   * @param {number} [config.subaddressLookahead] - number of subaddresses to scan per account (optional)
+   * @param {string|Partial<ZephyrRpcConnection>} [config.server] - uri or ZephyrRpcConnection to the wallet's server (optional)
+   * @param {boolean} [config.isTrustedDaemon] - indicates if the server is trusted (defaults to trusted if local address)
+   * @param {ZephyrConnectionManager} [config.connectionManager] - manage connections to monerod (optional)
+   * @param {boolean} [config.rejectUnauthorized] - reject self-signed server certificates if true (default true)
+   * @param {Uint8Array} [config.keysData] - wallet keys data to open (optional)
+   * @param {Uint8Array} [config.cacheData] - wallet cache data to open (optional)
+   * @param {boolean} [config.proxyToWorker] - proxies wallet operations to a worker in order to not block the main thread (default true)
+   * @param {any} [config.fs] - file system compatible with Node.js `fs.promises` API (defaults to disk or in-memory FS if browser)
+   * @param {boolean} [config.saveCurrent] - specifies if the current RPC wallet should be saved before being closed
+   * @param {number} [config.accountLookahead] - number of accounts to scan (optional)
+   * @param {number} [config.subaddressLookahead] - number of subaddresses to scan per account (optional)
+   * @param {boolean} [config.regtest] - specifies if the wallet should operate in regtest mode (default false)
+   * @param {string[]} [config.cmd] - command to start wallet daemon (optional)
+   */
+  constructor(config?: Partial<ZephyrWalletConfig>) {
+    Object.assign(this, config);
+
+    // normalize config
+    if (this.server) this.setServer(this.server);
+    this.setProxyToWorker(this.proxyToWorker);
+    if (this.networkType !== undefined) this.networkType = ZephyrNetworkType.from(this.networkType);
+  }
+
+  copy(): ZephyrWalletConfig {
+    return new ZephyrWalletConfig(this);
+  }
+  
+  toJson(): any {
+    let json: any = Object.assign({}, this);
+    if (json.server) json.server = json.server.toJson();
+    json.fs = undefined;
+    json.connectionManager = undefined;
+    return json;
+  }
+  
+  getPath(): string {
+    return this.path;
+  }
+  
+  setPath(path: string): ZephyrWalletConfig {
+    this.path = path;
+    return this;
+  }
+  
+  getPassword(): string {
+    return this.password;
+  }
+  
+  setPassword(password): ZephyrWalletConfig {
+    this.password = password;
+    return this;
+  }
+  
+  getNetworkType(): ZephyrNetworkType {
+    return this.networkType;
+  }
+  
+  setNetworkType(networkTypeOrStr: ZephyrNetworkType | string): ZephyrWalletConfig {
+    this.networkType = networkTypeOrStr === undefined ? undefined : ZephyrNetworkType.from(networkTypeOrStr);
+    return this;
+  }
+  
+  getServer(): ZephyrRpcConnection {
+    return this.server as ZephyrRpcConnection;
+  }
+  
+  setServer(server: Partial<ZephyrRpcConnection> | string): ZephyrWalletConfig {
+    if (server && !(server instanceof ZephyrRpcConnection)) server = new ZephyrRpcConnection(server);
+    this.server = server as ZephyrRpcConnection;
+    return this;
+  }
+  
+  getIsTrustedDaemon(): boolean {
+    return this.isTrustedDaemon;
+  }
+
+  setIsTrustedDaemon(isTrustedDaemon: boolean): ZephyrWalletConfig {
+    this.isTrustedDaemon = isTrustedDaemon;
+    return this;
+  }
+
+  getConnectionManager(): ZephyrConnectionManager {
+    return this.connectionManager;
+  }
+  
+  setConnectionManager(connectionManager: ZephyrConnectionManager): ZephyrWalletConfig {
+    this.connectionManager = connectionManager;
+    return this;
+  }
+  
+  getSeed(): string {
+    return this.seed;
+  }
+  
+  setSeed(seed: string): ZephyrWalletConfig {
+    this.seed = seed;
+    return this;
+  }
+  
+  getSeedOffset(): string {
+    return this.seedOffset;
+  }
+  
+  setSeedOffset(seedOffset: string): ZephyrWalletConfig {
+    this.seedOffset = seedOffset;
+    return this;
+  }
+
+  getIsMultisig(): boolean {
+    return this.isMultisig;
+  }
+  
+  setIsMultisig(isMultisig: boolean): ZephyrWalletConfig {
+    this.isMultisig = isMultisig;
+    return this;
+  }
+  
+  getPrimaryAddress(): string {
+    return this.primaryAddress;
+  }
+  
+  setPrimaryAddress(primaryAddress: string) {
+    this.primaryAddress = primaryAddress;
+    return this;
+  }
+  
+  getPrivateViewKey(): string {
+    return this.privateViewKey;
+  }
+  
+  setPrivateViewKey(privateViewKey): ZephyrWalletConfig {
+    this.privateViewKey = privateViewKey;
+    return this;
+  }
+  
+  getPrivateSpendKey(): string {
+    return this.privateSpendKey;
+  }
+  
+  setPrivateSpendKey(privateSpendKey: string): ZephyrWalletConfig {
+    this.privateSpendKey = privateSpendKey;
+    return this;
+  }
+  
+  getRestoreHeight(): number {
+    return this.restoreHeight;
+  }
+  
+  setRestoreHeight(restoreHeight: number): ZephyrWalletConfig {
+    this.restoreHeight = restoreHeight;
+    return this;
+  }
+  
+  getLanguage(): string {
+    return this.language;
+  }
+  
+  setLanguage(language: string): ZephyrWalletConfig {
+    this.language = language;
+    return this;
+  }
+  
+  getSaveCurrent(): boolean {
+    return this.saveCurrent;
+  }
+  
+  setSaveCurrent(saveCurrent: boolean): ZephyrWalletConfig {
+    this.saveCurrent = saveCurrent;
+    return this;
+  }
+  
+  getProxyToWorker(): boolean {
+    return this.proxyToWorker;
+  }
+  
+  setProxyToWorker(proxyToWorker: boolean): ZephyrWalletConfig {
+    this.proxyToWorker = proxyToWorker;
+    return this;
+  }
+  
+  getFs(): any {
+    return this.fs;
+  }
+  
+  setFs(fs: any) {
+    this.fs = fs;
+    return this;
+  }
+  
+  getKeysData(): Uint8Array {
+    return this.keysData;
+  }
+  
+  setKeysData(keysData: Uint8Array): ZephyrWalletConfig {
+    this.keysData = keysData;
+    return this;
+  }
+  
+  getCacheData(): Uint8Array {
+    return this.cacheData;
+  }
+  
+  setCacheData(cacheData: Uint8Array): ZephyrWalletConfig {
+    this.cacheData = cacheData;
+    return this;
+  }
+  
+  getAccountLookahead(): number {
+    return this.accountLookahead;
+  }
+  
+  setAccountLookahead(accountLookahead: number): ZephyrWalletConfig {
+    this.accountLookahead = accountLookahead;
+    return this;
+  }
+  
+  getSubaddressLookahead(): number {
+    return this.subaddressLookahead;
+  }
+  
+  setSubaddressLookahead(subaddressLookahead: number): ZephyrWalletConfig {
+    this.subaddressLookahead = subaddressLookahead;
+    return this;
+  }
+
+  getRegtest(): boolean {
+    return this.regtest;
+  }
+
+  setRegtest(regtest: boolean): ZephyrWalletConfig {
+    this.regtest = regtest;
+    return this;
+  }
+}

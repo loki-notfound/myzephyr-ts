@@ -1,6 +1,6 @@
 import assert from "assert";
 import GenUtils from "./GenUtils";
-import MoneroError from "./MoneroError";
+import ZephyrError from "./ZephyrError";
 import ThreadPool from "./ThreadPool";
 import path from "path";
 import fs from "fs";
@@ -18,12 +18,12 @@ export default class LibraryUtils {
   static FULL_LOADED: any;
   static REJECT_UNAUTHORIZED_FNS: any;
   static readonly MUTEX = new ThreadPool(1);
-  static WORKER_DIST_PATH_DEFAULT = GenUtils.isBrowser() ? "/monero.worker.js" : function() {
+  static WORKER_DIST_PATH_DEFAULT = GenUtils.isBrowser() ? "/zephyr.worker.js" : function() {
 
     // use worker file beside this module when running from dist, else map src to dist
     let curPath = path.normalize(__dirname);
-    if (!fs.existsSync(path.join(curPath, "MoneroWebWorker.js"))) curPath = path.join(curPath, "../../../../dist/src/main/ts/common");
-    curPath = LibraryUtils.prefixWindowsPath(path.join(curPath, "./MoneroWebWorker.js"));
+    if (!fs.existsSync(path.join(curPath, "ZephyrWebWorker.js"))) curPath = path.join(curPath, "../../../../dist/src/main/ts/common");
+    curPath = LibraryUtils.prefixWindowsPath(path.join(curPath, "./ZephyrWebWorker.js"));
     if (GenUtils.isDeno()) curPath = path.join("file://", curPath);
     return curPath;
   }();
@@ -92,7 +92,7 @@ export default class LibraryUtils {
     if (LibraryUtils.WASM_MODULE && LibraryUtils.FULL_LOADED) return LibraryUtils.WASM_MODULE;
     
     // load module
-    const module = await require("#monero-ts/monero.js")();
+    const module = await require("#zephyr-sdk/zephyr.js")();
     LibraryUtils.WASM_MODULE = module;
     delete LibraryUtils.WASM_MODULE.then;
     LibraryUtils.FULL_LOADED = true;
@@ -124,8 +124,8 @@ export default class LibraryUtils {
   }
   
   /**
-   * Set the path to load the worker. Defaults to "/monero.worker.js" in the browser
-   * and "./MoneroWebWorker.js" in node.
+   * Set the path to load the worker. Defaults to "/zephyr.worker.js" in the browser
+   * and "./ZephyrWebWorker.js" in node.
    * 
    * @param {string} workerDistPath - path to load the worker
    */
@@ -139,7 +139,7 @@ export default class LibraryUtils {
    * Set the worker loader closure to customize worker loading.
    * Takes precedence over default loading mechanisms.
    *
-   * Could be as simple as `() => new Worker(new URL("monero-ts/dist/monero.worker.js", import.meta.url));` for browsers.
+   * Could be as simple as `() => new Worker(new URL("monero-ts/dist/zephyr.worker.js", import.meta.url));` for browsers.
    *
    * @param {function} loader - loader function which instantiates a worker
    */
@@ -176,7 +176,7 @@ export default class LibraryUtils {
       
       // receive worker errors
       LibraryUtils.WORKER.onerror = function(err) {
-        console.error("Error posting message to monero.worker.js; is it built and copied to the app's public or build directory?");
+        console.error("Error posting message to zephyr.worker.js; is it built and copied to the app's public or build directory?");
         console.log(err);
       };
       
@@ -256,13 +256,13 @@ export default class LibraryUtils {
 
   static serializeError(err) {
     const serializedErr: any = { name: err.name, message: err.message, code: err.code, stack: err.stack };
-    if (err instanceof MoneroError) serializedErr.type = "MoneroError";
+    if (err instanceof ZephyrError) serializedErr.type = "ZephyrError";
     if (err.cause instanceof Error) serializedErr.cause = LibraryUtils.serializeError(err.cause);
     return serializedErr;
   }
 
   protected static deserializeError(serializedErr) {
-    const err = serializedErr.type === "MoneroError" ? new MoneroError(serializedErr.message, serializedErr.code) : new Error(serializedErr.message);
+    const err = serializedErr.type === "ZephyrError" ? new ZephyrError(serializedErr.message, serializedErr.code) : new Error(serializedErr.message);
     err.name = serializedErr.name;
     if (serializedErr.code !== undefined) (err as any).code = serializedErr.code;
     err.stack = err.stack + "\nWorker error: " + serializedErr.stack;
