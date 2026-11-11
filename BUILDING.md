@@ -176,5 +176,6 @@ repository.
 * The job stops after 150 minutes; a newer push to the same pull request or branch cancels a run
   still in progress.
 
-A run needs about 4 GB of disk; the build takes about 15 minutes and the tests about 25 minutes on
-an 11-core machine, more on a smaller runner.
+A run needs about 4 GB of disk. Measured on an 11-core machine with the inputs already on disk:
+the build about 7 minutes, the offline tests about 19 minutes. A runner also downloads the
+toolchain and sources, and a 4-core runner compiles more slowly.
