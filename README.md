@@ -1,197 +1,150 @@
-# Monero TypeScript Library
+# zephyr-ts
 
-A TypeScript library for creating Monero applications using RPC or WebAssembly bindings to [monero v0.18.5.4 'Fluorine Fermi'](https://github.com/monero-project/monero/tree/v0.18.5.4).
+A TypeScript wallet library for Zephyr, for Node.js, browsers and Electron.
 
-* Supports client-side wallets in Node.js and the browser using WebAssembly.
-* Supports wallet and daemon RPC clients.
-* Supports multisig, view-only, and offline wallets.
-* Wallet types are interchangeable by conforming to a [common interface](https://woodser.github.io/monero-ts/typedocs/classes/MoneroWallet.html).
-* Uses a clearly defined [data model and API specification](https://woodser.github.io/monero-java/monero-spec.pdf) intended to be intuitive and robust.
-* [Query wallet transactions, transfers, and outputs](docs/developer_guide/query_data_model.md) by their properties.
-* Fetch and process binary data from the daemon (e.g. raw blocks).
-* Receive notifications when blocks are added to the chain or when wallets sync, send, or receive.
-* Over 300 passing Mocha tests.
+zephyr-ts is an independent project. It is not affiliated with or endorsed by the Zephyr
+Protocol project. It is a port of [monero-ts](https://github.com/woodser/monero-ts) v0.11.22
+(commit `f6569ca616c4723645a7bfae3a843a0358f5fca9`) onto the signed
+[zephyr-backports](https://github.com/zephyr-backports) wallet core. The core decides keys,
+wallet files, transactions, fees and network rules; this library adapts the TypeScript API, the
+worker and transport layers and the WebAssembly bridge around it and does not change those rules.
 
-## Architecture
+The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not published yet
+(`"private": true`); build it from source as described in [BUILDING.md](BUILDING.md).
 
-<p align="center">
-	<img width="85%" height="auto" src="https://raw.githubusercontent.com/woodser/monero-ts/master/docs/img/architecture.png"/><br>
-	<i>Build browser or Node.js applications using RPC or WebAssembly bindings to <a href="https://github.com/monero-project/monero">monero-project/monero</a>.  Wallet implementations are interchangeable by conforming to a common interface, <a href="https://woodser.github.io/monero-ts/typedocs/classes/MoneroWallet.html">MoneroWallet.ts</a>.</i>
-</p>
+## Status
 
-## Sample code
+The supported surface is the wallet lifecycle and read-only daemon access (below). There are no
+transactions, transfers, conversions, history or listeners yet. Read
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
+
+## Core and pinned sources
+
+| Component | Version | Commit |
+|---|---|---|
+| zephyr-cpp (git submodule `external/zephyr-cpp`) | tag `v2.3.0-sec.1` | `3a2ee602ee28e6b7941b617ad4706349ad992641` |
+| zephyr (cloned by the build at the pinned commit) | tag `v2.3.0-sec.2` | `8c6a120256b4bd887d6e7167d929d76e3507e0e5` |
+| monero-ts (base of this repository's history) | `v0.11.22` | `f6569ca616c4723645a7bfae3a843a0358f5fca9` |
+
+Both core tags are signed by the zephyr-backports release key,
+`FB39 94F0 997C A6F0 43D7  2491 9EFF 03F5 27D2 40A1` (`keys/zephyr-backports.asc`). The core is
+compiled unchanged apart from two build-only patches in `patches/core/`, which select the portable
+wallet-crypto backend and add a missing `#include <map>`. Every other build input (toolchain,
+archives, npm packages) is pinned by commit or SHA-256 in `bin/pins.sh` and `package-lock.json`.
+
+To verify the core sources and their signatures:
+
+    bin/verify_sources.sh
+
+It fetches the pinned trees when they are absent, checks every commit, and verifies both tags
+against the release key in a temporary keyring. By hand, in a checkout of each repository:
+
+    gpg --import keys/zephyr-backports.asc
+    git -C external/zephyr-cpp verify-tag v2.3.0-sec.1
+    git -C external/zephyr-cpp/external/zephyr verify-tag v2.3.0-sec.2
+
+and check that `git rev-parse <tag>^{commit}` gives the commits above.
+
+## Supported surface
+
+The package entry (`src/main/ts/index.ts`) exports:
+
+* `createRandomWallet`, `restoreWalletFromSeed`, `restoreWalletFromKeys` and `createKeysWallet`
+  (mainnet, testnet, stagenet), and `openWalletData` to open a full wallet from its keys and
+  cache bytes; no file paths;
+* on a wallet (`ZephyrWallet`): primary address and subaddresses, seed and seed language, private and public keys,
+  view-only state; for full wallets also the network type, restore height, `getData` (keys and
+  cache bytes) and `changePassword`; `close` (idempotent, retried after a failed close);
+* read-only daemon access for full wallets: a daemon address at construction (`server`) or with
+  `setDaemonConnection`, `isConnectedToDaemon`, `getDaemonHeight`, `getHeight`, one blocking
+  `sync(startHeight?)`, and the balances `getBalance()` (map by asset), `getBalance(accountIdx)`
+  (map by subaddress index) and `getBalance(assetType, accountIdx, subaddressIdx?)`, with the same
+  shapes for `getUnlockedBalance`; amounts are `bigint`;
+* `validateAddress`, `ZephyrWalletError` (a fixed code and an optional fixed diagnostic; no
+  native or daemon text, no secrets), `setWorkerDistPath`, `setWasmModuleUrl` and
+  `terminateWorker`;
+* the types `ZephyrWalletData`, `ZephyrDaemonConnection`, `ZephyrWalletSyncResult`,
+  `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, `ZephyrWalletErrorCode` and
+  `ZephyrWalletErrorDiagnostic`.
+
+By default each wallet runs in its own worker with its own WebAssembly instance
+(`proxyToWorker: false` runs it in the calling context instead). The WebAssembly module
+`zephyr.wasm` is a separate file; each runtime compiles it once and shares the compiled module
+with its workers. The build embeds the SHA-256 of `zephyr.wasm` in the JavaScript, and the runtime
+checks the file against it before compiling: a stale or mismatched file is rejected with
+`NATIVE_ERROR`/`WASM_MODULE_MISMATCH`. This detects a wrong file next to the JavaScript; it is not
+a signature.
+
+Calls outside this surface reject with `UNSUPPORTED_CAPABILITY` before any native code runs.
 
 ```typescript
-// import monero-ts (or import types individually)
-import moneroTs from "monero-ts";
+import { createRandomWallet, openWalletData, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
 
-// connect to daemon
-let daemon = await moneroTs.connectToDaemonRpc("http://localhost:28081");
-let height = await daemon.getHeight();        // 1523651
-let txsInPool = await daemon.getTxPool();     // get transactions in the pool
+// a new wallet that starts at the daemon's height
+const wallet = await createRandomWallet({ networkType: "mainnet", password: "a strong password",
+  server: "https://node.example.org" });
+console.log(await wallet.getPrimaryAddress(), await wallet.getRestoreHeight());
+await wallet.sync();                                   // { numBlocksFetched, receivedMoney }
+const balances = await wallet.getBalance();            // ReadonlyMap<string, bigint>
+const { keys, cache } = await wallet.getData();        // persist these bytes yourself
+await wallet.close();
 
-// create wallet from mnemonic phrase using WebAssembly bindings to monero-project
-let walletFull = await moneroTs.createWalletFull({
-  path: "sample_wallet_full",
-  password: "supersecretpassword123",
-  networkType: moneroTs.MoneroNetworkType.TESTNET,
-  seed: "hefty value scenic...",
-  restoreHeight: 573936,
-  server: { // provide url or MoneroRpcConnection
-    uri: "http://localhost:28081",
-    username: "superuser",
-    password: "abctesting123"
-  }
-});
-
-// synchronize with progress notifications
-await walletFull.sync(new class extends moneroTs.MoneroWalletListener {
-  async onSyncProgress(height: number, startHeight: number, endHeight: number, percentDone: number, message: string) {
-    // feed a progress bar?
-  }
-});
-
-// synchronize in the background every 5 seconds
-await walletFull.startSyncing(5000);
-
-// receive notifications when funds are received, confirmed, and unlocked
-let fundsReceived = false;
-await walletFull.addListener(new class extends moneroTs.MoneroWalletListener {
-  async onOutputReceived(output: moneroTs.MoneroOutputWallet) {
-    let amount = output.getAmount();
-    let txHash = output.getTx().getHash();
-    let isConfirmed = output.getTx().getIsConfirmed();
-    let isLocked = output.getTx().getIsLocked();
-    fundsReceived = true;
-  }
-});
-
-// connect to wallet RPC and open wallet
-let walletRpc = await moneroTs.connectToWalletRpc("http://localhost:28084", "rpc_user", "abc123");
-await walletRpc.openWallet("sample_wallet_rpc", "supersecretpassword123");
-let primaryAddress = await walletRpc.getPrimaryAddress(); // 555zgduFhmKd2o8rPUz...
-let balance = await walletRpc.getBalance();   // 533648366742
-let txs = await walletRpc.getTxs();           // get transactions containing transfers to/from the wallet
-
-// send funds from RPC wallet to WebAssembly wallet
-let createdTx = await walletRpc.createTx({
-  accountIndex: 0,
-  address: await walletFull.getAddress(1, 0),
-  amount: 250000000000n, // send 0.25 XMR (denominated in atomic units)
-  relay: false // create transaction and relay to the network if true
-});
-let fee = createdTx.getFee(); // "Are you sure you want to send... ?"
-await walletRpc.relayTx(createdTx); // relay the transaction
-
-// recipient receives unconfirmed funds within 5 seconds
-await new Promise(function(resolve) { setTimeout(resolve, 5000); });
-assert(fundsReceived);
-
-// save and close WebAssembly wallet
-await walletFull.close(true);
-
-// terminate any running resources (e.g. workers)
-await moneroTs.shutdown();
+// reopen from bytes, offline
+const reopened = await openWalletData({ networkType: "mainnet", password: "a strong password", keysData: keys, cacheData: cache });
+try {
+  await reopened.createTxs();
+} catch (err) {
+  if (err instanceof ZephyrWalletError) console.log(err.code); // UNSUPPORTED_CAPABILITY
+}
+await reopened.close();
 ```
 
-## Documentation
+In Node.js the worker script and `zephyr.wasm` are found inside the package. In a browser, serve
+`zephyr.worker.js` and `zephyr.wasm` from the package (`@loki-notfound/zephyr-ts/zephyr.worker.js`
+and `@loki-notfound/zephyr-ts/zephyr.wasm`) and tell the library where they are, before the first
+construction:
 
-* [TypeDocs](https://woodser.github.io/monero-ts/typedocs/)
-* [API and model overview with visual diagrams](https://woodser.github.io/monero-java/monero-spec.pdf)
-* [Creating wallets](docs/developer_guide/creating_wallets.md)
-* [The data model: blocks, transactions, transfers, and outputs](docs/developer_guide/data_model.md)
-* [Getting transactions, transfers, and outputs](docs/developer_guide/query_data_model.md)
-* [Sending funds](docs/developer_guide/sending_funds.md)
-* [Multisig wallets](docs/developer_guide/multisig_wallets.md)
-* [View-only and offline wallets](docs/developer_guide/view_only_offline.md)
-* [Connection manager](docs/developer_guide/connection_manager.md)
-* [HTTPS and self-signed certificates](./docs/developer_guide/https_and_self_signed_certificates.md)
-* [Using Tor](docs/developer_guide/tor.md)
-* [Mocha tests](src/test)
-* [Installing prerequisites](docs/developer_guide/installing_prerequisites.md)
-* [Getting started part 1: creating a Node.js application](docs/developer_guide/getting_started_p1.md)
-* [Getting started part 2: creating a web application](docs/developer_guide/getting_started_p2.md)
-
-## Sample projects
-
-* [Sample Node.js app](https://github.com/woodser/xmr-sample-node)
-* [Sample React app](https://github.com/woodser/xmr-sample-react)
-* [Sample Next.js app](https://github.com/woodser/xmr-sample-next)
-* [Sample Vite app](https://github.com/woodser/xmr-sample-vite)
-* [Sample Webpack app](https://github.com/woodser/xmr-sample-webpack)
-* [Sample Deno app](https://github.com/woodser/xmr-sample-deno)
-
-## Related projects
-
-* [monero-cpp](https://github.com/woodser/monero-cpp) - C++ library counterpart
-* [monero-java](https://github.com/woodser/monero-java) - Java library counterpart
-* [haveno-ts](https://github.com/haveno-dex/haveno-ts) - used for testing Haveno and its TypeScript library
-
-## Using monero-ts in your project
-
-1. `cd your_project` or `mkdir your_project && cd your_project && npm init`
-2. `npm install monero-ts`
-3. Add `import moneroTs from "monero-ts"` in your application code (or import types individually).
-
-#### Running in Node.js
-
-Node 20 LTS is recommended. Alternatively, Node 16 and 18 LTS work using the `--experimental-wasm-threads` flag.
-
-#### Building a browser application
-1. Bundle your application code for a browser. See [xmr-sample-webpack](https://github.com/woodser/xmr-sample-webpack) for an example project using Webpack.
-2. Copy assets from ./dist to your web app's build directory.
-
-#### Using RPC servers:
-1. Download and install [Monero CLI](https://web.getmonero.org/downloads/).
-2. Start monerod, e.g.: `./monerod --stagenet` (or use a remote daemon).
-3. Start monero-wallet-rpc, e.g.: `./monero-wallet-rpc --daemon-address http://localhost:38081 --stagenet --rpc-bind-port 38084 --rpc-login rpc_user:abc123 --wallet-dir ./`
-
-## Building WebAssembly binaries from source
-
-This project uses WebAssembly to package and execute Monero's source code for a browser or other WebAssembly-supported environment.
-
-Compiled WebAssembly binaries are committed to ./dist for convenience, but these files can be built independently from source code:
-
-1. Install and activate emscripten.
-	1. Clone emscripten repository: `git clone https://github.com/emscripten-core/emsdk.git`
-	2. `cd emsdk`
-	3. `git pull && ./emsdk install 3.1.66 && ./emsdk activate 3.1.66 && source ./emsdk_env.sh`
-	4. `export EMSCRIPTEN=path/to/emsdk/upstream/emscripten` (change for your system)
-2. Clone monero-ts repository: `git clone --recursive https://github.com/woodser/monero-ts.git`
-3. `cd monero-ts`
-4. `./bin/update_submodules.sh`
-5. Build the monero-cpp submodule (located at ./external/monero-cpp) by following [instructions](https://github.com/woodser/monero-cpp#using-monero-cpp-in-your-project) for your system. This will ensure all dependencies are installed. Be sure to install unbound 1.19.0 to your home directory (`~/unbound-1.19.0`).
-6. `./bin/build_all.sh` (install [monero-project dependencies](https://github.com/monero-project/monero#dependencies) as needed for your system)
-
-## Running tests
-
-Tests run automatically in CI. To run them locally, first [build from source](#building-webassembly-binaries-from-source). A regtest network is created and started automatically in ./test_regtest when tests run.
-
-#### Running tests in Node.js
-
-```sh
-# run all tests
-npm run test
-
-# run tests by their description
-npm run test -- --grep "Sample code demonstration"
+```typescript
+import { setWorkerDistPath, setWasmModuleUrl } from "@loki-notfound/zephyr-ts";
+setWorkerDistPath("/assets/zephyr.worker.js"); // default "/zephyr.worker.js"
+setWasmModuleUrl("/assets/zephyr.wasm");       // default "/zephyr.wasm"
 ```
 
-#### Running tests in a browser
+The page needs a Content-Security-Policy that allows WebAssembly compilation and the daemon
+origin; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the policy, the three daemon address forms
+and proxy requirements.
 
-1. Build and serve the browser tests: `./bin/build_dist.sh && ./bin/build_browser_tests.sh`
-2. In a separate terminal, start the test servers: `./bin/start_browser_test_servers.sh`
-3. Open http://localhost:8080/tests.html
+## Not ported
 
-## License
+Everything else inherited from monero-ts stays in the source as unported classes under
+`src/main/ts/` and is not exported by the package: the daemon and wallet RPC clients, the
+connection manager, background synchronization, listeners, history, transactions, transfers,
+outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
+most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase`). The
+inherited Monero test suite and its root entry point are not part of this repository's tree; the
+tests are under `src/test/lifecycle/` and `src/test/network/`. Transactions and conversions need
+further work and their own tests with funded wallets.
 
-This project is licensed under MIT.
+## Building and testing
 
-## Donations
+[BUILDING.md](BUILDING.md) describes the requirements, the build from a fresh clone, offline
+builds from local caches, the offline test suites, the optional file compatibility test with
+zephyr-javascript and the network suite.
 
-If this library has been valuable to you, please consider donating to support its continued development.
+## Versions
 
-<p align="center">
-	<img src="donate.png" width="115" height="115"/><br>
-	<code>46FR1GKVqFNQnDiFkH7AuzbUBrGQwz2VdaXTDD4jcjRE8YkkoTYTmZ2Vohsz9gLSqkj5EM6ai9Q7sBoX4FPPYJdGKQQXPVz</code>
-</p>
+Releases are tagged `v<zephyr version>-sec.<N>-ts.<M>`: `sec.<N>` is the zephyr-backports tag
+of the pinned core, `ts.<M>` counts releases of this library on that core and restarts at 1 with
+a new core tag. The package version is the tag without the `v`. Versions are semver
+prereleases, so install an exact version. The version does not encode API compatibility; breaking
+changes are announced in the release notes. Tags are annotated and signed by the maintainer key
+`31DA 39AB 43E0 CA67 F1F3  A661 BA2A FF22 DF8A 4A13`.
+
+## License and provenance
+
+zephyr-ts is distributed under the MIT license of monero-ts (`LICENSE.txt`, copyright woodser);
+the git history of monero-ts is kept. The WebAssembly module is compiled from zephyr-cpp (MIT,
+`external/zephyr-cpp/LICENSE.txt`) and zephyr (BSD 3-Clause, The Monero Project, with notices for
+parts from CryptoNote and Boolberry, `external/zephyr-cpp/external/zephyr/LICENSE`), together with
+the third-party code those trees include (among others Boost under the Boost Software License
+1.0 and parts of libsodium under the ISC license); their license files are in the pinned sources.
