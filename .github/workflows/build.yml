@@ -13,9 +13,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels that pull request's run in progress. A push to main never
+# cancels or replaces another run: each push has a group of its own, so every landed commit keeps
+# its run and its recorded hashes.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('push-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -71,7 +74,17 @@ jobs:
         run: bin/pack.sh
 
       - name: Record the output hashes in the job summary
+        # .github/package.sha256, when a commit carries it, holds the SHA-256 of the package tarball
+        # recorded from a build of that commit ("<hash>  <file name>"); the step prints whether this
+        # run's tarball equals it. A difference does not fail the job.
         run: |
+          TARBALL=$(cd build/package && sha256sum ./*.tgz)
+          if [ -f .github/package.sha256 ]; then
+            RECORDED=$(head -n 1 .github/package.sha256)
+            if [ "${TARBALL%% *}" = "${RECORDED%% *}" ]; then COMPARISON="equal to the recorded tarball"; else COMPARISON="DIFFERENT from the recorded tarball"; fi
+          else
+            RECORDED="none (this commit records no tarball hash)"; COMPARISON="not compared"
+          fi
           {
             echo "## Output hashes"
             echo
@@ -84,11 +97,16 @@ jobs:
             echo "Package tarball:"
             echo
             echo '```'
-            (cd build/package && sha256sum ./*.tgz)
+            echo "$TARBALL"
             echo '```'
+            echo
+            echo "Recorded tarball: $RECORDED"
+            echo
+            echo "Result: $COMPARISON"
           } >> "$GITHUB_STEP_SUMMARY"
           cat dist/SHA256SUMS
-          (cd build/package && sha256sum ./*.tgz)
+          echo "$TARBALL"
+          echo "recorded tarball: $RECORDED; $COMPARISON"
 
       - name: Offline tests (bin/test_offline.sh)
         run: bin/test_offline.sh

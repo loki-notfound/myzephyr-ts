@@ -177,11 +177,14 @@ repository.
 * Every action is pinned by its full commit, with the release in a comment.
 * The job prints the versions of Node.js, npm and Chromium, and writes `dist/SHA256SUMS` and the
   SHA-256 of the package tarball to its summary, so that a build on another machine and
-  operating system can be compared with them. A difference does not fail the job.
+  operating system can be compared with them. If the commit carries `.github/package.sha256`
+  (the tarball hash recorded from a build of that commit, `<hash>  <file name>`), the summary also
+  prints it and whether the run's tarball equals it. A difference does not fail the job.
 * Ubuntu 24.04 denies unprivileged user namespaces to the runner's Chromium, which the tests run
   with its sandbox; the job lifts that restriction on its disposable runner.
-* The job stops after 150 minutes; a newer push to the same pull request or branch cancels a run
-  still in progress.
+* The job stops after 150 minutes. A newer push to the same pull request cancels that pull
+  request's run still in progress; a push to `main` never cancels or replaces another run, so every
+  landed commit keeps its run and its hashes.
 
 A run needs about 4 GB of disk. Measured on an 11-core machine with the inputs already on disk:
 the build about 7 minutes, the offline tests about 19 minutes. A runner also downloads the
