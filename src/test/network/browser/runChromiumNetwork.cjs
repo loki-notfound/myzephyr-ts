@@ -10,8 +10,9 @@
  * non-loopback host name maps to NOTFOUND, in a new isolated profile. The browser can reach
  * nothing but 127.0.0.1; the forwarder alone contacts the permitted upstream.
  *
- * Usage: runChromiumNetwork.cjs --root <page dir> --seed <seed dir> --out <dir> --checks N01,...
- *                               --upstream <permitted url> [--chromium <binary>] [--timeout-ms N]
+ * Usage: runChromiumNetwork.cjs (--root <page dir> | --app <http://127.0.0.1:port>) --seed <seed dir> --out <dir>
+ *                               --checks N01,... --upstream <permitted url> [--chromium <binary>] [--timeout-ms N]
+ * With --app the pages come from a local development server, relayed by the forwarder (see forwarder.cjs).
  */
 "use strict";
 const fs = require("fs");
@@ -20,7 +21,9 @@ const { spawn } = require("child_process");
 
 const args = process.argv.slice(2);
 const arg = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 ? args[i + 1] : d; };
-const ROOT = path.resolve(arg("root"));
+const ROOT = arg("root") ? path.resolve(arg("root")) : undefined;
+const APP = arg("app");
+if ((ROOT === undefined) === (APP === undefined)) { process.stderr.write("give exactly one of --root and --app\n"); process.exit(2); }
 const SEED = path.resolve(arg("seed"));
 const OUT = path.resolve(arg("out"));
 const CHECKS = arg("checks");
@@ -49,7 +52,8 @@ function analyzeNetLog(file) {
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
   const fwdOut = path.join(OUT, "fwd");
-  const fwd = spawn(process.execPath, [path.join(__dirname, "..", "forwarder.cjs"), "--upstream", UPSTREAM, "--out", fwdOut, "--page", ROOT, "--seed", SEED, "--checks", CHECKS, "--marker", MARKER],
+  const fwd = spawn(process.execPath, [path.join(__dirname, "..", "forwarder.cjs"), "--upstream", UPSTREAM, "--out", fwdOut].concat(ROOT !== undefined ? ["--page", ROOT] : ["--app", APP],
+    ["--seed", SEED, "--checks", CHECKS, "--marker", MARKER]),
     { stdio: ["ignore", "pipe", "pipe"] });
   let fwdStdout = "";
   let fwdExit;

@@ -1,0 +1,9 @@
+{
+  "name": "zephyr-ts-consumer-node",
+  "private": true,
+  "description": "Minimal Node.js consumer of the packed package (packaging test, bin/test_package.sh)",
+  "dependencies": {
+    "@loki-notfound/zephyr-ts": "file:../zephyr-ts.tgz",
+    "typescript": "5.2.2"
+  }
+}

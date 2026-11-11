@@ -131,7 +131,28 @@ height of a new wallet. Load: at most two concurrent upstream connections, every
 the HTTPS restore of `N03` and the new wallet of `N17`; every other sync reopens the wallet bytes
 saved by `N02`. Set `DIRECT_CHECKS` without `N17` (and without `ZEPHYR_TS_TEST_DAEMON_HTTPS`) to
 keep it to one. A disposable wallet without funds lives in `build/test-wallets/` during the run and
-is removed afterwards.
+is removed afterwards; set `ZEPHYR_TS_TEST_KEEP_WALLET` to a new directory to keep a copy for the
+packaging tests.
+
+## Packaging tests
+
+    ZEPHYR_TS_TEST_KEEP_WALLET=build/test-wallets/saved bin/test_network.sh   # or reuse a saved wallet
+    ZEPHYR_TS_TEST_WALLET_DIR=build/test-wallets/saved bin/test_package.sh
+
+packs the package and installs the tarball into the three minimal consumers in `consumers/`, each
+from its own lockfile and with nothing else (the consumers' tools are their own dependencies, not
+the package's): `node` (`require` and `import` of the entry, and a type check of the shipped
+declarations), `webpack` (a production bundle without any resolve fallback) and `vite` (the
+development server and a production build, without a configuration file). The three browser runs
+use headless Chromium behind the loopback forwarder of the network suite, under the page policy of
+`docs/DEPLOYMENT.md`. Every run creates a wallet with the daemon, saves it, reopens it and syncs
+the saved wallet once, through the package entry only; the browser runs also check that the page
+loaded the package's module and its worker script (webpack's minimizer rewrites the worker, and
+the development server appends an inline source map to it). `ZEPHYR_TS_TEST_WALLET_DIR` names a saved
+disposable wallet (`keys.bin`, `cache.bin`, `password.txt`) at most 2,000 blocks below the daemon
+height, so that the five syncs download no block hashes. Results, including the size of every file
+each consumer ships, go to `build/test-results/package/`. With `OFFLINE=1` the consumers install
+from the npm cache only.
 
 ## Continuous integration
 

@@ -1,0 +1,14 @@
+{
+  "name": "zephyr-ts-consumer-vite",
+  "private": true,
+  "type": "module",
+  "description": "Minimal Vite consumer of the packed package (packaging test, bin/test_package.sh)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@loki-notfound/zephyr-ts": "file:../zephyr-ts.tgz",
+    "vite": "8.3.5"
+  }
+}

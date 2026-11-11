@@ -136,7 +136,8 @@ further work and their own tests with funded wallets.
 
 [BUILDING.md](BUILDING.md) describes the requirements, the build from a fresh clone, offline
 builds from local caches, the offline test suites, the optional file compatibility test with
-zephyr-javascript and the network suite.
+zephyr-javascript, the network suite and the packaging tests with Vite, webpack and Node.js
+consumers.
 
 ## Versions
 

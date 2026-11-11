@@ -1,0 +1,12 @@
+{
+  "name": "zephyr-ts-consumer-webpack",
+  "private": true,
+  "description": "Minimal webpack consumer of the packed package (packaging test, bin/test_package.sh)",
+  "scripts": {
+    "build": "node build.js stats.json"
+  },
+  "dependencies": {
+    "@loki-notfound/zephyr-ts": "file:../zephyr-ts.tgz",
+    "webpack": "5.88.2"
+  }
+}

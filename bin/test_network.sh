@@ -24,7 +24,8 @@
 #
 # Environment (optional): CHROMIUM=<browser binary> (default: chromium); DIRECT_CHECKS, WORKER_CHECKS
 # and BROWSER_CHECKS select a subset of the checks per run (checks after N02 that reopen the measured
-# wallet need N02 in DIRECT_CHECKS).
+# wallet need N02 in DIRECT_CHECKS); ZEPHYR_TS_TEST_KEEP_WALLET=<new directory> keeps a copy of the
+# saved disposable wallet there for bin/test_package.sh (it holds no funds; delete it afterwards).
 set -euo pipefail
 . "$(dirname "$0")/pins.sh"
 cd "$ROOT"
@@ -97,6 +98,11 @@ timeout 2400 node src/test/network/browser/runChromiumNetwork.cjs --root "$ROOT_
 cat "$RUN/stdout.txt"
 [ "$rc" = 0 ] || [ "$rc" = 3 ] || { tail -n 5 "$RUN/stderr.txt"; die "Chromium network run failed"; }
 report_status "$RUN/report.json" "$BROWSER_CHECKS" "Chromium"
+if [ -n "${ZEPHYR_TS_TEST_KEEP_WALLET:-}" ] && [ -s "$SEED/keys.bin" ]; then
+  [ ! -e "$ZEPHYR_TS_TEST_KEEP_WALLET" ] || die "ZEPHYR_TS_TEST_KEEP_WALLET must name a new directory"
+  mkdir -m 700 -p "$ZEPHYR_TS_TEST_KEEP_WALLET"; cp "$SEED/keys.bin" "$SEED/cache.bin" "$SEED/password.txt" "$ZEPHYR_TS_TEST_KEEP_WALLET/"
+  log "saved wallet kept in $ZEPHYR_TS_TEST_KEEP_WALLET"
+fi
 rm -rf "$SEED"
 if [ -s "$NOT_RUN" ]; then
   echo "network suite: every check that ran passed; NOT RUN:"

@@ -12,16 +12,21 @@
  *   daemon  mounts "" (forward), "/rpc" (forward under a base path), "/slow" (forward, each binary
  *           request delayed), "/fake/status", "/fake/malformed", "/fake/nodestatus" (local fake
  *           daemons whose failures carry a marker text); with --page also the static consumer
- *           (index.html, bundles) under an explicit CSP, POST /result and POST /csp-report
+ *           (index.html, bundles, nested asset directories) under an explicit CSP, POST /result and
+ *           POST /csp-report; with --app instead of --page the consumer's pages come from a local
+ *           development server (a loopback origin), relayed with the same CSP, websocket upgrades
+ *           included
  *   allow   mount "" (forward) with CORS headers that allow the daemon listener's origin
  *   deny    answers the CORS preflight without CORS headers and every other request 403 locally
  *   silent  accepts connections and never answers (raw TCP)
  *   closed  a port that was bound and closed again (connection refused)
  *
- * Usage: forwarder.cjs --upstream <url> --out <dir> [--page <dir>] [--seed <dir>] [--slow-ms N]
- *                      [--marker TEXT] [--fake-height N] [--checks N01,...]
+ * Usage: forwarder.cjs --upstream <url> --out <dir> [--page <dir> | --app <http://127.0.0.1:port>]
+ *                      [--seed <dir>] [--slow-ms N] [--marker TEXT] [--fake-height N] [--checks N01,...]
  * With --page, GET /targets.json gives the page its targets (this forwarder's loopback origins),
  * the marker and the check list, and GET /seed/{keys,cache,password} the disposable seed wallet.
+ * Every page request is counted with its Sec-Fetch-Dest; the SHA-256 of each worker script and
+ * WebAssembly module served is recorded, so that a run can show which files the page used.
  * Prints one line {"ready":true,"ports":{...}} when listening. SIGTERM writes <out>/forwarder.json.
  */
 "use strict";
@@ -41,6 +46,8 @@ if (!PERMITTED_UPSTREAMS.includes(UPSTREAM)) { process.stderr.write("upstream is
 const OUT = path.resolve(arg("out"));
 const PAGE = arg("page") ? path.resolve(arg("page")) : undefined;
 const SEED = arg("seed") ? path.resolve(arg("seed")) : undefined;
+const APP = arg("app") ? new URL(arg("app")) : undefined;
+if (APP !== undefined && (APP.protocol !== "http:" || APP.hostname !== "127.0.0.1" || PAGE !== undefined)) { process.stderr.write("--app must be a loopback http origin and excludes --page\n"); process.exit(2); }
 const SLOW_MS = Number(arg("slow-ms", "1500"));
 const MARKER = arg("marker", "MARKERnodetext");
 const FAKE_HEIGHT = Number(arg("fake-height", "1000"));
@@ -137,7 +144,33 @@ let ports = {};
 const CSP = () => ["default-src 'none'", "script-src 'self' 'wasm-unsafe-eval'", "worker-src 'self'",
   "connect-src 'self' http://127.0.0.1:" + ports.allow + " http://127.0.0.1:" + ports.deny + " http://127.0.0.1:" + ports.closed,
   "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'", "report-uri /csp-report"].join("; ");
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json", ".bin": "application/octet-stream", ".wasm": "application/wasm" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".map": "application/json",
+  ".bin": "application/octet-stream", ".wasm": "application/wasm" };
+// a static page path: segments of safe characters, no dot segments; resolved inside the page directory
+const pageFile = (pathname) => {
+  if (pathname === "/") return path.join(PAGE, "index.html");
+  if (!/^(\/[A-Za-z0-9_-][A-Za-z0-9._-]*)+$/.test(pathname)) return undefined;
+  const file = path.join(PAGE, pathname.substring(1));
+  return file.startsWith(PAGE + path.sep) && fs.existsSync(file) && fs.statSync(file).isFile() ? file : undefined;
+};
+// relay one page request to the development server; its answer gets this forwarder's page headers
+function relayApp(req, body, headers, done) {
+  const h = Object.assign({}, req.headers, { host: APP.host });
+  delete h["accept-encoding"]; // plain bodies, so that served files can be digested
+  const up = http.request({ hostname: APP.hostname, port: APP.port, method: req.method, path: req.url, headers: h }, (ur) => {
+    const chunks = [];
+    ur.on("data", (c) => chunks.push(c));
+    ur.on("end", () => {
+      const out = Buffer.concat(chunks);
+      const rh = Object.assign({}, ur.headers);
+      for (const k of Object.keys(rh)) if (/^(content-security-policy|content-length|transfer-encoding|connection|keep-alive)$/i.test(k)) delete rh[k];
+      done(ur.statusCode, Object.assign(rh, headers, { "content-length": out.length }), out);
+    });
+    ur.on("error", () => done(502, headers, Buffer.alloc(0)));
+  });
+  up.on("error", () => done(502, headers, Buffer.alloc(0)));
+  up.end(body);
+}
 let resultResolve;
 
 function handler(listener) {
@@ -160,9 +193,23 @@ function handler(listener) {
         stats.preflights.allow = (stats.preflights.allow || 0) + 1;
         res.writeHead(204, Object.assign({ "access-control-allow-methods": "POST, GET", "access-control-allow-headers": "content-type", "access-control-max-age": "600" }, cors)); res.end(); return;
       }
-      if (listener === "daemon" && PAGE !== undefined && !daemonPath) {
+      if (listener === "daemon" && (PAGE !== undefined || APP !== undefined) && !daemonPath) {
         const headers = { "Content-Security-Policy": CSP(), "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "Cross-Origin-Opener-Policy": "same-origin" };
         let status = 404;
+        const dest = typeof req.headers["sec-fetch-dest"] === "string" ? req.headers["sec-fetch-dest"].substring(0, 20) : "-";
+        const served = (code, h, out) => {
+          const entry = { method: req.method, path: url.pathname, status: code, bytes: body.length, dest, responseBytes: out.length };
+          if (code === 200 && (dest === "worker" || url.pathname.endsWith(".wasm"))) {
+            entry.sha256 = sha(out);
+            // a development server may append an inline source map to a script it serves; the digest
+            // without that last comment line identifies the file it started from
+            const text = dest === "worker" ? out.toString("latin1") : "";
+            const m = text.match(/\n\/\/# sourceMappingURL=data:[^\n]*\n?$/);
+            if (m) entry.sha256WithoutInlineMap = sha(out.subarray(0, m.index));
+          }
+          stats.pageRequests.push(entry);
+          res.writeHead(code, h); res.end(out);
+        };
         if (req.method === "POST" && url.pathname === "/result") {
           try { fs.writeFileSync(path.join(OUT, "report.json"), body); } catch (e) { /* reported by the runner */ }
           res.writeHead(204, headers); res.end(); status = 204; if (resultResolve) resultResolve();
@@ -179,10 +226,14 @@ function handler(listener) {
           const targets = { root, base: root + "/rpc", slow: root + "/slow", fakeStatus: root + "/fake/status", fakeMalformed: root + "/fake/malformed", fakeNodeStatus: root + "/fake/nodestatus",
             allow: "http://127.0.0.1:" + ports.allow, deny: "http://127.0.0.1:" + ports.deny, closed: "http://127.0.0.1:" + ports.closed };
           headers["Content-Type"] = "application/json"; res.writeHead(200, headers); res.end(JSON.stringify({ targets, marker: MARKER, checks: CHECKS })); status = 200;
-        } else if (req.method === "GET" && (url.pathname === "/" || /^\/[A-Za-z0-9._-]+$/.test(url.pathname)) && fs.existsSync(path.join(PAGE, url.pathname === "/" ? "index.html" : url.pathname.substring(1)))) {
-          const file = path.join(PAGE, url.pathname === "/" ? "index.html" : url.pathname.substring(1));
+        } else if (APP !== undefined) {
+          relayApp(req, body, headers, served);
+          return;
+        } else if (req.method === "GET" && pageFile(url.pathname) !== undefined) {
+          const file = pageFile(url.pathname);
           headers["Content-Type"] = TYPES[path.extname(file)] || "application/octet-stream";
-          res.writeHead(200, headers); res.end(fs.readFileSync(file)); status = 200;
+          served(200, headers, fs.readFileSync(file));
+          return;
         } else { res.writeHead(404, headers); res.end(); }
         stats.pageRequests.push({ method: req.method, path: url.pathname.startsWith("/seed/") ? "/seed/*" : url.pathname, status, bytes: body.length });
         return;
@@ -212,12 +263,27 @@ function listen(server) { return new Promise((resolve) => server.listen(0, "127.
   ports.silent = await listen(silent);
   const servers = {};
   for (const name of ["daemon", "allow", "deny"]) { servers[name] = http.createServer(handler(name)); servers[name].keepAliveTimeout = 5000; ports[name] = await listen(servers[name]); }
+  // websocket upgrades of the development server (its reload channel), relayed unchanged on the page origin
+  const upgrades = [];
+  servers.daemon.on("upgrade", (req, socket, head) => {
+    if (APP === undefined) { socket.destroy(); return; }
+    stats.upgrades = (stats.upgrades || 0) + 1;
+    const up = net.connect(Number(APP.port), APP.hostname, () => {
+      const lines = [req.method + " " + req.url + " HTTP/1.1"];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(req.rawHeaders[i] + ": " + (/^host$/i.test(req.rawHeaders[i]) ? APP.host : req.rawHeaders[i + 1]));
+      up.write(lines.join("\r\n") + "\r\n\r\n"); if (head && head.length) up.write(head);
+      up.pipe(socket); socket.pipe(up);
+    });
+    upgrades.push(up, socket);
+    up.on("error", () => socket.destroy()); socket.on("error", () => up.destroy());
+  });
   process.stdout.write(JSON.stringify({ ready: true, ports }) + "\n");
   const stop = () => {
     stats.finished = new Date().toISOString();
     stats.ports = ports;
     fs.writeFileSync(path.join(OUT, "forwarder.json"), JSON.stringify(stats, null, 1) + "\n");
     for (const s of Object.values(servers)) s.close();
+    for (const u of upgrades) u.destroy();
     silent.close(); for (const s of silentSockets) s.destroy();
     agent.destroy();
     process.exit(0);
