@@ -77,6 +77,12 @@ entry, the release glue, `zephyr.wasm`, the browser worker with its license file
 CommonJS build, and the browser entry under the `browser` condition), `zephyr.wasm`,
 `zephyr.worker.js` and `package.json`.
 
+The tarball depends neither on the host's umask nor on the time: the script packs a staged copy of
+the package files with fixed modes (0644 for files, 0755 for directories; npm would mark the files
+named in `"bin"` executable, and the package has none), and npm writes a fixed date and no owner
+into every entry. The same tree packed with the same Node.js and npm gives the same SHA-256 on any
+host.
+
 ## Offline tests
 
     bin/test_offline.sh
