@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "strictNullChecks": true
+  },
+  "include": ["src/main/ts/index.ts", "src/main/ts/wallet/ZephyrWallet.ts", "src/main/ts/common/ZephyrWalletError.ts", "src/main/ts/common/ZephyrLifecycleContract.ts", "src/main/ts/common/ZephyrWalletWorkers.ts", "src/main/ts/wallet/model/ZephyrWalletCoreConfig.ts", "src/main/ts/common/ZephyrDaemonAddress.ts", "src/main/ts/common/ZephyrBalances.ts", "src/test/lifecycle/**/*", "src/test/network/**/*"]
+}

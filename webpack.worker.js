@@ -3,13 +3,13 @@
 const path = require("path");
 const configBase = require("./webpack.base.js");
 
-let configMoneroWebWorker = Object.assign({}, configBase, {
-  name: "Monero web worker config",
-  entry: "./src/main/ts/common/MoneroWebWorker.ts",
+let configZephyrWebWorker = Object.assign({}, configBase, {
+  name: "Zephyr web worker config",
+  entry: "./src/main/ts/common/ZephyrWebWorker.ts",
   output: {
     path: path.resolve(__dirname, "dist"),
-    filename: "monero.worker.js"
+    filename: "zephyr.worker.js"
   },
 });
 
-module.exports = configMoneroWebWorker;
+module.exports = configZephyrWebWorker;
