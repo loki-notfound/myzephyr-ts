@@ -72,6 +72,17 @@ export default class HttpClient {
     HttpClient.ALLOWED_REQUEST_SUMMARY[key] = (HttpClient.ALLOWED_REQUEST_SUMMARY[key] ?? 0) + 1;
   }
 
+  /**
+   * The daemon address contract (ZephyrDaemonAddress.ts) rejects credentials and proxies before any
+   * native call, and the bridge passes neither, so a request never carries them. This client has no
+   * authentication or proxy support either: a request that names credentials or a proxy is
+   * rejected with the contract's diagnostic before anything is sent.
+   */
+  protected static rejectUnsupported(request: any): void {
+    if ((request?.username !== undefined && request.username !== "") || (request?.password !== undefined && request.password !== "")) throw ZephyrWalletError.unsupported("DAEMON_CREDENTIALS");
+    if (request?.proxyUri !== undefined && request.proxyUri !== "") throw ZephyrWalletError.unsupported("DAEMON_PROXY");
+  }
+
   // default request config
   protected static DEFAULT_REQUEST = {
     method: "GET",
@@ -88,7 +99,6 @@ export default class HttpClient {
   protected static HTTP_AGENT: any;
   protected static HTTPS_AGENT: any;
   protected static HTTPS_AGENT_UNVERIFIED: any;
-  protected static SOCKS_AGENTS: any = {}; // shared socks agents keyed by proxy uri and ssl config
 
   /**
    * <p>Make a HTTP request.<p>
@@ -97,10 +107,10 @@ export default class HttpClient {
    * @param {string} request.method - HTTP method ("GET", "PUT", "POST", "DELETE", etc)
    * @param {string} request.uri - uri to request
    * @param {string|Uint8Array|object} request.body - request body
-   * @param {string} [request.username] - username to authenticate the request (optional)
-   * @param {string} [request.password] - password to authenticate the request (optional)
+   * @param {string} [request.username] - must be empty or absent: credentials are rejected (DAEMON_CREDENTIALS)
+   * @param {string} [request.password] - must be empty or absent: credentials are rejected (DAEMON_CREDENTIALS)
    * @param {object} [request.headers] - headers to add to the request (optional)
-   * @param {string} [request.proxyUri] - proxy the request through a SOCKS5 server, e.g. a local Tor proxy (Node.js only, optional)
+   * @param {string} [request.proxyUri] - must be empty or absent: proxies are rejected (DAEMON_PROXY)
    * @param {boolean} [request.resolveWithFullResponse] - return full response if true, else body only (default false)
    * @param {boolean} [request.rejectUnauthorized] - whether or not to reject self-signed certificates (default true)
    * @param {object} [request.cancelToken] - token to cancel a queued or active request (optional)
@@ -114,6 +124,7 @@ export default class HttpClient {
    */
   static async request(request) {
     HttpClient.guardRequest(request); // throws for anything but a configured daemon route
+    HttpClient.rejectUnsupported(request); // no credentials or proxy, as in the daemon address contract
 
     // proxy to worker if configured
     if (request.proxyToWorker) {
@@ -186,27 +197,6 @@ export default class HttpClient {
     return HttpClient[key];
   }
 
-  /**
-   * Get a singleton agent to route requests through a SOCKS5 proxy; hostnames are resolved by the proxy to avoid DNS leaks.
-   *
-   * @return {SocksProxyAgent} a shared agent for the given proxy and ssl config
-   */
-  protected static getSocksAgent(proxyUri: string, rejectUnauthorized: boolean) {
-    if (GenUtils.isBrowser() || GenUtils.isDeno()) throw new Error("Proxied requests are only supported in Node.js");
-    const key = proxyUri + "_" + rejectUnauthorized;
-    if (!HttpClient.SOCKS_AGENTS[key]) {
-      const { SocksProxyAgent } = require("socks-proxy-agent");
-      const parsed = new URL(GenUtils.normalizeUri(proxyUri));
-      const auth = parsed.username ? parsed.username + ":" + parsed.password + "@" : "";
-      HttpClient.SOCKS_AGENTS[key] = new SocksProxyAgent("socks5h://" + auth + parsed.host, { // socks establishment and inactivity are bounded by timeout
-        keepAlive: true,
-        timeout: Math.max(HttpClient.CONNECT_TIMEOUT, HttpClient.READ_TIMEOUT),
-        rejectUnauthorized: rejectUnauthorized
-      });
-    }
-    return HttpClient.SOCKS_AGENTS[key];
-  }
-
   // bound the whole request where node agent socket timeouts do not apply
   protected static getNonAgentTimeout() {
     return GenUtils.isBrowser() || GenUtils.isDeno() ? Math.max(HttpClient.CONNECT_TIMEOUT, HttpClient.READ_TIMEOUT) : 0;
@@ -258,10 +248,7 @@ export default class HttpClient {
     const method = req.method;
     const uri = req.uri;
     const host = req.host;
-    const username = req.username;
-    const password = req.password;
     const body = req.body;
-    const proxyUri = req.proxyUri;
     const rejectUnauthorized = req.rejectUnauthorized;
     const isBinary = body instanceof Uint8Array;
     const cancelToken = req.cancelToken;
@@ -272,7 +259,7 @@ export default class HttpClient {
       if (cancelToken) cancelToken.throwIfRequested();
       await HttpClient.awaitRateLimit(host);
       return new Promise(function(resolve, reject) {
-        HttpClient.axiosDigestAuthRequest(method, uri, username, password, body, proxyUri, rejectUnauthorized, cancelToken).then(function(resp) {
+        HttpClient.axiosRequest(method, uri, body, rejectUnauthorized, cancelToken).then(function(resp) {
           resolve(resp);
         }).catch(function(error: AxiosError) {
           if (error.response?.status) resolve(error.response);
@@ -308,28 +295,10 @@ export default class HttpClient {
     return normalizedResponse;
   }
 
-  protected static axiosDigestAuthRequest = async function(method, url, username, password, body, proxyUri?, rejectUnauthorized?, cancelToken?) {
-    if (typeof CryptoJS === 'undefined' && typeof require === 'function') {
-      var CryptoJS = require('crypto-js');
-    }
-
-    // route through socks proxy if configured, otherwise use direct agents (Node only: a browser has no agents)
-    const socksAgent = proxyUri ? HttpClient.getSocksAgent(proxyUri, rejectUnauthorized !== false) : undefined;
+  // one request, with the shared agents in Node.js (a browser has no agents); axios rejects a status
+  // outside 2xx with the response attached, which requestAxios passes on as a response
+  protected static async axiosRequest(method: string, url: string, body: any, rejectUnauthorized?: boolean, cancelToken?: any) {
     const nodeAgents = LibraryUtils.isNodeRuntime();
-    const httpAgent = socksAgent ?? (url.startsWith("https") || !nodeAgents ? undefined : HttpClient.getHttpAgent());
-    const httpsAgent = socksAgent ?? (url.startsWith("https") && nodeAgents ? HttpClient.getHttpsAgent(rejectUnauthorized) : undefined);
-
-    const generateCnonce = function(): string {
-      const characters = 'abcdef0123456789';
-      let token = '';
-      for (let i = 0; i < 16; i++) {
-        const randNum = Math.round(Math.random() * characters.length);
-        token += characters.slice(randNum, randNum+1);
-      }
-      return token;
-    }
-
-    let count = 0;
     return axios.request({
       url: url,
       method: method,
@@ -337,70 +306,13 @@ export default class HttpClient {
         'Content-Type': 'application/json'
       },
       responseType: body instanceof Uint8Array ? 'arraybuffer' : undefined,
-      httpAgent: httpAgent,
-      httpsAgent: httpsAgent,
-      proxy: socksAgent ? false : undefined, // env proxies must not bypass the socks agent
+      httpAgent: url.startsWith("https") || !nodeAgents ? undefined : HttpClient.getHttpAgent(),
+      httpsAgent: url.startsWith("https") && nodeAgents ? HttpClient.getHttpsAgent(rejectUnauthorized) : undefined,
       timeout: HttpClient.getNonAgentTimeout(),
       cancelToken: cancelToken,
       data: body,
       transformResponse: res => res,
       adapter: GenUtils.isDeno() ? ['fetch'] : ['http', 'xhr', 'fetch']
-    }).catch(async (err) => {
-      if (err.response?.status === 401) {
-        let authHeader = err.response.headers['www-authenticate'].replace(/,\sDigest.*/, "");
-        if (!authHeader) {
-          throw err;
-        }
-
-        // Digest qop="auth",algorithm=MD5,realm="monero-rpc",nonce="hBZ2rZIxElv4lqCRrUylXA==",stale=false
-        const authHeaderMap = authHeader.replace("Digest ", "").replaceAll('"', "").split(",").reduce((prev, curr) => ({...prev, [curr.split("=")[0]]: curr.split("=").slice(1).join('=')}), {})
-
-        ++count;
-
-        const cnonce = generateCnonce();
-        const HA1 = CryptoJS.MD5(username+':'+authHeaderMap.realm+':'+password).toString();
-        const HA2 = CryptoJS.MD5(method+':'+url).toString();
-
-        const response = CryptoJS.MD5(HA1+':'+
-          authHeaderMap.nonce+':'+
-          ('00000000' + count).slice(-8)+':'+
-          cnonce+':'+
-          authHeaderMap.qop+':'+
-          HA2).toString();
-        const digestAuthHeader = 'Digest'+' '+
-          'username="'+username+'", '+
-          'realm="'+authHeaderMap.realm+'", '+
-          'nonce="'+authHeaderMap.nonce+'", '+
-          'uri="'+url+'", '+
-          'response="'+response+'", '+
-          'opaque="'+(authHeaderMap.opaque ?? null)+'", '+
-          'qop='+authHeaderMap.qop+', '+
-          'nc='+('00000000' + count).slice(-8)+', '+
-          'cnonce="'+cnonce+'"';
-
-        const finalResponse = await axios.request({
-          url: url,
-          method: method,
-          headers: {
-            'Authorization': digestAuthHeader,
-            'Content-Type': 'application/json'
-          },
-          responseType: body instanceof Uint8Array ? 'arraybuffer' : undefined,
-          httpAgent: httpAgent,
-          httpsAgent: httpsAgent,
-          proxy: socksAgent ? false : undefined, // env proxies must not bypass the socks agent
-          timeout: HttpClient.getNonAgentTimeout(),
-          cancelToken: cancelToken,
-          data: body,
-          transformResponse: res => res,
-          adapter: GenUtils.isDeno() ? ['fetch'] : ['http', 'xhr', 'fetch']
-        });
-
-        return finalResponse;
-      }
-      throw err;
-    }).catch(err => {
-      throw err;
     });
   }
 }
