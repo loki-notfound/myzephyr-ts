@@ -1,0 +1,94 @@
+# Build and offline tests: the public recipe from a fresh checkout (bin/build.sh), the package
+# check (bin/pack.sh) and the offline test suites with the runner's Chromium
+# (bin/test_offline.sh). No network test suite, no secrets, read-only token, no cache.
+# See BUILDING.md, "Continuous integration".
+name: build and offline tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build, pack and offline tests (Linux x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      TZ: UTC
+    defaults:
+      run:
+        shell: bash # bash --noprofile --norc -eo pipefail
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # the commit itself, not a merge commit, so that the recorded hashes belong to it
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+          package-manager-cache: false
+
+      - name: Select the browser and print the versions
+        run: |
+          CHROMIUM=$(command -v chromium || true)
+          [ -n "$CHROMIUM" ] || { echo "::error::no chromium binary on the runner"; exit 1; }
+          echo "CHROMIUM=$CHROMIUM" >> "$GITHUB_ENV"
+          echo "commit:   $(git rev-parse HEAD)"
+          echo "system:   $(. /etc/os-release && echo "$PRETTY_NAME") $(uname -m)"
+          echo "node:     $(node --version), npm $(npm --version)"
+          echo "chromium: $CHROMIUM -> $(readlink -f "$CHROMIUM"), $("$CHROMIUM" --version)"
+          echo "gcc:      $(gcc --version | head -n 1)"
+          echo "python3:  $(python3 --version)"
+
+      - name: Allow the browser sandbox
+        # Ubuntu 24.04 denies unprivileged user namespaces to programs without an AppArmor profile,
+        # which includes the runner's Chromium; the tests run it with its sandbox, so the
+        # restriction is lifted on this disposable runner.
+        run: |
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Build (bin/build.sh)
+        run: bin/build.sh
+
+      - name: Pack and check the package (bin/pack.sh)
+        run: bin/pack.sh
+
+      - name: Record the output hashes in the job summary
+        run: |
+          {
+            echo "## Output hashes"
+            echo
+            echo "Commit $(git rev-parse HEAD); $(. /etc/os-release && echo "$PRETTY_NAME") $(uname -m); Node.js $(node --version)."
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+            echo
+            echo "Package tarball:"
+            echo
+            echo '```'
+            (cd build/package && sha256sum ./*.tgz)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat dist/SHA256SUMS
+          (cd build/package && sha256sum ./*.tgz)
+
+      - name: Offline tests (bin/test_offline.sh)
+        run: bin/test_offline.sh

@@ -156,7 +156,25 @@ from the npm cache only.
 
 ## Continuous integration
 
-The repository has no CI workflow yet. A workflow that runs `bin/build.sh`, `bin/pack.sh` and
-`bin/test_offline.sh` on a Linux runner with Chromium needs about 4 GB of disk for the toolchain and
-build, about 15 minutes of build and about 25 minutes of tests per run, or less with a cache of
-`build/toolchain/` and `build/downloads/` keyed by `bin/pins.sh`.
+`.github/workflows/build.yml` runs on every pull request to `main` and on every push to `main`. One
+job on an `ubuntu-24.04` runner with Node.js 22 checks out the tested commit (the pull request's
+head, not a merge commit), runs `bin/build.sh` from that fresh checkout, `bin/pack.sh` and
+`bin/test_offline.sh` with the runner's Chromium (`CHROMIUM`). The network suite, the packaging
+tests and the file compatibility test are not part of it: they need a daemon or another
+repository.
+
+* The workflow reads the repository only (`permissions: contents: read`), uses no secret and
+  does not run for `pull_request_target`; the checkout keeps no credentials.
+* Nothing is cached between runs: every input is fetched and verified by commit or SHA-256 as in
+  a local build.
+* Every action is pinned by its full commit, with the release in a comment.
+* The job prints the versions of Node.js, npm and Chromium, and writes `dist/SHA256SUMS` and the
+  SHA-256 of the package tarball to its summary, so that a build on another machine and
+  operating system can be compared with them. A difference does not fail the job.
+* Ubuntu 24.04 denies unprivileged user namespaces to the runner's Chromium, which the tests run
+  with its sandbox; the job lifts that restriction on its disposable runner.
+* The job stops after 150 minutes; a newer push to the same pull request or branch cancels a run
+  still in progress.
+
+A run needs about 4 GB of disk; the build takes about 15 minutes and the tests about 25 minutes on
+an 11-core machine, more on a smaller runner.
