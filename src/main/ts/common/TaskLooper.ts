@@ -7,7 +7,7 @@ export default class TaskLooper {
   _isStarted: boolean;
   _isLooping: boolean;
   _periodInMs: number;
-  _timeout: NodeJS.Timeout | undefined;
+  _timeout: ReturnType<typeof setTimeout> | undefined;
   _loopId: number = 0; // versions each loop so a stale loop exits after stop and restart
   
   /**

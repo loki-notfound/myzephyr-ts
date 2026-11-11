@@ -91,6 +91,5 @@ that wallet's worker.
   webpack 5 only.
 * The runtime dependencies are the packages the entry's modules load. The HTTP transport has no
   authentication or proxy support: credentials and proxies are rejected by the address contract and
-  again by the transport. `@types/node` is a runtime dependency because the shipped declarations
-  refer to Node.js types. The browser entry bundles what it needs and loads none of them at run
-  time.
+  again by the transport. The shipped declarations need no Node.js types. The browser entry bundles
+  what it needs and loads none of the runtime dependencies at run time.

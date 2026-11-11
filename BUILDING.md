@@ -142,11 +142,12 @@ packaging tests.
 packs the package and installs the tarball into the three minimal consumers in `consumers/`, each
 from its own lockfile and with nothing else (the consumers' tools are their own dependencies, not
 the package's): `node` (`require` and `import` of the entry, and a type check of the shipped
-declarations), `webpack` (a production bundle without any resolve fallback) and `vite` (the
-development server and a production build, without a configuration file). The three browser runs
-use headless Chromium behind the loopback forwarder of the network suite, under the page policy of
-`docs/DEPLOYMENT.md`. Every run creates a wallet with the daemon, saves it, reopens it and syncs
-the saved wallet once, through the package entry only; the browser runs also check that the page
+declarations with library checking and without Node.js types), `webpack` (a production bundle
+without any resolve fallback) and `vite` (the development server and a production build, without
+a configuration file). The three browser runs use headless Chromium behind the loopback forwarder
+of the network suite, under the page policy of `docs/DEPLOYMENT.md`. Every run creates a wallet
+with the daemon, saves it, reopens it and syncs the saved wallet once, through the package entry
+only; the browser runs also check that the page
 loaded the package's module and its worker script (webpack's minimizer rewrites the worker, and
 the development server appends an inline source map to it). `ZEPHYR_TS_TEST_WALLET_DIR` names a saved
 disposable wallet (`keys.bin`, `cache.bin`, `password.txt`) at most 2,000 blocks below the daemon

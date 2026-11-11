@@ -33,7 +33,6 @@ import ZephyrTx from "./model/ZephyrTx";
 import ZephyrTxPoolStats from "./model/ZephyrTxPoolStats";
 import ZephyrUtils from "../common/ZephyrUtils";
 import ZephyrVersion from "./model/ZephyrVersion";
-import { ChildProcess } from "child_process";
 
 /**
  * Copyright (c) woodser
@@ -91,7 +90,7 @@ class ZephyrDaemonRpc extends ZephyrDaemon {
    * 
    * @return {ChildProcess} the node process running monerod, undefined if not created from new process
    */
-  getProcess(): ChildProcess {
+  getProcess(): any {
     return this.process;
   }
   

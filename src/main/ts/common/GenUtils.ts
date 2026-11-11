@@ -1,6 +1,5 @@
 import assert from "assert";
 import async from "async";
-import { ChildProcess } from "child_process";
 
 declare var Deno: any;
 
@@ -1439,11 +1438,11 @@ export default class GenUtils {
   /**
    * Kill the given nodejs child process.
    * 
-   * @param {ChildProcess} process - the nodejs child process to kill
-   * @param {number | NodeJS.Signals} [signal] - the kill signal, e.g. SIGTERM, SIGKILL, SIGINT (default)
+   * @param {object} process - the nodejs child process to kill (a ChildProcess)
+   * @param {number | string} [signal] - the kill signal, e.g. SIGTERM, SIGKILL, SIGINT (default)
    * @return {Promise<number | undefined>} the exit code from killing the process
    */
-  static async killProcess(process: ChildProcess, signal?: number | NodeJS.Signals): Promise<number | undefined> {
+  static async killProcess(process: { on(event: string, listener: (...args: any[]) => void): unknown; kill(signal?: number | string): boolean }, signal?: number | string): Promise<number | undefined> {
     return new Promise((resolve, reject) => {
       process.on("exit", function(code, signal) { resolve(code); });
       process.on("error", function(err) { reject(err); });

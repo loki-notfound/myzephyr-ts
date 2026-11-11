@@ -3,7 +3,8 @@
 # its own lockfile and nothing else (no devDependencies of this repository), then run through the
 # package entry only. Run bin/build.sh first; this script packs with bin/pack.sh.
 #   node     require() and import of the Node entry, and a type check of the shipped declarations
-#            (module resolution node16, and bundler with the browser condition)
+#            with library checking and without Node.js types installed (module resolution node16,
+#            and bundler with the browser condition)
 #   webpack  a production bundle of the browser entry with no resolve fallback, run in Chromium
 #   vite     the Vite development server and a Vite production build, without a configuration file,
 #            each run in Chromium
@@ -130,10 +131,11 @@ console.log("  " + r.loader + ": synced " + r.numBlocksFetched + " blocks, " + r
 process.exit(ok ? 0 : 1);
 JS
 done
+[ ! -e "$C/node_modules/@types/node" ] || die "Node consumer: @types/node is installed; the declarations must type-check without Node.js types"
 for cfg in tsconfig.json tsconfig.bundler.json; do
   ( cd "$C" && node node_modules/typescript/bin/tsc -p "$cfg" ) > "$OUT/node-types-$cfg.txt" 2>&1 || { head -n 20 "$OUT/node-types-$cfg.txt"; die "type check of the shipped declarations failed ($cfg)"; }
 done
-echo "  declarations: type check clean (node16, bundler with the browser condition)"
+echo "  declarations: type check clean without Node.js types (node16, bundler with the browser condition)"
 
 # ---------------------------------------------------------------------------------------- webpack
 log "webpack consumer"
