@@ -132,9 +132,15 @@ process.exit(ok ? 0 : 1);
 JS
 done
 [ ! -e "$C/node_modules/@types/node" ] || die "Node consumer: @types/node is installed; the declarations must type-check without Node.js types"
+# TypeScript resolves a types reference through the node_modules of every enclosing directory, and this
+# repository's own node_modules holds @types/node: check a copy of the consumer outside the repository,
+# with no @types/node in any enclosing directory
+TC=$(mktemp -d); cp -a "$C/." "$TC/"
+d=$TC; while [ "$d" != / ]; do d=$(dirname "$d"); [ ! -e "$d/node_modules/@types/node" ] || { rm -rf "$TC"; die "$d/node_modules holds @types/node; the declarations must type-check without Node.js types"; }; done
 for cfg in tsconfig.json tsconfig.bundler.json; do
-  ( cd "$C" && node node_modules/typescript/bin/tsc -p "$cfg" ) > "$OUT/node-types-$cfg.txt" 2>&1 || { head -n 20 "$OUT/node-types-$cfg.txt"; die "type check of the shipped declarations failed ($cfg)"; }
+  ( cd "$TC" && node node_modules/typescript/bin/tsc -p "$cfg" ) > "$OUT/node-types-$cfg.txt" 2>&1 || { head -n 20 "$OUT/node-types-$cfg.txt"; rm -rf "$TC"; die "type check of the shipped declarations failed ($cfg)"; }
 done
+rm -rf "$TC"
 echo "  declarations: type check clean without Node.js types (node16, bundler with the browser condition)"
 
 # ---------------------------------------------------------------------------------------- webpack
