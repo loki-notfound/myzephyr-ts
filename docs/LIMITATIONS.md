@@ -89,7 +89,9 @@ that wallet's worker.
 * Runtime coverage so far: Node.js 22 and headless Chromium on Linux x86_64. Firefox, Safari,
   Electron, Windows and macOS have not been tested. The browser entry is tested with Vite 8 and
   webpack 5 only.
-* The package still declares runtime dependencies inherited from monero-ts that the supported
-  functions do not need (`ajv`, `crypto-js`, `decimal.js`, `net`, `tls`, `socks-proxy-agent`,
-  `text-encoding`, and `@types/node` as a runtime dependency); they are installed with the package
-  and are to be trimmed in a later release.
+* The runtime dependencies are the packages the entry's modules load. Two of them serve inherited
+  code paths that the address contract never reaches: `crypto-js` (HTTP digest authentication;
+  credentials are rejected) and `socks-proxy-agent` (SOCKS proxies; proxies are rejected). They stay
+  until those paths are removed from the source. `@types/node` is a runtime dependency because the
+  shipped declarations refer to Node.js types. The browser entry bundles what it needs and loads
+  none of them at run time.
