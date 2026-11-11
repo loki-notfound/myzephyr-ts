@@ -1,11 +1,6 @@
 .DS_Store
-
-node_modules
+node_modules/
 npm-debug.log
-
-test_products
-**/tests_config.js
-/test_regtest/
-/build
-/browser_build/
-/dist/src/test/
+/build/
+/dist/
+/*.tgz
