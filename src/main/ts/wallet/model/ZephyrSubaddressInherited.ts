@@ -1,9 +1,11 @@
 import GenUtils from "../../common/GenUtils";
 
 /**
- * Zephyr subaddress model.
+ * Zephyr subaddress model, inherited from monero-ts and not part of the package entry. Renamed with
+ * the suffix Inherited so that the package entry can give its own subaddress result the name
+ * ZephyrSubaddress.
  */
-export default class ZephyrSubaddress {
+export default class ZephyrSubaddressInherited {
 
   accountIndex: number;
   index: number;
@@ -15,7 +17,7 @@ export default class ZephyrSubaddress {
   isUsed: boolean;
   numBlocksToUnlock: number;
   
-  constructor(subaddress?: Partial<ZephyrSubaddress>) {
+  constructor(subaddress?: Partial<ZephyrSubaddressInherited>) {
     Object.assign(this, subaddress);
     if (this.balance !== undefined && typeof this.balance !== "bigint") this.balance = BigInt(this.balance);
     if (this.unlockedBalance !== undefined && typeof this.unlockedBalance !== "bigint") this.unlockedBalance = BigInt(this.unlockedBalance);
@@ -32,7 +34,7 @@ export default class ZephyrSubaddress {
     return this.accountIndex;
   }
 
-  setAccountIndex(accountIndex: number): ZephyrSubaddress {
+  setAccountIndex(accountIndex: number): ZephyrSubaddressInherited {
     this.accountIndex = accountIndex;
     return this;
   }
@@ -41,7 +43,7 @@ export default class ZephyrSubaddress {
     return this.index;
   }
 
-  setIndex(index: number): ZephyrSubaddress {
+  setIndex(index: number): ZephyrSubaddressInherited {
     this.index = index;
     return this;
   }
@@ -50,7 +52,7 @@ export default class ZephyrSubaddress {
     return this.address;
   }
 
-  setAddress(address: string): ZephyrSubaddress {
+  setAddress(address: string): ZephyrSubaddressInherited {
     this.address = address;
     return this;
   }
@@ -59,7 +61,7 @@ export default class ZephyrSubaddress {
     return this.label;
   }
 
-  setLabel(label: string): ZephyrSubaddress {
+  setLabel(label: string): ZephyrSubaddressInherited {
     this.label = label;
     return this;
   }
@@ -68,7 +70,7 @@ export default class ZephyrSubaddress {
     return this.balance;
   }
 
-  setBalance(balance: bigint): ZephyrSubaddress {
+  setBalance(balance: bigint): ZephyrSubaddressInherited {
     this.balance = balance;
     return this;
   }
@@ -77,7 +79,7 @@ export default class ZephyrSubaddress {
     return this.unlockedBalance;
   }
 
-  setUnlockedBalance(unlockedBalance: bigint): ZephyrSubaddress {
+  setUnlockedBalance(unlockedBalance: bigint): ZephyrSubaddressInherited {
     this.unlockedBalance = unlockedBalance;
     return this;
   }
@@ -86,7 +88,7 @@ export default class ZephyrSubaddress {
     return this.numUnspentOutputs;
   }
 
-  setNumUnspentOutputs(numUnspentOutputs: number): ZephyrSubaddress {
+  setNumUnspentOutputs(numUnspentOutputs: number): ZephyrSubaddressInherited {
     this.numUnspentOutputs = numUnspentOutputs;
     return this;
   }
@@ -95,7 +97,7 @@ export default class ZephyrSubaddress {
     return this.isUsed;
   }
 
-  setIsUsed(isUsed: boolean): ZephyrSubaddress {
+  setIsUsed(isUsed: boolean): ZephyrSubaddressInherited {
     this.isUsed = isUsed;
     return this;
   }
@@ -104,7 +106,7 @@ export default class ZephyrSubaddress {
     return this.numBlocksToUnlock;
   }
 
-  setNumBlocksToUnlock(numBlocksToUnlock: number): ZephyrSubaddress {
+  setNumBlocksToUnlock(numBlocksToUnlock: number): ZephyrSubaddressInherited {
     this.numBlocksToUnlock = numBlocksToUnlock;
     return this;
   }

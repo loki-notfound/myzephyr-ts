@@ -2,7 +2,7 @@ import assert from "assert";
 import GenUtils from "../common/GenUtils";
 import LibraryUtils from "../common/LibraryUtils";
 import TaskLooper from "../common/TaskLooper";
-import ZephyrAccount from "./model/ZephyrAccount";
+import ZephyrAccountInherited from "./model/ZephyrAccountInherited";
 import ZephyrAccountTag from "./model/ZephyrAccountTag";
 import ZephyrAddressBookEntry from "./model/ZephyrAddressBookEntry";
 import ZephyrBlock from "../daemon/model/ZephyrBlock";
@@ -24,7 +24,7 @@ import ZephyrOutputQuery from "./model/ZephyrOutputQuery";
 import ZephyrOutputWallet from "./model/ZephyrOutputWallet";
 import ZephyrRpcConnection from "../common/ZephyrRpcConnection";
 import ZephyrRpcError from "../common/ZephyrRpcError";
-import ZephyrSubaddress from "./model/ZephyrSubaddress";
+import ZephyrSubaddressInherited from "./model/ZephyrSubaddressInherited";
 import ZephyrSyncResult from "./model/ZephyrSyncResult";
 import ZephyrTransfer from "./model/ZephyrTransfer";
 import ZephyrTransferQuery from "./model/ZephyrTransferQuery";
@@ -479,7 +479,7 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
   }
   
   // TODO: use cache
-  async getAddressIndex(address: string): Promise<ZephyrSubaddress> {
+  async getAddressIndex(address: string): Promise<ZephyrSubaddressInherited> {
     
     // fetch result and normalize error if address does not belong to the wallet
     let resp;
@@ -491,7 +491,7 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
     }
     
     // convert rpc response
-    let subaddress = new ZephyrSubaddress({address: address});
+    let subaddress = new ZephyrSubaddressInherited({address: address});
     subaddress.setAccountIndex(resp.result.index.major);
     subaddress.setIndex(resp.result.index.minor);
     return subaddress;
@@ -585,14 +585,14 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
     return (await this.getBalances(accountIdx, subaddressIdx))[1];
   }
   
-  async getAccounts(includeSubaddresses?: boolean, tag?: string, skipBalances?: boolean): Promise<ZephyrAccount[]> {
+  async getAccounts(includeSubaddresses?: boolean, tag?: string, skipBalances?: boolean): Promise<ZephyrAccountInherited[]> {
     
     // fetch accounts from rpc
     let resp = await this.config.getServer().sendJsonRequest("get_accounts", {tag: tag});
     
     // build account objects and fetch subaddresses per account using get_address
     // TODO monero-wallet-rpc: get_address should support all_accounts so not called once per account
-    let accounts: ZephyrAccount[] = [];
+    let accounts: ZephyrAccountInherited[] = [];
     for (let rpcAccount of resp.result.subaddress_accounts) {
       let account = ZephyrWalletRpc.convertRpcAccount(rpcAccount);
       if (includeSubaddresses) account.setSubaddresses(await this.getSubaddresses(account.getIndex(), undefined, true));
@@ -634,7 +634,7 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
   }
   
   // TODO: getAccountByIndex(), getAccountByTag()
-  async getAccount(accountIdx: number, includeSubaddresses?: boolean, skipBalances?: boolean): Promise<ZephyrAccount> {
+  async getAccount(accountIdx: number, includeSubaddresses?: boolean, skipBalances?: boolean): Promise<ZephyrAccountInherited> {
     assert(accountIdx >= 0);
     for (let account of await this.getAccounts()) {
       if (account.getIndex() === accountIdx) {
@@ -645,10 +645,10 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
     throw new Error("Account with index " + accountIdx + " does not exist");
   }
 
-  async createAccount(label?: string): Promise<ZephyrAccount> {
+  async createAccount(label?: string): Promise<ZephyrAccountInherited> {
     label = label ? label : undefined;
     let resp = await this.config.getServer().sendJsonRequest("create_account", {label: label});
-    return new ZephyrAccount({
+    return new ZephyrAccountInherited({
       index: resp.result.account_index,
       primaryAddress: resp.result.address,
       label: label,
@@ -657,7 +657,7 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
     });
   }
 
-  async getSubaddresses(accountIdx: number, subaddressIndices?: number[], skipBalances?: boolean): Promise<ZephyrSubaddress[]> {
+  async getSubaddresses(accountIdx: number, subaddressIndices?: number[], skipBalances?: boolean): Promise<ZephyrSubaddressInherited[]> {
     
     // fetch subaddresses
     let params: any = {};
@@ -716,19 +716,19 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
     return subaddresses;
   }
 
-  async getSubaddress(accountIdx: number, subaddressIdx: number, skipBalances?: boolean): Promise<ZephyrSubaddress> {
+  async getSubaddress(accountIdx: number, subaddressIdx: number, skipBalances?: boolean): Promise<ZephyrSubaddressInherited> {
     assert(accountIdx >= 0);
     assert(subaddressIdx >= 0);
     return (await this.getSubaddresses(accountIdx, [subaddressIdx], skipBalances))[0];
   }
 
-  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddress> {
+  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> {
     
     // send request
     let resp = await this.config.getServer().sendJsonRequest("create_address", {account_index: accountIdx, label: label});
     
     // build subaddress object
-    let subaddress = new ZephyrSubaddress();
+    let subaddress = new ZephyrSubaddressInherited();
     subaddress.setAccountIndex(accountIdx);
     subaddress.setIndex(resp.result.address_index);
     subaddress.setAddress(resp.result.address);
@@ -1928,7 +1928,7 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
   }
   
   protected static convertRpcAccount(rpcAccount) {
-    let account = new ZephyrAccount();
+    let account = new ZephyrAccountInherited();
     for (let key of Object.keys(rpcAccount)) {
       let val = rpcAccount[key];
       if (key === "account_index") account.setIndex(val);
@@ -1944,7 +1944,7 @@ export default class ZephyrWalletRpc extends ZephyrWalletBase {
   }
   
   protected static convertRpcSubaddress(rpcSubaddress) {
-    let subaddress = new ZephyrSubaddress();
+    let subaddress = new ZephyrSubaddressInherited();
     for (let key of Object.keys(rpcSubaddress)) {
       let val = rpcSubaddress[key];
       if (key === "account_index") subaddress.setAccountIndex(val);

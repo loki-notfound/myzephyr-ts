@@ -1,11 +1,11 @@
 import assert from "assert";
 import GenUtils from "../common/GenUtils";
 import LibraryUtils from "../common/LibraryUtils";
-import ZephyrAccount from "./model/ZephyrAccount";
+import ZephyrAccountInherited from "./model/ZephyrAccountInherited";
 import ZephyrError from "../common/ZephyrError";
 import ZephyrIntegratedAddress from "./model/ZephyrIntegratedAddress";
 import ZephyrNetworkType from "../daemon/model/ZephyrNetworkType";
-import ZephyrSubaddress from "./model/ZephyrSubaddress";
+import ZephyrSubaddressInherited from "./model/ZephyrSubaddressInherited";
 import ZephyrVersion from "../daemon/model/ZephyrVersion";
 import ZephyrWalletBase from "./ZephyrWalletBase";
 import ZephyrWalletConfig from "./model/ZephyrWalletConfig";
@@ -295,17 +295,17 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     });
   }
   
-  async getAddressIndex(address: string): Promise<ZephyrSubaddress> {
+  async getAddressIndex(address: string): Promise<ZephyrSubaddressInherited> {
     if (this.getWalletProxy()) return this.getWalletProxy().getAddressIndex(address);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
       let resp = ZephyrWalletError.checkBridgeResult("address", this.module.get_address_index(this.cppAddress, address));
       if (typeof resp !== "string" || resp.charAt(0) !== '{') throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
-      return new ZephyrSubaddress(JSON.parse(resp));
+      return new ZephyrSubaddressInherited(JSON.parse(resp));
     });
   }
   
-  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccount[]> {
+  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> {
     if (this.getWalletProxy()) return this.getWalletProxy().getAccounts();
     throw new ZephyrError("ZephyrWalletKeys does not support getting an enumerable set of accounts; query specific accounts");
   }
@@ -357,7 +357,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
   // ----------- ADD JSDOC FOR SUPPORTED DEFAULT IMPLEMENTATIONS --------------
   
   async getPrimaryAddress(): Promise<string> { return super.getPrimaryAddress(); }
-  async getSubaddress(accountIdx: number, subaddressIdx: number): Promise<ZephyrSubaddress> { return super.getSubaddress(accountIdx, subaddressIdx); }
+  async getSubaddress(accountIdx: number, subaddressIdx: number): Promise<ZephyrSubaddressInherited> { return super.getSubaddress(accountIdx, subaddressIdx); }
   
   // ----------------------------- PRIVATE HELPERS ----------------------------
 
@@ -473,7 +473,7 @@ export class ZephyrWalletKeysProxy extends ZephyrWalletBase {
 
   async getAddressIndex(address) {
     let subaddressJson = await this.invokeWorker("getAddressIndex", Array.from(arguments));
-    return ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddress(subaddressJson));
+    return ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson));
   }
 
   async getIntegratedAddress(standardAddress, paymentId) {

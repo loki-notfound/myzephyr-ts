@@ -1,11 +1,13 @@
 import assert from "assert";
 import GenUtils from "../../common/GenUtils";
-import ZephyrSubaddress from "./ZephyrSubaddress";
+import ZephyrSubaddressInherited from "./ZephyrSubaddressInherited";
 
 /**
- * Monero account model.
+ * Monero account model, inherited from monero-ts and not part of the package entry. Renamed with the
+ * suffix Inherited so that the package entry can give its own account result the name ZephyrAccount;
+ * this class keeps the inherited scalar balances of the unported paths.
  */
-export default class ZephyrAccount {
+export default class ZephyrAccountInherited {
 
   index: number;
   primaryAddress: string;
@@ -13,9 +15,9 @@ export default class ZephyrAccount {
   unlockedBalance: bigint;
   label: string;
   tag: string;
-  subaddresses: ZephyrSubaddress[];
+  subaddresses: ZephyrSubaddressInherited[];
   
-  constructor(account?: Partial<ZephyrAccount>) {
+  constructor(account?: Partial<ZephyrAccountInherited>) {
     Object.assign(this, account);
 
     // deserialize balances
@@ -25,7 +27,7 @@ export default class ZephyrAccount {
     // copy subaddresses
     if (this.subaddresses) {
       for (let i = 0; i < this.subaddresses.length; i++) {
-        this.subaddresses[i] = new ZephyrSubaddress(this.subaddresses[i]);
+        this.subaddresses[i] = new ZephyrSubaddressInherited(this.subaddresses[i]);
       }
     }
   }
@@ -46,7 +48,7 @@ export default class ZephyrAccount {
     return this.index;
   }
   
-  setIndex(index: number): ZephyrAccount {
+  setIndex(index: number): ZephyrAccountInherited {
     this.index = index;
     return this;
   }
@@ -55,7 +57,7 @@ export default class ZephyrAccount {
     return this.primaryAddress;
   }
 
-  setPrimaryAddress(primaryAddress: string): ZephyrAccount {
+  setPrimaryAddress(primaryAddress: string): ZephyrAccountInherited {
     this.primaryAddress = primaryAddress;
     return this;
   }
@@ -64,7 +66,7 @@ export default class ZephyrAccount {
     return this.balance;
   }
   
-  setBalance(balance: bigint): ZephyrAccount {
+  setBalance(balance: bigint): ZephyrAccountInherited {
     this.balance = balance;
     return this;
   }
@@ -73,7 +75,7 @@ export default class ZephyrAccount {
     return this.unlockedBalance;
   }
   
-  setUnlockedBalance(unlockedBalance: bigint): ZephyrAccount {
+  setUnlockedBalance(unlockedBalance: bigint): ZephyrAccountInherited {
     this.unlockedBalance = unlockedBalance;
     return this;
   }
@@ -82,7 +84,7 @@ export default class ZephyrAccount {
     return this.label;
   }
   
-  setLabel(label: string): ZephyrAccount {
+  setLabel(label: string): ZephyrAccountInherited {
     this.label = label;
     return this;
   }
@@ -91,16 +93,16 @@ export default class ZephyrAccount {
     return this.tag;
   }
   
-  setTag(tag: string): ZephyrAccount {
+  setTag(tag: string): ZephyrAccountInherited {
     this.tag = tag;
     return this;
   }
   
-  getSubaddresses(): ZephyrSubaddress[] {
+  getSubaddresses(): ZephyrSubaddressInherited[] {
     return this.subaddresses;
   }
   
-  setSubaddresses(subaddresses: ZephyrSubaddress[]): ZephyrAccount  {
+  setSubaddresses(subaddresses: ZephyrSubaddressInherited[]): ZephyrAccountInherited  {
     assert(subaddresses === undefined || Array.isArray(subaddresses), "Given subaddresses must be undefined or an array of subaddresses");
     this.subaddresses = subaddresses;
     if (subaddresses) {

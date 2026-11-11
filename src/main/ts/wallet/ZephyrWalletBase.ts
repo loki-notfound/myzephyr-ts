@@ -1,6 +1,6 @@
 import assert from "assert";
 import GenUtils from "../common/GenUtils";
-import ZephyrAccount from "./model/ZephyrAccount";
+import ZephyrAccountInherited from "./model/ZephyrAccountInherited";
 import ZephyrAccountTag from "./model/ZephyrAccountTag";
 import ZephyrAddressBookEntry from "./model/ZephyrAddressBookEntry";
 import ZephyrBlock from "../daemon/model/ZephyrBlock";
@@ -23,7 +23,7 @@ import ZephyrOutputQuery from "./model/ZephyrOutputQuery";
 import ZephyrOutputWallet from "./model/ZephyrOutputWallet";
 import ZephyrOutgoingTransfer from "./model/ZephyrOutgoingTransfer";
 import ZephyrRpcConnection from "../common/ZephyrRpcConnection";
-import ZephyrSubaddress from "./model/ZephyrSubaddress";
+import ZephyrSubaddressInherited from "./model/ZephyrSubaddressInherited";
 import ZephyrSyncResult from "./model/ZephyrSyncResult";
 import ZephyrTransfer from "./model/ZephyrTransfer";
 import ZephyrTransferQuery from "./model/ZephyrTransferQuery";
@@ -285,9 +285,9 @@ export default class ZephyrWalletBase {
    * Get the account and subaddress index of the given address.
    * 
    * @param {string} address - address to get the account and subaddress index from
-   * @return {Promise<ZephyrSubaddress>} the account and subaddress indices
+   * @return {Promise<ZephyrSubaddressInherited>} the account and subaddress indices
    */
-  async getAddressIndex(address: string): Promise<ZephyrSubaddress> {
+  async getAddressIndex(address: string): Promise<ZephyrSubaddressInherited> {
     throw new ZephyrError("Not supported");
   }
   
@@ -485,9 +485,9 @@ export default class ZephyrWalletBase {
    * 
    * @param {boolean} includeSubaddresses - include subaddresses if true
    * @param {string} tag - tag for filtering accounts, all accounts if undefined
-   * @return {Promise<ZephyrAccount[]>} all accounts with the given tag
+   * @return {Promise<ZephyrAccountInherited[]>} all accounts with the given tag
    */
-  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccount[]> {
+  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> {
     throw new ZephyrError("Not supported");
   }
   
@@ -496,9 +496,9 @@ export default class ZephyrWalletBase {
    * 
    * @param {number} accountIdx - index of the account to get
    * @param {boolean} includeSubaddresses - include subaddresses if true
-   * @return {Promise<ZephyrAccount>} the retrieved account
+   * @return {Promise<ZephyrAccountInherited>} the retrieved account
    */
-  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccount> {
+  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> {
     throw new ZephyrError("Not supported");
   }
   
@@ -506,9 +506,9 @@ export default class ZephyrWalletBase {
    * Create a new account with a label for the first subaddress.
    * 
    * @param {string} [label] - label for account's first subaddress (optional)
-   * @return {Promise<ZephyrAccount>} the created account
+   * @return {Promise<ZephyrAccountInherited>} the created account
    */
-  async createAccount(label?: string): Promise<ZephyrAccount> {
+  async createAccount(label?: string): Promise<ZephyrAccountInherited> {
     throw new ZephyrError("Not supported");
   }
 
@@ -528,9 +528,9 @@ export default class ZephyrWalletBase {
    * 
    * @param {number} accountIdx - account to get subaddresses within
    * @param {number[]} [subaddressIndices] - indices of subaddresses to get (optional)
-   * @return {Promise<ZephyrSubaddress[]>} the retrieved subaddresses
+   * @return {Promise<ZephyrSubaddressInherited[]>} the retrieved subaddresses
    */
-  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddress[]> {
+  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> {
     throw new ZephyrError("Not supported");
   }
   
@@ -539,9 +539,9 @@ export default class ZephyrWalletBase {
    * 
    * @param {number} accountIdx - index of the subaddress's account
    * @param {number} subaddressIdx - index of the subaddress within the account
-   * @return {Promise<ZephyrSubaddress>} the retrieved subaddress
+   * @return {Promise<ZephyrSubaddressInherited>} the retrieved subaddress
    */
-  async getSubaddress(accountIdx: number, subaddressIdx: number): Promise<ZephyrSubaddress> {
+  async getSubaddress(accountIdx: number, subaddressIdx: number): Promise<ZephyrSubaddressInherited> {
     assert(accountIdx >= 0);
     assert(subaddressIdx >= 0);
     return (await this.getSubaddresses(accountIdx, [subaddressIdx]))[0];
@@ -552,9 +552,9 @@ export default class ZephyrWalletBase {
    * 
    * @param {number} accountIdx - index of the account to create the subaddress within
    * @param {string} [label] - the label for the subaddress (optional)
-   * @return {Promise<ZephyrSubaddress>} the created subaddress
+   * @return {Promise<ZephyrSubaddressInherited>} the created subaddress
    */
-  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddress> {
+  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> {
     throw new ZephyrError("Not supported");
   }
 

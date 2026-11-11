@@ -3,7 +3,7 @@ import Path from "path";
 import GenUtils from "../common/GenUtils";
 import LibraryUtils from "../common/LibraryUtils";
 import TaskLooper from "../common/TaskLooper";
-import ZephyrAccount from "./model/ZephyrAccount";
+import ZephyrAccountInherited from "./model/ZephyrAccountInherited";
 import ZephyrAccountTag from "./model/ZephyrAccountTag";
 import ZephyrAddressBookEntry from "./model/ZephyrAddressBookEntry";
 import ZephyrBlock from "../daemon/model/ZephyrBlock";
@@ -23,7 +23,7 @@ import ZephyrNetworkType from "../daemon/model/ZephyrNetworkType";
 import ZephyrOutputQuery from "./model/ZephyrOutputQuery";
 import ZephyrOutputWallet from "./model/ZephyrOutputWallet";
 import ZephyrRpcConnection from "../common/ZephyrRpcConnection";
-import ZephyrSubaddress from "./model/ZephyrSubaddress";
+import ZephyrSubaddressInherited from "./model/ZephyrSubaddressInherited";
 import ZephyrSyncResult from "./model/ZephyrSyncResult";
 import ZephyrTransfer from "./model/ZephyrTransfer";
 import ZephyrTransferQuery from "./model/ZephyrTransferQuery";
@@ -855,61 +855,61 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     });
   }
   
-  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccount[]> {
+  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> {
     if (this.getWalletProxy()) return this.getWalletProxy().getAccounts(includeSubaddresses, tag);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
       let accountsStr = this.module.get_accounts(this.cppAddress, includeSubaddresses ? true : false, tag ? tag : "");
       let accounts = [];
       for (let accountJson of JSON.parse(GenUtils.stringifyBigInts(accountsStr)).accounts) {
-        accounts.push(ZephyrWalletFull.sanitizeAccount(new ZephyrAccount(accountJson)));
+        accounts.push(ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson)));
       }
       return accounts;
     });
   }
   
-  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccount> {
+  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> {
     if (this.getWalletProxy()) return this.getWalletProxy().getAccount(accountIdx, includeSubaddresses);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
       let accountStr = this.module.get_account(this.cppAddress, accountIdx, includeSubaddresses ? true : false);
       let accountJson = JSON.parse(GenUtils.stringifyBigInts(accountStr));
-      return ZephyrWalletFull.sanitizeAccount(new ZephyrAccount(accountJson));
+      return ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson));
     });
 
   }
   
-  async createAccount(label?: string): Promise<ZephyrAccount> {
+  async createAccount(label?: string): Promise<ZephyrAccountInherited> {
     if (this.getWalletProxy()) return this.getWalletProxy().createAccount(label);
     if (label === undefined) label = "";
     return this.module.queueTask(async () => {
       this.assertNotClosed();
       let accountStr = this.module.create_account(this.cppAddress, label);
       let accountJson = JSON.parse(GenUtils.stringifyBigInts(accountStr));
-      return ZephyrWalletFull.sanitizeAccount(new ZephyrAccount(accountJson));
+      return ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson));
     });
   }
   
-  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddress[]> {
+  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> {
     if (this.getWalletProxy()) return this.getWalletProxy().getSubaddresses(accountIdx, subaddressIndices);
     let args = {accountIdx: accountIdx, subaddressIndices: subaddressIndices === undefined ? [] : GenUtils.listify(subaddressIndices)};
     return this.module.queueTask(async () => {
       this.assertNotClosed();
       let subaddressesJson = JSON.parse(GenUtils.stringifyBigInts(this.module.get_subaddresses(this.cppAddress, JSON.stringify(args)))).subaddresses;
       let subaddresses = [];
-      for (let subaddressJson of subaddressesJson) subaddresses.push(ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddress(subaddressJson)));
+      for (let subaddressJson of subaddressesJson) subaddresses.push(ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson)));
       return subaddresses;
     });
   }
   
-  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddress> {
+  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> {
     if (this.getWalletProxy()) return this.getWalletProxy().createSubaddress(accountIdx, label);
     if (label === undefined) label = "";
     return this.module.queueTask(async () => {
       this.assertNotClosed();
       let subaddressStr = this.module.create_subaddress(this.cppAddress, accountIdx, label);
       let subaddressJson = JSON.parse(GenUtils.stringifyBigInts(subaddressStr));
-      return ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddress(subaddressJson));
+      return ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson));
     });
   }
 
@@ -2306,32 +2306,32 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   async getAccounts(includeSubaddresses, tag) {
     let accounts = [];
     for (let accountJson of (await this.invokeWorker("getAccounts", Array.from(arguments)))) {
-      accounts.push(ZephyrWalletFull.sanitizeAccount(new ZephyrAccount(accountJson)));
+      accounts.push(ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson)));
     }
     return accounts;
   }
   
   async getAccount(accountIdx, includeSubaddresses) {
     let accountJson = await this.invokeWorker("getAccount", Array.from(arguments));
-    return ZephyrWalletFull.sanitizeAccount(new ZephyrAccount(accountJson));
+    return ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson));
   }
   
   async createAccount(label) {
     let accountJson = await this.invokeWorker("createAccount", Array.from(arguments));
-    return ZephyrWalletFull.sanitizeAccount(new ZephyrAccount(accountJson));
+    return ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson));
   }
   
   async getSubaddresses(accountIdx, subaddressIndices) {
     let subaddresses = [];
     for (let subaddressJson of (await this.invokeWorker("getSubaddresses", Array.from(arguments)))) {
-      subaddresses.push(ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddress(subaddressJson)));
+      subaddresses.push(ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson)));
     }
     return subaddresses;
   }
   
   async createSubaddress(accountIdx, label) {
     let subaddressJson = await this.invokeWorker("createSubaddress", Array.from(arguments));
-    return ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddress(subaddressJson));
+    return ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson));
   }
   
   async getTxs(query) {
