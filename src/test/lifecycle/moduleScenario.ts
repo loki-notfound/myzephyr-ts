@@ -10,14 +10,16 @@
  *   rejected    a file that is not WebAssembly, declared as the expected digest (test override of
  *               the embedded digest): NATIVE_ERROR/WASM_MODULE_REJECTED after one compilation attempt
  *   recover     missing first, then the default location: the failure is not cached
+ *   unverified  the default location in a runtime without Web Crypto (globalThis.crypto hidden, as on
+ *               a page outside a secure context): NATIVE_ERROR/WASM_MODULE_UNVERIFIED, nothing compiled
  * Every failure is reported before any worker starts.
  */
 import * as F from "../../main/ts/index";
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 
-export type ModuleCase = "ok" | "missing" | "invalid" | "foreign" | "changed" | "otherbuild" | "rejected" | "recover";
+export type ModuleCase = "ok" | "missing" | "invalid" | "foreign" | "changed" | "otherbuild" | "rejected" | "recover" | "unverified";
 
-export const MODULE_CASES: readonly ModuleCase[] = ["ok", "missing", "invalid", "foreign", "changed", "otherbuild", "rejected", "recover"];
+export const MODULE_CASES: readonly ModuleCase[] = ["ok", "missing", "invalid", "foreign", "changed", "otherbuild", "rejected", "recover", "unverified"];
 
 export interface ModuleLocations {
   readonly missing: string;
@@ -65,7 +67,10 @@ export async function runModuleCase(kind: ModuleCase, proxy: boolean, locations:
   let first: string;
   let second: string | undefined;
   if (kind === "ok") first = await construct(proxy);
-  else {
+  else if (kind === "unverified") {
+    Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true, writable: true });
+    first = await construct(proxy);
+  } else {
     if (kind === "rejected") LibraryUtils.WASM_DIGEST_LOADER = () => locations.invalidDigest;
     F.setWasmModuleUrl(kind === "recover" ? locations.missing : kind === "rejected" ? locations.invalid : locations[kind]);
     first = await construct(proxy);

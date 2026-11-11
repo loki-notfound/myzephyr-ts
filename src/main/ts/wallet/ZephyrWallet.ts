@@ -467,8 +467,9 @@ export function setWorkerDistPath(path: string): void {
  * "/zephyr.wasm" on the page's origin), a file path in Node (default: the file in the package). The
  * module is compiled once per runtime and shared with every wallet worker; a missing or unusable
  * file rejects the first construction with NATIVE_ERROR and WASM_MODULE_UNAVAILABLE (not
- * readable), WASM_MODULE_MISMATCH (not the zephyr.wasm whose SHA-256 the build embedded) or
- * WASM_MODULE_REJECTED (does not compile). Without an argument the default is restored.
+ * readable), WASM_MODULE_UNVERIFIED (no Web Crypto digest in this runtime), WASM_MODULE_MISMATCH
+ * (not the zephyr.wasm whose SHA-256 the build embedded) or WASM_MODULE_REJECTED (does not
+ * compile). Without an argument the default is restored.
  */
 export function setWasmModuleUrl(location?: string): void {
   LibraryUtils.setWasmModuleLocation(location);

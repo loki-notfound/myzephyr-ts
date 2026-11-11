@@ -73,8 +73,9 @@ By default each wallet runs in its own worker with its own WebAssembly instance
 `zephyr.wasm` is a separate file; each runtime compiles it once and shares the compiled module
 with its workers. The build embeds the SHA-256 of `zephyr.wasm` in the JavaScript, and the runtime
 checks the file against it before compiling: a stale or mismatched file is rejected with
-`NATIVE_ERROR`/`WASM_MODULE_MISMATCH`. This detects a wrong file next to the JavaScript; it is not
-a signature.
+`NATIVE_ERROR`/`WASM_MODULE_MISMATCH`, and a runtime without the Web Crypto digest (a browser page
+on a plain `http://` origin other than `localhost`) with `NATIVE_ERROR`/`WASM_MODULE_UNVERIFIED`.
+This detects a wrong file next to the JavaScript; it is not a signature.
 
 Calls outside this surface reject with `UNSUPPORTED_CAPABILITY` before any native code runs.
 

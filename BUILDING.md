@@ -84,8 +84,9 @@ runs, with no network access:
   (`T00`-`T16`) with the test module, in Node.js directly and through wallet workers, under a
   preloaded monitor that blocks every connection and records unexpected file writes;
 * the module loading cases in Node.js, directly and through workers: a missing `zephyr.wasm`,
-  a file that is not WebAssembly and a module of another program reject with fixed diagnostics
-  before any worker starts, and a failed load is not cached;
+  a file that is not WebAssembly, a module of another program or build, a changed byte and a
+  runtime without Web Crypto reject with fixed diagnostics before any worker starts, and a failed
+  load is not cached;
 * the same two suites and the module loading cases in headless Chromium, in a wallet worker,
   with every non-loopback request sent to a closed proxy port and under the page policy of
   `docs/DEPLOYMENT.md`.

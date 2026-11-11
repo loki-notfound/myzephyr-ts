@@ -157,10 +157,10 @@ export default class LibraryUtils {
    * SDK worker. A failed load is not cached, so a later call tries again. The bytes are checked
    * against the SHA-256 the build embedded before they are compiled. Fixed diagnostics:
    * NATIVE_ERROR/WASM_MODULE_UNAVAILABLE (the file could not be read or fetched),
-   * NATIVE_ERROR/WASM_MODULE_MISMATCH (the bytes are not the zephyr.wasm of this build, or no
-   * digest could be computed) and NATIVE_ERROR/WASM_MODULE_REJECTED (the right bytes do not
-   * compile in this runtime, e.g. compilation refused by a Content-Security-Policy without
-   * 'wasm-unsafe-eval').
+   * NATIVE_ERROR/WASM_MODULE_UNVERIFIED (this runtime offers no Web Crypto digest, so the bytes
+   * cannot be checked), NATIVE_ERROR/WASM_MODULE_MISMATCH (the bytes are not the zephyr.wasm of
+   * this build) and NATIVE_ERROR/WASM_MODULE_REJECTED (the right bytes do not compile in this
+   * runtime, e.g. compilation refused by a Content-Security-Policy without 'wasm-unsafe-eval').
    */
   static getCompiledWasmModule(): Promise<WebAssembly.Module> {
     if (LibraryUtils.WASM_COMPILED !== undefined) return LibraryUtils.WASM_COMPILED;
@@ -203,22 +203,30 @@ export default class LibraryUtils {
    * detects a stale, mismatched or damaged zephyr.wasm beside this release's JavaScript (for
    * example an old file left in a cache); it is not a signature and does not authenticate the
    * release. The digest is computed with the Web Crypto API (Node.js 22, and browsers in a secure
-   * context: https or localhost); where it is unavailable the module is rejected as well.
+   * context: https or localhost). Without it (a page on a plain http origin other than localhost)
+   * the module is rejected with WASM_MODULE_UNVERIFIED; a missing or malformed embedded digest and
+   * a different digest reject with WASM_MODULE_MISMATCH. Nothing is compiled in either case.
    */
   protected static async verifyWasmModule(bytes: ArrayBuffer): Promise<void> {
     let expected: unknown = undefined;
     try { expected = LibraryUtils.WASM_DIGEST_LOADER(); } catch (err) { expected = undefined; }
-    const webCrypto = typeof globalThis === "object" && globalThis !== null ? (globalThis as { crypto?: Crypto }).crypto : undefined;
-    let actual: string | undefined = undefined;
-    if (typeof expected === "string" && /^[0-9a-f]{64}$/.test(expected) && webCrypto !== undefined && webCrypto !== null && typeof webCrypto.subtle === "object" && webCrypto.subtle !== null) {
-      try {
-        const digest = new Uint8Array(await webCrypto.subtle.digest("SHA-256", bytes));
-        actual = Array.from(digest, (b) => (b < 16 ? "0" : "") + b.toString(16)).join("");
-      } catch (err) {
-        actual = undefined;
-      }
+    if (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected)) throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_MISMATCH");
+    let subtle: SubtleCrypto | undefined = undefined;
+    try {
+      const webCrypto = typeof globalThis === "object" && globalThis !== null ? (globalThis as { crypto?: Crypto }).crypto : undefined;
+      if (webCrypto !== undefined && webCrypto !== null && typeof webCrypto.subtle === "object" && webCrypto.subtle !== null && typeof webCrypto.subtle.digest === "function") subtle = webCrypto.subtle;
+    } catch (err) {
+      subtle = undefined;
     }
-    if (actual === undefined || actual !== expected) throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_MISMATCH");
+    if (subtle === undefined) throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_UNVERIFIED");
+    let actual: string | undefined = undefined;
+    try {
+      const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+      actual = Array.from(digest, (b) => (b < 16 ? "0" : "") + b.toString(16)).join("");
+    } catch (err) {
+      throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_UNVERIFIED"); // the digest could not be computed in this runtime
+    }
+    if (actual !== expected) throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_MISMATCH");
   }
 
   /**

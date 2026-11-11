@@ -4,7 +4,7 @@
 #             and through wallet workers, under a preloaded monitor that blocks network access and
 #             records file writes
 #   Node      loading of the WebAssembly module: missing, invalid, foreign, changed and other-build
-#             files (integrity pin), a rejected compilation, recovery
+#             files (integrity pin), a rejected compilation, recovery, a runtime without Web Crypto
 #   Chromium  lifecycle and instrumented suites in a wallet worker under a same-origin
 #             Content-Security-Policy, and the module loading cases (headless, network contained)
 # Each runner exits nonzero if a check fails; this script stops at the first failure.
@@ -36,7 +36,7 @@ node_suite() { # release|instrumented direct|worker
   ! grep -q '"kind":"\(connect\|dns\|fetch\|write\)"' "$run/monitor.jsonl" || die "Node $1 suite ($2): the monitor recorded network access or an unexpected write"
 }
 
-MODULE_CASES="ok missing invalid foreign changed otherbuild rejected recover"
+MODULE_CASES="ok missing invalid foreign changed otherbuild rejected recover unverified"
 module_files() { # dir: the wrong files of the module cases
   printf 'not a WebAssembly module\n' > "$1/invalid.wasm"
   printf '\000asm\001\000\000\000' > "$1/foreign.wasm" # a valid empty module of another program
@@ -67,7 +67,7 @@ const r = require(process.argv[1]); const c = process.argv[2]; const o = r.outco
 const M = "NATIVE_ERROR/WASM_MODULE_MISMATCH";
 const want = { ok: ["ok", undefined, 1], missing: ["NATIVE_ERROR/WASM_MODULE_UNAVAILABLE", undefined, 0], invalid: [M, undefined, 0], foreign: [M, undefined, 0],
   changed: [M, undefined, 0], otherbuild: [M, undefined, 0], rejected: ["NATIVE_ERROR/WASM_MODULE_REJECTED", undefined, 1],
-  recover: ["NATIVE_ERROR/WASM_MODULE_UNAVAILABLE", "ok", 1] }[c];
+  recover: ["NATIVE_ERROR/WASM_MODULE_UNAVAILABLE", "ok", 1], unverified: ["NATIVE_ERROR/WASM_MODULE_UNVERIFIED", undefined, 0] }[c];
 // every failed load is reported before any worker starts
 const workersOk = c === "ok" || c === "recover" || o.workersStarted === 0;
 const pass = o.first === want[0] && o.second === want[1] && o.compilations === want[2] && workersOk;

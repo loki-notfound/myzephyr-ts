@@ -28,8 +28,9 @@ release, and make sure a cache cannot keep an old `zephyr.wasm` next to new Java
 The integrity check detects a mismatched or stale file; it is not a signature and does not prove
 where the files came from (whoever can change `zephyr.wasm` on your server can usually change the
 JavaScript too). The digest is computed with the Web Crypto API, which browsers offer only in a
-secure context (`https://` or `localhost`); on a plain `http://` origin the module is rejected
-with `WASM_MODULE_MISMATCH`.
+secure context (`https://` or `localhost`). On a plain `http://` origin the page cannot check the
+module, and the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_UNVERIFIED` before
+anything is compiled: serve the wallet over `https://`.
 
 ## Bundling for the browser
 

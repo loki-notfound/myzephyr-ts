@@ -12,7 +12,8 @@
  * wallet worker it starts; direct mode instantiates the same compiled module. Before compiling, the
  * bytes are checked against the SHA-256 of zephyr.wasm that the build embedded in the JavaScript;
  * a different file rejects with NATIVE_ERROR/WASM_MODULE_MISMATCH (this detects a stale or
- * mismatched file; it is not a signature). See setWasmModuleUrl.
+ * mismatched file; it is not a signature), and a runtime without the Web Crypto digest (a page
+ * outside a secure context) with NATIVE_ERROR/WASM_MODULE_UNVERIFIED. See setWasmModuleUrl.
  *
  * Worker isolation: with proxyToWorker (the default) every construction runs in its own new worker
  * and WebAssembly instance, which the returned wallet owns exclusively and which is terminated

@@ -100,8 +100,9 @@ export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // the separately shipped WebAssembly module, all with NATIVE_ERROR: the file could not be read or
   // fetched; the bytes did not compile or instantiate in this runtime (compilation refused, e.g. by
   // a Content-Security-Policy without 'wasm-unsafe-eval', or a module the glue cannot use); the
-  // bytes are not the zephyr.wasm whose SHA-256 the build embedded (or no digest could be computed)
-  "WASM_MODULE_UNAVAILABLE", "WASM_MODULE_REJECTED", "WASM_MODULE_MISMATCH"
+  // bytes are not the zephyr.wasm whose SHA-256 the build embedded; the runtime offers no Web Crypto
+  // digest (a browser page outside a secure context), so the bytes cannot be checked
+  "WASM_MODULE_UNAVAILABLE", "WASM_MODULE_REJECTED", "WASM_MODULE_MISMATCH", "WASM_MODULE_UNVERIFIED"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];
