@@ -36,7 +36,7 @@ import ZephyrTxSet from "./model/ZephyrTxSet";
 import ZephyrTxWallet from "./model/ZephyrTxWallet";
 import ZephyrUtils from "../common/ZephyrUtils";
 import ZephyrVersion from "../daemon/model/ZephyrVersion";
-import ZephyrWallet from "./ZephyrWallet";
+import ZephyrWalletBase from "./ZephyrWalletBase";
 import ZephyrWalletConfig from "./model/ZephyrWalletConfig";
 import ZephyrWalletListener from "./model/ZephyrWalletListener";
 import ZephyrMessageSignatureType from "./model/ZephyrMessageSignatureType";
@@ -68,11 +68,11 @@ import { ChildProcess } from "child_process";
  */
 
 /**
- * Implements a ZephyrWallet as a client of monero-wallet-rpc.
+ * Implements a ZephyrWalletBase as a client of monero-wallet-rpc.
  * 
- * @implements {ZephyrWallet}
+ * @implements {ZephyrWalletBase}
  */
-export default class ZephyrWalletRpc extends ZephyrWallet {
+export default class ZephyrWalletRpc extends ZephyrWalletBase {
 
   // static variables
   protected static readonly DEFAULT_SYNC_PERIOD_IN_MS = 20000; // default period between syncs in ms (defined by DEFAULT_AUTO_REFRESH_PERIOD in wallet_rpc_server.cpp)
@@ -257,7 +257,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
     if (config.getRestoreHeight() !== undefined) throw new ZephyrError("Cannot provide restoreHeight when creating random wallet");
     if (config.getSaveCurrent() === false) throw new ZephyrError("Current wallet is saved automatically when creating random wallet");
     if (!config.getPath()) throw new ZephyrError("Name is not initialized");
-    if (!config.getLanguage()) config.setLanguage(ZephyrWallet.DEFAULT_LANGUAGE);
+    if (!config.getLanguage()) config.setLanguage(ZephyrWalletBase.DEFAULT_LANGUAGE);
     let params = { filename: config.getPath(), password: config.getPassword(), language: config.getLanguage() };
     try {
       await this.config.getServer().sendJsonRequest("create_wallet", params);
@@ -292,7 +292,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
   protected async createWalletFromKeys(config: ZephyrWalletConfig) {
     if (config.getSeedOffset() !== undefined) throw new ZephyrError("Cannot provide seedOffset when creating wallet from keys");
     if (config.getRestoreHeight() === undefined) config.setRestoreHeight(0);
-    if (config.getLanguage() === undefined) config.setLanguage(ZephyrWallet.DEFAULT_LANGUAGE);
+    if (config.getLanguage() === undefined) config.setLanguage(ZephyrWalletBase.DEFAULT_LANGUAGE);
     try {
       await this.config.getServer().sendJsonRequest("generate_from_keys", {
         filename: config.getPath(),
@@ -752,7 +752,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
   protected async getTxsAux(query: string[] | Partial<ZephyrTxQuery> | undefined, maxAttempts: number): Promise<ZephyrTxWallet[]> {
 
     // copy query
-    const queryNormalized = ZephyrWallet.normalizeTxQuery(query);
+    const queryNormalized = ZephyrWalletBase.normalizeTxQuery(query);
     
     // temporarily disable transfer and output queries in order to collect all tx information
     let transferQuery = queryNormalized.getTransferQuery();
@@ -835,7 +835,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
   async getTransfers(query?: Partial<ZephyrTransferQuery>): Promise<ZephyrTransfer[]> {
     
     // copy and normalize query up to block
-    const queryNormalized = ZephyrWallet.normalizeTransferQuery(query);
+    const queryNormalized = ZephyrWalletBase.normalizeTransferQuery(query);
     
     // get transfers directly if query does not require tx context (other transfers, outputs)
     if (!ZephyrWalletRpc.isContextual(queryNormalized)) return this.getTransfersAux(queryNormalized);
@@ -854,7 +854,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
   async getOutputs(query?: Partial<ZephyrOutputQuery>): Promise<ZephyrOutputWallet[]> {
     
     // copy and normalize query up to block
-    const queryNormalized = ZephyrWallet.normalizeOutputQuery(query);
+    const queryNormalized = ZephyrWalletBase.normalizeOutputQuery(query);
     
     // get outputs directly if query does not require tx context (other outputs, transfers)
     if (!ZephyrWalletRpc.isContextual(queryNormalized)) return this.getOutputsAux(queryNormalized);
@@ -924,7 +924,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
   async createTxs(config: Partial<ZephyrTxConfig>): Promise<ZephyrTxWallet[]> {
     
     // validate, copy, and normalize config
-    const configNormalized = ZephyrWallet.normalizeCreateTxsConfig(config);
+    const configNormalized = ZephyrWalletBase.normalizeCreateTxsConfig(config);
     if (configNormalized.getCanSplit() === undefined) configNormalized.setCanSplit(true);
     if (configNormalized.getRelay() === true && await this.isMultisig()) throw new ZephyrError("Cannot relay multisig transaction until co-signed");
 
@@ -992,7 +992,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
   async sweepOutput(config: Partial<ZephyrTxConfig>): Promise<ZephyrTxWallet> {
     
     // normalize and validate config
-    config = ZephyrWallet.normalizeSweepOutputConfig(config);
+    config = ZephyrWalletBase.normalizeSweepOutputConfig(config);
     
     // build request parameters
     let params: any = {};
@@ -1025,7 +1025,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
   async sweepUnlocked(config: Partial<ZephyrTxConfig>): Promise<ZephyrTxWallet[]> {
     
     // validate and normalize config
-    const configNormalized = ZephyrWallet.normalizeSweepUnlockedConfig(config);
+    const configNormalized = ZephyrWalletBase.normalizeSweepUnlockedConfig(config);
     
     // determine account and subaddress indices to sweep; default to all with unlocked balance if not specified
     let indices = new Map();  // maps each account index to subaddress indices to sweep
@@ -1349,7 +1349,7 @@ export default class ZephyrWalletRpc extends ZephyrWallet {
   }
   
   async getPaymentUri(config: ZephyrTxConfig): Promise<string> {
-    config = ZephyrWallet.normalizeCreateTxsConfig(config);
+    config = ZephyrWalletBase.normalizeCreateTxsConfig(config);
     let resp = await this.config.getServer().sendJsonRequest("make_uri", {
       address: config.getDestinations()[0].getAddress(),
       amount: config.getDestinations()[0].getAmount(),

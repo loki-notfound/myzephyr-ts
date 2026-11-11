@@ -4,9 +4,9 @@
 export default class ZephyrSyncResult {
 
   numBlocksFetched: number;
-  receivedMoney: bigint;
+  receivedMoney!: boolean;
   
-  constructor(numBlocksFetched: number, receivedMoney: bigint) {
+  constructor(numBlocksFetched: number, receivedMoney: boolean) {
     this.setNumBlocksFetched(numBlocksFetched);
     this.setReceivedMoney(receivedMoney);
   }
@@ -20,11 +20,11 @@ export default class ZephyrSyncResult {
     return this;
   }
   
-  getReceivedMoney(): bigint {
+  getReceivedMoney(): boolean {
     return this.receivedMoney;
   }
   
-  setReceivedMoney(receivedMoney: bigint): ZephyrSyncResult {
+  setReceivedMoney(receivedMoney: boolean): ZephyrSyncResult {
     this.receivedMoney = receivedMoney;
     return this;
   }

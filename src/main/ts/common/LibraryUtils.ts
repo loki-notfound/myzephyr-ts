@@ -1,6 +1,9 @@
 import assert from "assert";
 import GenUtils from "./GenUtils";
 import ZephyrError from "./ZephyrError";
+import ZephyrWalletError from "./ZephyrWalletError";
+import { isLogLevel, LIFECYCLE_NATIVE_EXPORTS, UNBUILT_BRIDGE_EXPORTS, UNBUILT_KEEPALIVE_EXPORTS } from "./ZephyrLifecycleContract";
+import { ZephyrWalletWorkerHandle, ZephyrWalletWorkers, ZephyrWorkerAccounting, ZephyrWorkerChannel, ZephyrWorkerLike } from "./ZephyrWalletWorkers";
 import ThreadPool from "./ThreadPool";
 import path from "path";
 import fs from "fs";
@@ -13,8 +16,11 @@ export default class LibraryUtils {
   // static variables
   static LOG_LEVEL = 0;
   static WASM_MODULE: any;
+  /** the utility worker (never owns a wallet); undefined until a utility call needs it */
   static WORKER: any;
-  static WORKER_OBJECTS: any;
+  /** registry of SDK-owned workers of this runtime: utility, construction and wallet workers */
+  static readonly WORKERS = new ZephyrWalletWorkers();
+  static UTILITY_CHANNEL: ZephyrWorkerChannel | undefined = undefined;
   static FULL_LOADED: any;
   static REJECT_UNAUTHORIZED_FNS: any;
   static readonly MUTEX = new ThreadPool(1);
@@ -28,8 +34,37 @@ export default class LibraryUtils {
     return curPath;
   }();
   static WORKER_DIST_PATH = LibraryUtils.WORKER_DIST_PATH_DEFAULT;
+
   static WORKER_LOADER?: () => Worker = undefined;
-  
+
+  /**
+   * Location of the separately shipped WebAssembly module (zephyr.wasm). Browser: a URL, by default
+   * "/zephyr.wasm" on the page's origin. Node: the file beside the package's glue (dist/zephyr.wasm).
+   */
+  static WASM_LOCATION_DEFAULT: string = GenUtils.isBrowser() || !LibraryUtils.isNodeRuntime() ? "/zephyr.wasm" : function() {
+    let file = path.join(path.normalize(__dirname), "../../../../zephyr.wasm"); // dist/src/main/ts/common -> dist
+    if (!fs.existsSync(file)) file = path.join(path.normalize(__dirname), "../../../../dist/zephyr.wasm"); // running from src
+    return file;
+  }();
+  static WASM_LOCATION: string = LibraryUtils.WASM_LOCATION_DEFAULT;
+  /** The compiled module of this runtime (compiled once, then shared with every SDK worker). */
+  static WASM_COMPILED: Promise<WebAssembly.Module> | undefined = undefined;
+  static WASM_COMPILED_VALUE: WebAssembly.Module | undefined = undefined;
+  /** Number of compilations in this context (a context that received a shared module compiles none). */
+  static WASM_COMPILATIONS = 0;
+  /** Set in an SDK worker: the module must come from the parent context, never from a compilation here. */
+  static WASM_SHARED_REQUIRED = false;
+  /** Loads the Emscripten glue (factory) that instantiates the module. */
+  static WASM_GLUE_LOADER: () => any = () => require("#zephyr-sdk/zephyr.js");
+  /**
+   * Loads the SHA-256 of zephyr.wasm (lowercase hex) that the build embedded beside the glue
+   * (dist/zephyr.digest.js, written by bin/build_ts.sh from the built module).
+   */
+  static WASM_DIGEST_LOADER: () => unknown = () => require("#zephyr-sdk/zephyr.digest.js");
+  static WASM_LOADING: Promise<any> | undefined = undefined;
+  /** First message the SDK posts to each of its workers: [WASM_MODULE_MESSAGE, WebAssembly.Module]. */
+  static readonly WASM_MODULE_MESSAGE = "zephyr-wasm-module";
+
   /**
    * Log a message.
    *
@@ -47,10 +82,12 @@ export default class LibraryUtils {
    * @param {number} level - the library's log level
    */
   static async setLogLevel(level) {
-    assert(level === parseInt(level, 10) && level >= 0, "Log level must be an integer >= 0");
+    if (!isLogLevel(level)) throw new ZephyrWalletError("INVALID_CONFIG", "LOG_LEVEL_RANGE"); // bridge int parameter
     LibraryUtils.LOG_LEVEL = level;
-    if (LibraryUtils.WASM_MODULE) LibraryUtils.WASM_MODULE.set_log_level(level);
-    if (LibraryUtils.WORKER) await LibraryUtils.invokeWorker(undefined, "setLogLevel", [level]);
+    if (LibraryUtils.WASM_MODULE) ZephyrWalletError.checkBridgeResult("other", LibraryUtils.WASM_MODULE.set_log_level(level)); // "" or a fixed bridge identifier
+    // forward to every open SDK-owned worker (utility, construction and wallet workers); the first failure is reported
+    const results = await Promise.allSettled(LibraryUtils.WORKERS.openChannels().map((c) => c.invoke(undefined, "setLogLevel", [level])));
+    for (const r of results) if (r.status === "rejected") throw r.reason instanceof ZephyrWalletError ? r.reason : ZephyrWalletError.fromUnknown("other", r.reason);
   }
   
   /**
@@ -81,23 +118,162 @@ export default class LibraryUtils {
     return LibraryUtils.WASM_MODULE;
   }
   
+  /** Whether this context is Node (main thread or worker thread), not a browser bundle. */
+  static isNodeRuntime(): boolean {
+    return typeof process !== "undefined" && process !== null && typeof process.versions === "object" && process.versions !== null && typeof process.versions.node === "string";
+  }
+
   /**
-   * Load the WebAssembly full module with caching.
-   * 
-   * The full module is a superset of the keys module and overrides it.
+   * Set where the WebAssembly module is loaded from: a URL in the browser (default "/zephyr.wasm"),
+   * a file path in Node (default: the file shipped in the package). A compiled module of the old
+   * location is dropped; wallets that already exist keep the instance they have.
+   */
+  static setWasmModuleLocation(location?: string): void {
+    if (location !== undefined && (typeof location !== "string" || location.length === 0)) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    const next = location === undefined ? LibraryUtils.WASM_LOCATION_DEFAULT : LibraryUtils.prefixWindowsPath(location);
+    if (next === LibraryUtils.WASM_LOCATION) return;
+    LibraryUtils.WASM_LOCATION = next;
+    LibraryUtils.WASM_COMPILED = undefined;
+    LibraryUtils.WASM_COMPILED_VALUE = undefined;
+    LibraryUtils.retireUtilityWorker(); // the utility worker holds the module of the old location
+  }
+
+  /**
+   * Accept the module the parent context posts as an SDK worker's first message. Returns true if the
+   * message has the module message's shape; it is then consumed. The module is adopted only if admit
+   * is true (no other message came first) and no module was adopted before.
+   */
+  static acceptSharedWasmModule(data: unknown, admit: boolean): boolean {
+    if (!Array.isArray(data) || data.length !== 2 || data[0] !== LibraryUtils.WASM_MODULE_MESSAGE) return false;
+    if (admit && LibraryUtils.WASM_COMPILED_VALUE === undefined && typeof WebAssembly === "object" && data[1] instanceof WebAssembly.Module) {
+      LibraryUtils.WASM_COMPILED_VALUE = data[1];
+      LibraryUtils.WASM_COMPILED = Promise.resolve(data[1]);
+    }
+    return true; // a repeated or malformed module message is consumed and never dispatched
+  }
+
+  /**
+   * The compiled module of this runtime: compiled once from WASM_LOCATION and shared with every
+   * SDK worker. A failed load is not cached, so a later call tries again. The bytes are checked
+   * against the SHA-256 the build embedded before they are compiled. Fixed diagnostics:
+   * NATIVE_ERROR/WASM_MODULE_UNAVAILABLE (the file could not be read or fetched),
+   * NATIVE_ERROR/WASM_MODULE_MISMATCH (the bytes are not the zephyr.wasm of this build, or no
+   * digest could be computed) and NATIVE_ERROR/WASM_MODULE_REJECTED (the right bytes do not
+   * compile in this runtime, e.g. compilation refused by a Content-Security-Policy without
+   * 'wasm-unsafe-eval').
+   */
+  static getCompiledWasmModule(): Promise<WebAssembly.Module> {
+    if (LibraryUtils.WASM_COMPILED !== undefined) return LibraryUtils.WASM_COMPILED;
+    if (LibraryUtils.WASM_SHARED_REQUIRED) return Promise.reject(new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_UNAVAILABLE"));
+    const attempt = LibraryUtils.compileWasmModule(LibraryUtils.WASM_LOCATION);
+    LibraryUtils.WASM_COMPILED = attempt;
+    attempt.then((compiled) => {
+      if (LibraryUtils.WASM_COMPILED === attempt) LibraryUtils.WASM_COMPILED_VALUE = compiled;
+    }, () => {
+      if (LibraryUtils.WASM_COMPILED === attempt) LibraryUtils.WASM_COMPILED = undefined;
+    });
+    return attempt;
+  }
+
+  protected static async compileWasmModule(location: string): Promise<WebAssembly.Module> {
+    let bytes: ArrayBuffer;
+    try {
+      if (LibraryUtils.isNodeRuntime() && !/^https?:/i.test(location)) {
+        const file: Uint8Array = await fs.promises.readFile(location.indexOf("file://") === 0 ? new URL(location) : location);
+        bytes = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer;
+      } else {
+        const response = await fetch(location, { credentials: "same-origin" });
+        if (!response.ok) throw new Error("status");
+        bytes = await response.arrayBuffer();
+      }
+    } catch (err) {
+      throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_UNAVAILABLE"); // the read or fetch error is not read
+    }
+    await LibraryUtils.verifyWasmModule(bytes); // before compiling, once per runtime (compilation happens once)
+    LibraryUtils.WASM_COMPILATIONS++;
+    try {
+      return await WebAssembly.compile(bytes);
+    } catch (err) {
+      throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_REJECTED");
+    }
+  }
+
+  /**
+   * Integrity pin: the bytes must have the SHA-256 that the build embedded in the JavaScript. This
+   * detects a stale, mismatched or damaged zephyr.wasm beside this release's JavaScript (for
+   * example an old file left in a cache); it is not a signature and does not authenticate the
+   * release. The digest is computed with the Web Crypto API (Node.js 22, and browsers in a secure
+   * context: https or localhost); where it is unavailable the module is rejected as well.
+   */
+  protected static async verifyWasmModule(bytes: ArrayBuffer): Promise<void> {
+    let expected: unknown = undefined;
+    try { expected = LibraryUtils.WASM_DIGEST_LOADER(); } catch (err) { expected = undefined; }
+    const webCrypto = typeof globalThis === "object" && globalThis !== null ? (globalThis as { crypto?: Crypto }).crypto : undefined;
+    let actual: string | undefined = undefined;
+    if (typeof expected === "string" && /^[0-9a-f]{64}$/.test(expected) && webCrypto !== undefined && webCrypto !== null && typeof webCrypto.subtle === "object" && webCrypto.subtle !== null) {
+      try {
+        const digest = new Uint8Array(await webCrypto.subtle.digest("SHA-256", bytes));
+        actual = Array.from(digest, (b) => (b < 16 ? "0" : "") + b.toString(16)).join("");
+      } catch (err) {
+        actual = undefined;
+      }
+    }
+    if (actual === undefined || actual !== expected) throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_MISMATCH");
+  }
+
+  /**
+   * Instantiate the glue with a compiled module (the glue neither fetches nor compiles). An
+   * instantiation failure (a module that does not belong to this glue) and a module without the
+   * lifecycle exports reject with NATIVE_ERROR/WASM_MODULE_REJECTED.
+   */
+  protected static instantiateWasmModule(factory: any, compiled: WebAssembly.Module): Promise<any> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const rejected = () => { if (!settled) { settled = true; reject(new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_REJECTED")); } };
+      let ready: Promise<any>;
+      try {
+        if (typeof factory !== "function") throw new Error("glue");
+        ready = factory({
+          instantiateWasm: (imports: WebAssembly.Imports, receive: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) => {
+            WebAssembly.instantiate(compiled, imports).then((instance) => receive(instance, compiled)).catch(rejected); // also a glue failure on a foreign instance
+            return {}; // asynchronous instantiation
+          }
+        });
+      } catch (err) {
+        rejected();
+        return;
+      }
+      Promise.resolve(ready).then((module) => {
+        if (settled) return;
+        if (module === null || typeof module !== "object" || LIFECYCLE_NATIVE_EXPORTS.some((name) => typeof module[name] !== "function")) return rejected();
+        settled = true;
+        resolve(module);
+      }, rejected);
+    });
+  }
+
+  /**
+   * Load the WebAssembly module of this context once: the runtime's compiled module (or the one
+   * the parent context posted to this SDK worker), instantiated by the glue.
    */
   static async loadWasmModule() {
-    
-    // use cache if suitable, full module supersedes keys module because it is superset
     if (LibraryUtils.WASM_MODULE && LibraryUtils.FULL_LOADED) return LibraryUtils.WASM_MODULE;
-    
-    // load module
-    const module = await require("#zephyr-sdk/zephyr.js")();
-    LibraryUtils.WASM_MODULE = module;
-    delete LibraryUtils.WASM_MODULE.then;
-    LibraryUtils.FULL_LOADED = true;
-    LibraryUtils.initWasmModule(LibraryUtils.WASM_MODULE);
-    return module;
+    if (LibraryUtils.WASM_LOADING === undefined) {
+      const loading = (async () => {
+        const compiled = await LibraryUtils.getCompiledWasmModule();
+        let factory: any;
+        try { factory = LibraryUtils.WASM_GLUE_LOADER(); } catch (err) { throw new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_UNAVAILABLE"); }
+        const module = await LibraryUtils.instantiateWasmModule(factory, compiled);
+        delete module.then;
+        LibraryUtils.WASM_MODULE = module;
+        LibraryUtils.FULL_LOADED = true;
+        LibraryUtils.initWasmModule(module);
+        return module;
+      })();
+      LibraryUtils.WASM_LOADING = loading;
+      loading.catch(() => { if (LibraryUtils.WASM_LOADING === loading) LibraryUtils.WASM_LOADING = undefined; });
+    }
+    return LibraryUtils.WASM_LOADING;
   }
   
   /**
@@ -131,7 +307,7 @@ export default class LibraryUtils {
    */
   static setWorkerDistPath(workerDistPath) {
     let path = LibraryUtils.prefixWindowsPath(workerDistPath ? workerDistPath : LibraryUtils.WORKER_DIST_PATH_DEFAULT);
-    if (path !== LibraryUtils.WORKER_DIST_PATH) delete LibraryUtils.WORKER;
+    if (path !== LibraryUtils.WORKER_DIST_PATH) LibraryUtils.retireUtilityWorker(); // new workers use the new path; wallet workers keep theirs
     LibraryUtils.WORKER_DIST_PATH = path;
   }
 
@@ -148,85 +324,115 @@ export default class LibraryUtils {
   }
 
   /**
-   * Get a singleton instance of a worker to share.
-   * 
-   * @return {Worker} a worker to share among wallet instances
+   * Start one new worker instance with the configured loader or path; throws if it cannot be
+   * started (the caller maps this to NATIVE_ERROR/WORKER_FAILED without reading the error).
+   */
+  static newWorkerInstance(): ZephyrWorkerLike {
+    const worker = LibraryUtils.startWorker();
+    // the runtime's compiled module is the worker's first message; the worker never compiles it again
+    if (LibraryUtils.WASM_COMPILED_VALUE !== undefined && worker !== null && typeof worker === "object" && typeof worker.postMessage === "function") {
+      worker.postMessage([LibraryUtils.WASM_MODULE_MESSAGE, LibraryUtils.WASM_COMPILED_VALUE]);
+    }
+    return worker;
+  }
+
+  protected static startWorker(): ZephyrWorkerLike {
+    if (LibraryUtils.WORKER_LOADER) return LibraryUtils.WORKER_LOADER() as unknown as ZephyrWorkerLike;
+    if (GenUtils.isBrowser()) return new Worker(LibraryUtils.WORKER_DIST_PATH) as unknown as ZephyrWorkerLike;
+    if (GenUtils.isDeno()) return new Worker(LibraryUtils.WORKER_DIST_PATH, { type: "module" }) as unknown as ZephyrWorkerLike;
+    const workerPath: string = LibraryUtils.WORKER_DIST_PATH;
+    // web-worker only logs a missing script inside the thread; detect it before starting
+    if (!/^[A-Za-z][A-Za-z0-9+.-]*:/.test(workerPath) && !fs.existsSync(workerPath)) throw new ZephyrWalletError("NATIVE_ERROR", "WORKER_FAILED");
+    const NodeWorker = require("web-worker"); // import web worker if nodejs
+    return new NodeWorker(workerPath) as ZephyrWorkerLike;
+  }
+
+  /** The utility worker's channel; started on first use. It never owns a wallet. */
+  static getUtilityChannel(): ZephyrWorkerChannel {
+    if (LibraryUtils.UTILITY_CHANNEL === undefined || !LibraryUtils.UTILITY_CHANNEL.isOpen()) {
+      const channel = LibraryUtils.WORKERS.spawn(() => LibraryUtils.newWorkerInstance(), "utility");
+      LibraryUtils.UTILITY_CHANNEL = channel;
+      LibraryUtils.WORKER = channel.worker;
+      channel.onEnded(() => {
+        if (LibraryUtils.UTILITY_CHANNEL === channel) { LibraryUtils.UTILITY_CHANNEL = undefined; LibraryUtils.WORKER = undefined; }
+      });
+      // apply a log level set before the worker was started, ahead of other calls, without awaiting a reply
+      if (LibraryUtils.LOG_LEVEL > 0) channel.invoke(undefined, "setLogLevel", [LibraryUtils.LOG_LEVEL]).catch(() => undefined);
+    }
+    return LibraryUtils.UTILITY_CHANNEL;
+  }
+
+  /**
+   * Get the utility worker (wallets no longer share it; each proxied wallet owns its worker).
+   *
+   * @return {Worker} the utility worker
    */
   static async getWorker() {
-    
-    // one time initialization
-    if (!LibraryUtils.WORKER) {
-
-      // try to load worker with user provided closure
-      if (LibraryUtils.WORKER_LOADER) {
-        LibraryUtils.WORKER = LibraryUtils.WORKER_LOADER();
-      } else {
-
-        // otherwise use standard loading mechanisms for browser and node
-        if (GenUtils.isBrowser()) {
-          LibraryUtils.WORKER = new Worker(LibraryUtils.WORKER_DIST_PATH);
-        } else if (GenUtils.isDeno()) {
-          LibraryUtils.WORKER = new Worker(LibraryUtils.WORKER_DIST_PATH, { type: "module" });
-        } else {
-          const Worker = require("web-worker"); // import web worker if nodejs
-          LibraryUtils.WORKER = new Worker(LibraryUtils.WORKER_DIST_PATH);
-        }
-      }
-      LibraryUtils.WORKER_OBJECTS = {};  // store per object running in the worker
-      
-      // receive worker errors
-      LibraryUtils.WORKER.onerror = function(err) {
-        console.error("Error posting message to zephyr.worker.js; is it built and copied to the app's public or build directory?");
-        console.log(err);
-      };
-      
-      // receive worker messages
-      LibraryUtils.WORKER.onmessage = function(e) {
-        
-        // lookup object id, callback function, and this arg
-        let thisArg = undefined;
-        let callbackFn = LibraryUtils.WORKER_OBJECTS[e.data[0]].callbacks[e.data[1]]; // look up by object id then by function name
-        if (callbackFn === undefined) throw new Error("No worker callback function defined for key '" + e.data[1] + "'");
-        if (callbackFn instanceof Array) {  // this arg may be stored with callback function
-          thisArg = callbackFn[1];
-          callbackFn = callbackFn[0];
-        }
-        
-        // invoke callback function with this arg and arguments
-        callbackFn.apply(thisArg, e.data.slice(2));
-      }
-
-      // apply log level set before the worker was created, queued ahead of other calls without awaiting a reply
-      if (LibraryUtils.LOG_LEVEL > 0) LibraryUtils.invokeWorker(undefined, "setLogLevel", [LibraryUtils.LOG_LEVEL]);
-    }
-    return LibraryUtils.WORKER;
+    await LibraryUtils.getCompiledWasmModule();
+    return LibraryUtils.getUtilityChannel().worker;
   }
 
   static addWorkerCallback(objectId, callbackId, callbackArgs) {
-    LibraryUtils.WORKER_OBJECTS[objectId].callbacks[callbackId] = callbackArgs;
+    LibraryUtils.getUtilityChannel().addCallback(objectId, callbackId, callbackArgs);
   }
 
   static removeWorkerCallback(objectId, callbackId) {
-    delete LibraryUtils.WORKER_OBJECTS[objectId].callbacks[callbackId];
+    if (LibraryUtils.UTILITY_CHANNEL) LibraryUtils.UTILITY_CHANNEL.removeCallback(objectId, callbackId);
   }
 
   static removeWorkerObject(objectId) {
-    delete LibraryUtils.WORKER_OBJECTS[objectId];
-  }
-  
-  /**
-   * Terminate monero-ts's singleton worker.
-   */
-  static async terminateWorker() {
-    if (LibraryUtils.WORKER) {
-      LibraryUtils.WORKER.terminate();
-      delete LibraryUtils.WORKER;
-      LibraryUtils.WORKER = undefined;
-    }
+    if (LibraryUtils.UTILITY_CHANNEL) LibraryUtils.UTILITY_CHANNEL.removeObject(objectId);
   }
 
   /**
-   * Invoke a worker function and get the result with error handling.
+   * Construct a wallet in a fresh dedicated worker: FIFO admission with two construction
+   * slots, optional caller AbortSignal for the construction only, failure cleanup of that worker,
+   * and hand-off of the worker to the wallet on success. See ZephyrWalletWorkers.
+   */
+  static async constructWalletInWorker(fnName: string, args: readonly unknown[], signal: AbortSignal | undefined): Promise<ZephyrWalletWorkerHandle> {
+    await LibraryUtils.getCompiledWasmModule(); // compiled once per runtime before the first worker starts
+    if (signal !== undefined && signal.aborted) throw new ZephyrWalletError("NATIVE_ERROR", "CONSTRUCTION_ABORTED");
+    return LibraryUtils.WORKERS.construct(() => LibraryUtils.newWorkerInstance(), fnName, args, signal, LibraryUtils.LOG_LEVEL);
+  }
+
+  /** Terminate a wallet's worker at once after its successful native close (never after a failed close). */
+  static async retireWalletWorker(channel: ZephyrWorkerChannel): Promise<void> {
+    LibraryUtils.WORKERS.retire(channel);
+  }
+
+  /** Counts of SDK-owned workers, construction slots and registrations of this runtime. */
+  static getWorkerAccounting(): ZephyrWorkerAccounting {
+    return LibraryUtils.WORKERS.accounting();
+  }
+
+  /**
+   * Stop using the current utility worker: later utility calls start a new one. The old worker
+   * answers the requests already posted to it and is then terminated, without being sent anything
+   * further (the inherited code dropped the reference without terminating the worker).
+   */
+  static retireUtilityWorker(): void {
+    const channel = LibraryUtils.UTILITY_CHANNEL;
+    LibraryUtils.UTILITY_CHANNEL = undefined;
+    LibraryUtils.WORKER = undefined;
+    if (channel) LibraryUtils.WORKERS.retireWhenIdle(channel);
+  }
+
+  /**
+   * Context shutdown: terminate every SDK-owned worker of this runtime (utility, construction and
+   * wallet workers) and reject queued constructions. This is an explicit all-wallet action, as the
+   * inherited shared-worker termination was: every live proxied wallet of this runtime loses its
+   * native state without a native close (later calls reject with WALLET_CLOSED; close resolves).
+   * Pending constructions reject with NATIVE_ERROR/CONSTRUCTION_ABORTED, other pending requests
+   * with WALLET_CLOSED. Workers not started by the SDK are not touched.
+   */
+  static async terminateWorker() {
+    LibraryUtils.WORKERS.shutdown();
+    LibraryUtils.UTILITY_CHANNEL = undefined;
+    LibraryUtils.WORKER = undefined;
+  }
+
+  /**
+   * Invoke a utility worker function and get the result with error handling.
    * 
    * @param {string} objectId identifies the worker object to invoke (default random id)
    * @param {string} fnName is the name of the function to invoke
@@ -235,39 +441,34 @@ export default class LibraryUtils {
    */
   static async invokeWorker(objectId, fnName, args) {
     assert(fnName.length >= 2);
-    let worker = await LibraryUtils.getWorker();
-    let randomObject = objectId === undefined;
-    if (randomObject) objectId = GenUtils.getUUID();
-    if (!LibraryUtils.WORKER_OBJECTS[objectId]) LibraryUtils.WORKER_OBJECTS[objectId] = {callbacks: {}};
-    let callbackId = GenUtils.getUUID();
+    await LibraryUtils.getCompiledWasmModule(); // the utility worker receives the runtime's compiled module
     try {
-      return await new Promise((resolve, reject) => {
-        LibraryUtils.WORKER_OBJECTS[objectId].callbacks[callbackId] = (resp) => {  // TODO: this defines function once per callback
-          delete LibraryUtils.WORKER_OBJECTS[objectId].callbacks[callbackId];
-          if (randomObject) delete LibraryUtils.WORKER_OBJECTS[objectId];
-          resp ? (resp.error ? reject(new Error(JSON.stringify(resp.error))) : resolve(resp.result)) : resolve(undefined);
-        };
-        worker.postMessage([objectId, fnName, callbackId].concat(args === undefined ? [] : GenUtils.listify(args)));
-      });
+      return await LibraryUtils.getUtilityChannel().invoke(objectId, fnName, args === undefined ? [] : GenUtils.listify(args));
     } catch (e: any) {
-      throw LibraryUtils.deserializeError(JSON.parse(e.message));
+      throw e instanceof ZephyrWalletError ? e : ZephyrWalletError.fromEnvelope(undefined);
     }
   }
 
+  /**
+   * Serialize an error for the worker boundary: only a wallet error envelope (type, code, approved
+   * diagnostic). Any other error gets its context's fixed code; no message, stack or cause is posted.
+   */
   static serializeError(err) {
-    const serializedErr: any = { name: err.name, message: err.message, code: err.code, stack: err.stack };
-    if (err instanceof ZephyrError) serializedErr.type = "ZephyrError";
-    if (err.cause instanceof Error) serializedErr.cause = LibraryUtils.serializeError(err.cause);
-    return serializedErr;
+    return ZephyrWalletError.fromUnknown("other", err).toEnvelope();
   }
 
+  /** Rebuild a received worker error; anything but an exactly valid envelope is MALFORMED_MESSAGE. */
   protected static deserializeError(serializedErr) {
-    const err = serializedErr.type === "ZephyrError" ? new ZephyrError(serializedErr.message, serializedErr.code) : new Error(serializedErr.message);
-    err.name = serializedErr.name;
-    if (serializedErr.code !== undefined) (err as any).code = serializedErr.code;
-    err.stack = err.stack + "\nWorker error: " + serializedErr.stack;
-    if (serializedErr.cause) err.cause = LibraryUtils.deserializeError(serializedErr.cause);
-    return err;
+    return ZephyrWalletError.fromEnvelope(serializedErr);
+  }
+
+  /**
+   * Settle one worker reply strictly: undefined, a plain object with exactly the field
+   * result, or a plain object with exactly the field error holding a valid envelope. Any other
+   * shape, extra field or invalid envelope rejects with MALFORMED_MESSAGE.
+   */
+  static settleWorkerReply(resp: unknown, resolve: (value: unknown) => void, reject: (reason: unknown) => void): void {
+    ZephyrWorkerChannel.settleReply(resp, resolve, reject); // the same strict rule for the utility and wallet workers
   }
 
   static async queueTask<T>(asyncFn: () => Promise<T>): Promise<T> {
@@ -286,9 +487,12 @@ export default class LibraryUtils {
   // ------------------------------ PRIVATE HELPERS ---------------------------
   
   protected static initWasmModule(wasmModule) {
+    for (const name of UNBUILT_BRIDGE_EXPORTS.concat(UNBUILT_KEEPALIVE_EXPORTS)) {
+      if (wasmModule[name] === undefined) wasmModule[name] = function() { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); };
+    }
     wasmModule.taskQueue = new ThreadPool(1);
     wasmModule.queueTask = async function(asyncFn) { return wasmModule.taskQueue.submit(asyncFn); }
-    if (LibraryUtils.LOG_LEVEL > 0) wasmModule.set_log_level(LibraryUtils.LOG_LEVEL); // apply log level set before load
+    if (LibraryUtils.LOG_LEVEL > 0) ZephyrWalletError.checkBridgeResult("other", wasmModule.set_log_level(LibraryUtils.LOG_LEVEL)); // apply log level set before load
 
     // assign utilities to globalThis
     const HttpClient = typeof require !== 'undefined' ? require("./HttpClient").default : (globalThis as any).HttpClient;

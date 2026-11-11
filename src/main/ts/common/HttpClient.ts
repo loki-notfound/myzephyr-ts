@@ -1,6 +1,8 @@
 import GenUtils from "./GenUtils";
 import LibraryUtils from "./LibraryUtils";
 import ThreadPool from "./ThreadPool";
+import ZephyrWalletError from "./ZephyrWalletError";
+import { matchRoute, routeKey } from "./ZephyrDaemonAddress";
 import http from "http";
 import https from "https";
 import axios, { AxiosError } from "axios";
@@ -11,6 +13,64 @@ import axios, { AxiosError } from "axios";
 export default class HttpClient {
 
   static MAX_REQUESTS_PER_SECOND = 50; // positive requests per second, or Infinity to disable throttling
+
+  /**
+   * Network guard (an allowlist). A request is sent only if its URI
+   * addresses a daemon route that a wallet of this context configured (scheme, host, effective
+   * port and a path below the route's base path); every other request is counted and rejected
+   * before any connection is attempted. With no route configured (offline lifecycle work) every
+   * request is blocked, and the bridge rejects an unset daemon host before
+   * reaching this client, so the expected count is zero. Only the HTTP method, the endpoint path
+   * relative to the base path and a validated JSON-RPC method token are recorded: never a host,
+   * URI, credentials, query string or body.
+   */
+  static NETWORK_ENABLED = false; // true while at least one daemon route is configured
+  static BLOCKED_REQUESTS = 0;
+  static BLOCKED_REQUEST_SUMMARY: Record<string, number> = Object.create(null); // "METHOD rpc-method" -> count
+  static ALLOWED_REQUESTS = 0;
+  static ALLOWED_REQUEST_SUMMARY: Record<string, number> = Object.create(null); // "METHOD /endpoint rpc-method" -> count
+  protected static DAEMON_ROUTES = new Map<string, { origin: string; basePath: string; count: number }>();
+
+  /** Allow requests to a daemon route (one registration per wallet that uses it). */
+  static addDaemonRoute(route: { origin: string; basePath: string }): void {
+    const key = routeKey(route);
+    const entry = HttpClient.DAEMON_ROUTES.get(key);
+    if (entry) entry.count++;
+    else HttpClient.DAEMON_ROUTES.set(key, { origin: route.origin, basePath: route.basePath, count: 1 });
+    HttpClient.NETWORK_ENABLED = true;
+  }
+
+  /** Release one registration of a daemon route. */
+  static removeDaemonRoute(route: { origin: string; basePath: string }): void {
+    const key = routeKey(route);
+    const entry = HttpClient.DAEMON_ROUTES.get(key);
+    if (entry && --entry.count <= 0) HttpClient.DAEMON_ROUTES.delete(key);
+    HttpClient.NETWORK_ENABLED = HttpClient.DAEMON_ROUTES.size > 0;
+  }
+
+  /** Number of distinct configured daemon routes in this context. */
+  static daemonRouteCount(): number {
+    return HttpClient.DAEMON_ROUTES.size;
+  }
+
+  protected static guardRequest(request: any): void {
+    const rpcMatch = typeof request?.body === "string" ? request.body.match(/"method"\s*:\s*"([A-Za-z0-9_]{1,64})"/) : null;
+    const httpMethod = typeof request?.method === "string" && /^[A-Z]{1,7}$/.test(request.method) ? request.method : "OTHER";
+    let endpoint: string | undefined = undefined;
+    for (const route of HttpClient.DAEMON_ROUTES.values()) {
+      endpoint = matchRoute(request?.uri, route);
+      if (endpoint !== undefined) break;
+    }
+    if (endpoint === undefined) {
+      HttpClient.BLOCKED_REQUESTS++;
+      const key = httpMethod + " " + (rpcMatch ? rpcMatch[1] : "-");
+      HttpClient.BLOCKED_REQUEST_SUMMARY[key] = (HttpClient.BLOCKED_REQUEST_SUMMARY[key] ?? 0) + 1;
+      throw ZephyrWalletError.unsupported("NETWORK_REQUEST");
+    }
+    HttpClient.ALLOWED_REQUESTS++;
+    const key = httpMethod + " " + endpoint + " " + (rpcMatch ? rpcMatch[1] : "-");
+    HttpClient.ALLOWED_REQUEST_SUMMARY[key] = (HttpClient.ALLOWED_REQUEST_SUMMARY[key] ?? 0) + 1;
+  }
 
   // default request config
   protected static DEFAULT_REQUEST = {
@@ -53,6 +113,8 @@ export default class HttpClient {
    * @return {object} response.headers - the response headers
    */
   static async request(request) {
+    HttpClient.guardRequest(request); // throws for anything but a configured daemon route
+
     // proxy to worker if configured
     if (request.proxyToWorker) {
       try {

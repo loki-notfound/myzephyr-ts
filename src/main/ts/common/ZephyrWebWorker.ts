@@ -8,6 +8,9 @@ import ZephyrDaemonConfig from "../daemon/model/ZephyrDaemonConfig";
 import ZephyrDaemonListener from "../daemon/model/ZephyrDaemonListener";
 import ZephyrDaemonRpc from "../daemon/ZephyrDaemonRpc";
 import ZephyrError from "./ZephyrError";
+import ZephyrWalletError, { ZephyrWalletErrorDiagnostic } from "./ZephyrWalletError";
+import { isWorkerId, lifecycleWorkerMethod, validateWorkerArgs } from "./ZephyrLifecycleContract";
+import { validateCreateConfig, validateOpenConfig } from "../wallet/model/ZephyrWalletCoreConfig";
 import ZephyrKeyImage from "../daemon/model/ZephyrKeyImage";
 import ZephyrRpcConnection from "./ZephyrRpcConnection";
 import ZephyrTxConfig from "../wallet/model/ZephyrTxConfig";
@@ -17,6 +20,8 @@ import ZephyrUtils from "./ZephyrUtils";
 import ZephyrWalletConfig from "../wallet/model/ZephyrWalletConfig"
 import ZephyrWalletListener from "../wallet/model/ZephyrWalletListener"
 import {ZephyrWalletKeys} from "../wallet/ZephyrWalletKeys";
+import { parseDaemonAddress } from "./ZephyrDaemonAddress";
+import { toAccountBalancesDto, toAssetBalancesDto } from "./ZephyrBalances";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
@@ -27,6 +32,9 @@ if (GenUtils.isDeno() && typeof self === "undefined" && typeof globalThis === "o
   self = globalThis;
   (globalThis as any).self = globalThis;
 }
+
+// an SDK worker instantiates only the compiled module its parent context posts as the first message
+LibraryUtils.WASM_SHARED_REQUIRED = true;
 
 // expose some modules to the worker
 self.HttpClient = HttpClient;
@@ -42,32 +50,146 @@ self.GenUtils = GenUtils;
  * 
  * @private
  */
-self.onmessage = async function(e) {
-  
-  // initialize one time
-  await self.initOneTime();
-  
-  // validate params
-  let objectId = e.data[0];
-  let fnName = e.data[1];
-  let callbackId = e.data[2];
-  assert(fnName, "Must provide function name to worker");
-  assert(callbackId, "Must provide callback id to worker");
-  if (!self[fnName]) throw new Error("Method '" + fnName + "' is not registered with worker");
-  e.data.splice(1, 2); // remove function name and callback id to apply function with arguments
-  
-  // execute worker function and post result to callback
+/**
+ * Worker dispatcher. Every message is checked against the central capability and
+ * argument table (ZephyrLifecycleContract) before any normalization, wallet lookup or native
+ * call: routable shape and ids, own-key method lookup, exact argument count and per-argument
+ * domains, wallet existence and kind, and duplicate ids for creation. Replies carry only a
+ * result or a wallet error envelope (code and approved diagnostic).
+ */
+self.WORKER_WALLETS = new Map(); // wallet id -> {kind: "full" | "keys", wallet}; own-key safe
+self.WORKER_RESERVED_IDS = new Set(); // ids of creations in progress
+/**
+ * Dedicated wallet worker rule: a worker admits at most one wallet construction, and only
+ * as the first routable message it receives. A worker that received any other message first (the
+ * SDK's utility worker) never owns a wallet, and a wallet worker never constructs a second wallet,
+ * whether its construction failed or succeeded. A later construction message rejects with
+ * UNSUPPORTED_CAPABILITY/WORKER_FUNCTION after its arguments and configuration were validated.
+ */
+self.WORKER_ROUTABLE_MESSAGES = 0;
+
+/** Full configuration check of a construction message before admission (the handler repeats it). */
+function validateConstructionMessage(fnName: string, args: unknown[]): void {
+  if (fnName === "createWalletFull") validateCreateConfig(args[0], false);
+  else if (fnName === "createWalletKeys") validateCreateConfig(args[0], true);
+  else if (fnName === "openWalletData") validateOpenConfig({networkType: args[2], password: args[1], keysData: args[3], cacheData: args[4]});
+}
+
+const KIND_DIAGNOSTICS: Readonly<Record<string, ZephyrWalletErrorDiagnostic>> = { getRestoreHeight: "KEYS_ONLY_RESTORE_HEIGHT", getData: "KEYS_ONLY_DATA", changePassword: "KEYS_ONLY_PASSWORD", getNetworkType: "KEYS_ONLY_NETWORK_TYPE" };
+
+self.dispatchLifecycleMessage = async function(data: unknown) {
+  // a reply is only possible with valid object and callback ids; anything else is dropped
+  if (!Array.isArray(data) || data.length < 3 || !isWorkerId(data[0]) || !isWorkerId(data[2])) return;
+  const objectId = data[0];
+  const fnName = data[1];
+  const callbackId = data[2];
+  const firstMessage = self.WORKER_ROUTABLE_MESSAGES === 0;
+  self.WORKER_ROUTABLE_MESSAGES++;
+  const fail = (err: ZephyrWalletError) => postMessage([objectId, callbackId, {error: err.toEnvelope()}]);
+  if (typeof fnName !== "string" || fnName.length === 0) return fail(new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE"));
+  const method = lifecycleWorkerMethod(fnName);
+  if (method === undefined) return fail(ZephyrWalletError.unsupported("WORKER_FUNCTION")); // the name is not echoed
+  const args = data.slice(3);
+  let reserved = false;
   try {
-    postMessage([objectId, callbackId, {result: await self[fnName].apply(null, e.data)}]);
-  } catch (e: any) {
-    if (!(e instanceof Error)) e = new Error(e);
-    postMessage([objectId, callbackId, {error: LibraryUtils.serializeError(e)}]);
+    validateWorkerArgs(method, args);
+    if (method.scope === "wallet") {
+      const entry = self.WORKER_WALLETS.get(objectId);
+      if (entry === undefined) {
+        if (fnName === "isClosed") return postMessage([objectId, callbackId, {result: true}]);
+        if (fnName === "close") return postMessage([objectId, callbackId, {result: undefined}]);
+        throw ZephyrWalletError.walletClosed();
+      }
+      if (method.kinds === undefined || !method.kinds.includes(entry.kind)) throw ZephyrWalletError.unsupported(Object.prototype.hasOwnProperty.call(KIND_DIAGNOSTICS, fnName) ? KIND_DIAGNOSTICS[fnName] : "WALLET_KIND");
+    } else if (method.scope === "create") {
+      validateConstructionMessage(fnName, args);
+      if (self.WORKER_WALLETS.has(objectId) || self.WORKER_RESERVED_IDS.has(objectId)) throw new ZephyrWalletError("MALFORMED_MESSAGE", "DUPLICATE_WALLET_ID");
+      if (!firstMessage) throw ZephyrWalletError.unsupported("WORKER_FUNCTION"); // one construction per worker, as its first message
+      self.WORKER_RESERVED_IDS.add(objectId);
+      reserved = true;
+    }
+    postMessage([objectId, callbackId, {result: await LIFECYCLE_IMPL[fnName](objectId, ...args)}]);
+  } catch (err: any) {
+    fail(ZephyrWalletError.fromUnknown(method.errorContext, err)); // wallet errors pass unchanged; anything else gets a fixed code
+  } finally {
+    if (reserved) self.WORKER_RESERVED_IDS.delete(objectId);
   }
 }
 
+self.onmessage = async function(e) {
+  if (LibraryUtils.acceptSharedWasmModule(e.data, self.WORKER_ROUTABLE_MESSAGES === 0)) return; // admitted only before any routable message; never dispatched
+  await self.initOneTime();
+  await self.dispatchLifecycleMessage(e.data);
+}
+
+function walletOf(walletId: string): any {
+  return self.WORKER_WALLETS.get(walletId).wallet; // existence and kind checked by the dispatcher
+}
+
+/** Implementations of the table's worker methods; arguments are already validated. */
+type LifecycleImpl = (objectId: string, ...args: any[]) => Promise<unknown>;
+
+const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Object.assign(Object.create(null), {
+  setLogLevel: async (objectId: string, level: number) => LibraryUtils.setLogLevel(level),
+  getNetworkGuardReport: async (objectId: string) => self.getNetworkGuardReport(objectId),
+  zephyrUtilsValidateAddress: async (objectId: string, address: string, networkType: number) => ZephyrUtils.validateAddress(address, networkType),
+  zephyrUtilsGetIntegratedAddress: async (objectId: string, networkType: number, standardAddress: string, paymentId: string | undefined) => (await ZephyrUtils.getIntegratedAddress(networkType, standardAddress, paymentId)).toJson(),
+  openWalletData: async (walletId: string, path: unknown, password: string, networkType: number, keysData: Uint8Array, cacheData: Uint8Array | undefined) => {
+    const validated = validateOpenConfig({networkType, password, keysData, cacheData}); // path, daemon and regtest checked by the table
+    const wallet = await ZephyrWalletFull.openWallet({networkType: validated.networkType, password: validated.password, keysData: validated.keysData, cacheData: validated.cacheData, proxyToWorker: false});
+    self.WORKER_WALLETS.set(walletId, {kind: "full", wallet});
+  },
+  createWalletFull: async (walletId: string, configJson: Record<string, unknown>) => {
+    validateCreateConfig(configJson, false); // before normalization: a non-empty path is rejected, never cleared
+    const config = new ZephyrWalletConfig(configJson);
+    config.setProxyToWorker(false);
+    const wallet = await ZephyrWalletFull.createWallet(config);
+    self.WORKER_WALLETS.set(walletId, {kind: "full", wallet});
+  },
+  createWalletKeys: async (walletId: string, configJson: Record<string, unknown>) => {
+    validateCreateConfig(configJson, true);
+    const config = new ZephyrWalletConfig(configJson);
+    config.setProxyToWorker(false);
+    const wallet = await ZephyrWalletKeys.createWallet(config);
+    self.WORKER_WALLETS.set(walletId, {kind: "keys", wallet});
+  },
+  isViewOnly: async (walletId: string) => walletOf(walletId).isViewOnly(),
+  getNetworkType: async (walletId: string) => walletOf(walletId).getNetworkType(),
+  getSeed: async (walletId: string) => walletOf(walletId).getSeed(),
+  getSeedLanguage: async (walletId: string) => walletOf(walletId).getSeedLanguage(),
+  getSeedLanguages: async (walletId: string) => walletOf(walletId).getSeedLanguages(),
+  getPrivateSpendKey: async (walletId: string) => walletOf(walletId).getPrivateSpendKey(),
+  getPrivateViewKey: async (walletId: string) => walletOf(walletId).getPrivateViewKey(),
+  getPublicViewKey: async (walletId: string) => walletOf(walletId).getPublicViewKey(),
+  getPublicSpendKey: async (walletId: string) => walletOf(walletId).getPublicSpendKey(),
+  getAddress: async (walletId: string, accountIdx: number, subaddressIdx: number) => walletOf(walletId).getAddress(accountIdx, subaddressIdx),
+  getAddressIndex: async (walletId: string, address: string) => (await walletOf(walletId).getAddressIndex(address)).toJson(),
+  getIntegratedAddress: async (walletId: string, standardAddress: string | undefined, paymentId: string | undefined) => (await walletOf(walletId).getIntegratedAddress(standardAddress, paymentId)).toJson(),
+  decodeIntegratedAddress: async (walletId: string, integratedAddress: string) => (await walletOf(walletId).decodeIntegratedAddress(integratedAddress)).toJson(),
+  getRestoreHeight: async (walletId: string) => walletOf(walletId).getRestoreHeight(),
+  getData: async (walletId: string) => walletOf(walletId).getData(),
+  changePassword: async (walletId: string, oldPassword: string, newPassword: string) => walletOf(walletId).changePassword(oldPassword, newPassword),
+  // read-only daemon access: the address is parsed again from its text; replies are strict DTOs
+  setDaemonConnection: async (walletId: string, uri: string | undefined) => walletOf(walletId).setDaemonConnection(uri === undefined ? undefined : parseDaemonAddress(uri).uri),
+  isConnectedToDaemon: async (walletId: string) => walletOf(walletId).isConnectedToDaemon(),
+  getDaemonHeight: async (walletId: string) => walletOf(walletId).getDaemonHeight(),
+  setRestoreHeightFromDaemon: async (walletId: string) => walletOf(walletId).setRestoreHeightFromDaemon(),
+  getHeight: async (walletId: string) => walletOf(walletId).getHeight(),
+  sync: async (walletId: string, startHeight: number | undefined) => ZephyrWalletFull.syncResultDto(await walletOf(walletId).sync(startHeight)),
+  getBalances: async (walletId: string, unlocked: boolean) => toAssetBalancesDto(await walletOf(walletId).getBalanceMap(unlocked)),
+  getAccountBalances: async (walletId: string, unlocked: boolean, accountIdx: number) => toAccountBalancesDto(await walletOf(walletId).getAccountBalanceMap(unlocked, accountIdx)),
+  getAssetBalance: async (walletId: string, unlocked: boolean, assetType: string, accountIdx: number, subaddressIdx: number | undefined) => (await walletOf(walletId).getAssetBalance(unlocked, assetType, accountIdx, subaddressIdx)).toString(),
+  isClosed: async (walletId: string) => walletOf(walletId).isClosed(),
+  prepareClose: async (walletId: string) => walletOf(walletId).prepareClose(),
+  close: async (walletId: string) => {
+    await walletOf(walletId).close(false); // on failure the entry stays for a retry; the handle is not freed
+    self.WORKER_WALLETS.delete(walletId);
+  }
+}));
+
 self.initOneTime = async function() {
   if (!self.isInitialized) {
-    self.WORKER_OBJECTS = {};
+    self.WORKER_OBJECTS = Object.create(null); // inherited functions outside the supported surface are unreachable
     self.isInitialized = true;
     ZephyrUtils.PROXY_TO_WORKER = false;
   }
@@ -83,23 +205,22 @@ self.httpRequest = async function(objectId, opts) {
   }
 }
 
-self.setLogLevel = async function(objectId, level) {
-  return LibraryUtils.setLogLevel(level);
+self.getNetworkGuardReport = async function(objectId: string) {
+  let threadId: number | undefined = undefined;
+  if (!GenUtils.isBrowser()) {
+    try { threadId = require("worker_threads").threadId; } catch (err) { threadId = undefined; }
+  }
+  return {networkEnabled: HttpClient.NETWORK_ENABLED, blockedRequests: HttpClient.BLOCKED_REQUESTS, blockedRequestSummary: Object.assign({}, HttpClient.BLOCKED_REQUEST_SUMMARY),
+    allowedRequests: HttpClient.ALLOWED_REQUESTS, allowedRequestSummary: Object.assign({}, HttpClient.ALLOWED_REQUEST_SUMMARY), daemonRoutes: HttpClient.daemonRouteCount(),
+    globalScope: Object.prototype.toString.call(self), hasImportScripts: typeof (self as any).importScripts === "function", threadId: threadId, wasmLoaded: LibraryUtils.getWasmModule() !== undefined};
 }
+
 
 self.getWasmMemoryUsed = async function(objectId) {
   return LibraryUtils.getWasmModule() && LibraryUtils.getWasmModule().HEAP8 ? LibraryUtils.getWasmModule().HEAP8.length : undefined;
 }
 
 // ----------------------------- ZEPHYR UTILS ---------------------------------
-
-self.zephyrUtilsGetIntegratedAddress = async function(objectId, networkType, standardAddress, paymentId) {
-  return (await ZephyrUtils.getIntegratedAddress(networkType, standardAddress, paymentId)).toJson();
-}
-
-self.zephyrUtilsValidateAddress = async function(objectId, address, networkType) {
-  return ZephyrUtils.validateAddress(address, networkType);
-}
 
 self.zephyrUtilsJsonToBinary = async function(objectId, json) {
   return ZephyrUtils.jsonToBinary(json);
@@ -427,86 +548,21 @@ self.daemonWaitForNextBlockHeader = async function(daemonId) {
 
 //------------------------------ WALLET METHODS -------------------------------
 
-self.openWalletData = async function(walletId, path, password, networkType, keysData, cacheData, daemonUriOrConfig, regtest) {
-  let daemonConnection = daemonUriOrConfig ? new ZephyrRpcConnection(daemonUriOrConfig) : undefined;
-  self.WORKER_OBJECTS[walletId] = await ZephyrWalletFull.openWallet({path: "", password: password, networkType: networkType, keysData: keysData, cacheData: cacheData, server: daemonConnection, proxyToWorker: false, regtest: regtest});
-  self.WORKER_OBJECTS[walletId].setBrowserMainPath(path);
-}
 
-self.createWalletKeys = async function(walletId, configJson) {
-  let config = new ZephyrWalletConfig(configJson);
-  config.setProxyToWorker(false);
-  self.WORKER_OBJECTS[walletId] = await ZephyrWalletKeys.createWallet(config);
-}
 
-self.createWalletFull = async function(walletId, configJson) {
-  let config = new ZephyrWalletConfig(configJson);
-  let path = config.getPath();
-  config.setPath("");
-  config.setProxyToWorker(false);
-  self.WORKER_OBJECTS[walletId] = await ZephyrWalletFull.createWallet(config);
-  self.WORKER_OBJECTS[walletId].setBrowserMainPath(path);
-}
-
-self.isViewOnly = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].isViewOnly();
-}
-
-self.getNetworkType = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getNetworkType();
-}
 
 //
 //async getVersion() {
 //  throw new Error("Not implemented");
 //}
 
-self.getSeed = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getSeed();
-}
 
-self.getSeedLanguage = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getSeedLanguage();
-}
 
-self.getSeedLanguages = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getSeedLanguages();
-}
 
-self.getPrivateSpendKey = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getPrivateSpendKey();
-}
 
-self.getPrivateViewKey = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getPrivateViewKey();
-}
-
-self.getPublicViewKey = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getPublicViewKey();
-}
-
-self.getPublicSpendKey = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getPublicSpendKey();
-}
-
-self.getAddress = async function(walletId, accountIdx, subaddressIdx) {
-  return self.WORKER_OBJECTS[walletId].getAddress(accountIdx, subaddressIdx);
-}
-
-self.getAddressIndex = async function(walletId, address) {
-  return (await self.WORKER_OBJECTS[walletId].getAddressIndex(address)).toJson();
-}
 
 self.setSubaddressLabel = async function(walletId, accountIdx, subaddressIdx, label) {
   await self.WORKER_OBJECTS[walletId].setSubaddressLabel(accountIdx, subaddressIdx, label);
-}
-
-self.getIntegratedAddress = async function(walletId, standardAddress, paymentId) {
-  return (await self.WORKER_OBJECTS[walletId].getIntegratedAddress(standardAddress, paymentId)).toJson();
-}
-
-self.decodeIntegratedAddress = async function(walletId, integratedAddress) {
-  return (await self.WORKER_OBJECTS[walletId].decodeIntegratedAddress(integratedAddress)).toJson();
 }
 
 self.setDaemonConnection = async function(walletId, config, isTrusted) {
@@ -526,9 +582,6 @@ self.isConnectedToDaemon = async function(walletId) {
   return self.WORKER_OBJECTS[walletId].isConnectedToDaemon();
 }
 
-self.getRestoreHeight = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getRestoreHeight();
-}
 
 self.setRestoreHeight = async function(walletId, restoreHeight) {
   return self.WORKER_OBJECTS[walletId].setRestoreHeight(restoreHeight);
@@ -1002,29 +1055,6 @@ self.submitMultisigTxHex = async function(walletId, signedMultisigTxHex) {
   return self.WORKER_OBJECTS[walletId].submitMultisigTxHex(signedMultisigTxHex);
 }
 
-self.getData = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getData();
-}
 
-self.changePassword = async function(walletId, oldPassword, newPassword) {
-  return self.WORKER_OBJECTS[walletId].changePassword(oldPassword, newPassword);
-}
 
-self.isClosed = async function(walletId) {
-  return !self.WORKER_OBJECTS[walletId] || self.WORKER_OBJECTS[walletId].isClosed();
-}
 
-self.prepareClose = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].prepareClose();
-}
-
-self.getCloseData = async function(walletId) {
-  return self.WORKER_OBJECTS[walletId].getCloseData();
-}
-
-self.close = async function(walletId, save) {
-  if (!self.WORKER_OBJECTS[walletId]) return;
-  await self.WORKER_OBJECTS[walletId].close(save);
-  if (self.listeners) self.listeners = self.listeners.filter(listener => listener.walletId !== walletId);
-  delete self.WORKER_OBJECTS[walletId];
-}

@@ -7,14 +7,18 @@ import ZephyrIntegratedAddress from "./model/ZephyrIntegratedAddress";
 import ZephyrNetworkType from "../daemon/model/ZephyrNetworkType";
 import ZephyrSubaddress from "./model/ZephyrSubaddress";
 import ZephyrVersion from "../daemon/model/ZephyrVersion";
-import ZephyrWallet from "./ZephyrWallet";
+import ZephyrWalletBase from "./ZephyrWalletBase";
 import ZephyrWalletConfig from "./model/ZephyrWalletConfig";
+import ZephyrWalletError from "../common/ZephyrWalletError";
+import { checkAddressIndices } from "../common/ZephyrLifecycleContract";
+import { configFields, toCoreConfigJson, validateCreateConfig } from "./model/ZephyrWalletCoreConfig";
+import { ZephyrWorkerChannel } from "../common/ZephyrWalletWorkers";
 import ZephyrWalletListener from "./model/ZephyrWalletListener";
 
 /**
- * Implements a ZephyrWallet which only manages keys using WebAssembly.
+ * Implements a ZephyrWalletBase which only manages keys using WebAssembly.
  */
-export class ZephyrWalletKeys extends ZephyrWallet {
+export class ZephyrWalletKeys extends ZephyrWalletBase {
 
   // instance variables
   protected cppAddress: string;
@@ -22,6 +26,14 @@ export class ZephyrWalletKeys extends ZephyrWallet {
   protected walletProxy: ZephyrWalletKeysProxy;
   protected closePromise: Promise<void>;
   protected closeCompleted = false;
+  /**
+   * Set when a failed native password change left the native password state unknown or
+   * unverifiable. From then on every ordinary operation, including operations already
+   * queued, rejects with NATIVE_ERROR/PASSWORD_STATE_UNKNOWN before any native access; close and
+   * close retry remain available. It is never cleared and nothing is rolled back: the in-memory
+   * wallet is not assumed to be safe, and recovery uses previously saved wallet bytes.
+   */
+  protected passwordStateUnknown = false;
   
   // --------------------------- STATIC UTILITIES -----------------------------
   
@@ -46,12 +58,17 @@ export class ZephyrWalletKeys extends ZephyrWallet {
    * @param {string} [config.privateViewKey] - private view key of the wallet to create (optional)
    * @param {string} [config.privateSpendKey] - private spend key of the wallet to create (optional)
    * @param {string} [config.language] - language of the wallet's seed (defaults to "English" or auto-detected)
+   * @param {AbortSignal} [signal] - optional caller signal for this construction only: a
+   *        proxied construction runs in its own new worker, which an abort before hand-off terminates
+   *        (NATIVE_ERROR/CONSTRUCTION_ABORTED); in direct mode only an already aborted signal is honored
    * @return {ZephyrWalletKeys} the created wallet
    */
-  static async createWallet(config: Partial<ZephyrWalletConfig>) {
+  static async createWallet(config: Partial<ZephyrWalletConfig>, signal?: AbortSignal) {
     
-    // normalize and validate config
+    // normalize and validate config against the supported configuration contract before any native call
     if (config === undefined) throw new ZephyrError("Must provide config to create wallet");
+    const validated = validateCreateConfig(configFields(config), true);
+    const coreConfigJson = JSON.stringify(toCoreConfigJson(validated, true));
     config = config instanceof ZephyrWalletConfig ? config : new ZephyrWalletConfig(config);
     if (config.getSeed() !== undefined && (config.getPrimaryAddress() !== undefined || config.getPrivateViewKey() !== undefined || config.getPrivateSpendKey() !== undefined)) {
       throw new ZephyrError("Wallet may be initialized with a seed or keys but not both");
@@ -61,8 +78,9 @@ export class ZephyrWalletKeys extends ZephyrWallet {
 
     // initialize proxied wallet if configured
     if (config.getProxyToWorker() === undefined) config.setProxyToWorker(true);
+    if (signal !== undefined && signal.aborted) throw new ZephyrWalletError("NATIVE_ERROR", "CONSTRUCTION_ABORTED"); // before any worker or native call
     if (config.getProxyToWorker()) {
-      let walletProxy = await ZephyrWalletKeysProxy.createWallet(config);;
+      let walletProxy = await ZephyrWalletKeysProxy.createWallet(config, signal);
       return new ZephyrWalletKeys(undefined, walletProxy);
     }
 
@@ -70,12 +88,12 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (config.getServer() !== undefined) throw new ZephyrError("Cannot initialize keys wallet with server connection");
     
     // create wallet
-    if (config.getSeed() !== undefined) return ZephyrWalletKeys.createWalletFromSeed(config);
-    else if (config.getPrivateSpendKey() !== undefined || config.getPrimaryAddress() !== undefined) return ZephyrWalletKeys.createWalletFromKeys(config);
-    else return ZephyrWalletKeys.createWalletRandom(config);
+    if (validated.intent === "seed") return ZephyrWalletKeys.createWalletFromSeed(config, coreConfigJson);
+    else if (validated.intent === "keys") return ZephyrWalletKeys.createWalletFromKeys(config, coreConfigJson);
+    else return ZephyrWalletKeys.createWalletRandom(config, coreConfigJson);
   }
   
-  protected static async createWalletRandom(config: Partial<ZephyrWalletConfig>) {
+  protected static async createWalletRandom(config: Partial<ZephyrWalletConfig>, coreConfigJson: string) {
 
     // validate and sanitize params
     config = config.copy();
@@ -92,15 +110,15 @@ export class ZephyrWalletKeys extends ZephyrWallet {
       return new Promise((resolve, reject) => {
         
         // create wallet in wasm which invokes callback when done
-        module.create_keys_wallet_random(JSON.stringify(config.toJson()), (cppAddress) => {
-          if (typeof cppAddress === "string") reject(new ZephyrError(cppAddress));
+        module.create_keys_wallet_random(coreConfigJson, (cppAddress: number | string) => {
+          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("create", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletKeys(cppAddress));
         });
       });
     });
   }
   
-  protected static async createWalletFromSeed(config: Partial<ZephyrWalletConfig>) {
+  protected static async createWalletFromSeed(config: Partial<ZephyrWalletConfig>, coreConfigJson: string) {
     
     // validate and sanitize params
     ZephyrNetworkType.validate(config.getNetworkType());
@@ -116,15 +134,15 @@ export class ZephyrWalletKeys extends ZephyrWallet {
       return new Promise((resolve, reject) => {
 
         // create wallet in wasm which invokes callback when done
-        module.create_keys_wallet_from_seed(JSON.stringify(config.toJson()), (cppAddress) => {
-          if (typeof cppAddress === "string") reject(new ZephyrError(cppAddress));
+        module.create_keys_wallet_from_seed(coreConfigJson, (cppAddress: number | string) => {
+          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletKeys(cppAddress));
         });
       });
     });
   }
   
-  protected static async createWalletFromKeys(config: Partial<ZephyrWalletConfig>) {
+  protected static async createWalletFromKeys(config: Partial<ZephyrWalletConfig>, coreConfigJson: string) {
     
     // validate and sanitize params
     if (config.getSeedOffset() !== undefined) throw new ZephyrError("Cannot provide seedOffset when creating wallet from keys");
@@ -142,8 +160,8 @@ export class ZephyrWalletKeys extends ZephyrWallet {
       return new Promise((resolve, reject) => {
         
         // create wallet in wasm which invokes callback when done
-        module.create_keys_wallet_from_keys(JSON.stringify(config.toJson()), (cppAddress) => {
-          if (typeof cppAddress === "string") reject(new ZephyrError(cppAddress));
+        module.create_keys_wallet_from_keys(coreConfigJson, (cppAddress: number | string) => {
+          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletKeys(cppAddress));
         });
       });
@@ -153,7 +171,7 @@ export class ZephyrWalletKeys extends ZephyrWallet {
   static async getSeedLanguages(): Promise<string[]> {
     let module = await LibraryUtils.loadWasmModule();
     return module.queueTask(async () => {
-      return JSON.parse(module.get_keys_wallet_seed_languages()).languages;
+      return JSON.parse(ZephyrWalletError.checkBridgeResult("other", module.get_keys_wallet_seed_languages())).languages;
     });
   }
   
@@ -186,7 +204,9 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().isViewOnly();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return this.module.is_view_only(this.cppAddress);
+      const viewOnly = this.module.is_view_only(this.cppAddress); // 1, 0, or -1 on a native failure
+      if (viewOnly !== 0 && viewOnly !== 1) throw new ZephyrWalletError("NATIVE_ERROR", "CORE_UNCLASSIFIED");
+      return viewOnly === 1;
     });
   }
   
@@ -199,7 +219,7 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().getVersion();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let versionStr = this.module.get_version(this.cppAddress);
+      let versionStr = ZephyrWalletError.checkBridgeResult("other", this.module.get_version(this.cppAddress));
       let versionJson = JSON.parse(versionStr);
       return new ZephyrVersion(versionJson.number, versionJson.isRelease);
     });
@@ -216,9 +236,7 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().getSeed();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = this.module.get_seed(this.cppAddress);
-      const errorStr = "error: ";
-      if (resp.indexOf(errorStr) === 0) throw new ZephyrError(resp.substring(errorStr.length));
+      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_seed(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -227,9 +245,7 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().getSeedLanguage();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = this.module.get_seed_language(this.cppAddress);
-      let errorKey = "error: ";
-      if (resp.indexOf(errorKey) === 0) throw new ZephyrError(resp.substring(errorKey.length));
+      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_seed_language(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -238,9 +254,7 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().getPrivateSpendKey();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = this.module.get_private_spend_key(this.cppAddress);
-      let errorKey = "error: ";
-      if (resp.indexOf(errorKey) === 0) throw new ZephyrError(resp.substring(errorKey.length));
+      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_private_spend_key(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -249,9 +263,7 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().getPrivateViewKey();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = this.module.get_private_view_key(this.cppAddress);
-      let errorKey = "error: ";
-      if (resp.indexOf(errorKey) === 0) throw new ZephyrError(resp.substring(errorKey.length));
+      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_private_view_key(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -260,9 +272,7 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().getPublicViewKey();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = this.module.get_public_view_key(this.cppAddress);
-      let errorKey = "error: ";
-      if (resp.indexOf(errorKey) === 0) throw new ZephyrError(resp.substring(errorKey.length));
+      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_public_view_key(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -271,19 +281,17 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().getPublicSpendKey();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = this.module.get_public_spend_key(this.cppAddress);
-      let errorKey = "error: ";
-      if (resp.indexOf(errorKey) === 0) throw new ZephyrError(resp.substring(errorKey.length));
+      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_public_spend_key(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
   
   async getAddress(accountIdx: number, subaddressIdx: number): Promise<string> {
+    checkAddressIndices(accountIdx, subaddressIdx); // bridge uint32_t: reject instead of wrapping, before dispatch
     if (this.getWalletProxy()) return this.getWalletProxy().getAddress(accountIdx, subaddressIdx);
-    assert(typeof accountIdx === "number");
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return this.module.get_address(this.cppAddress, accountIdx, subaddressIdx);
+      return ZephyrWalletError.checkBridgeResult("other", this.module.get_address(this.cppAddress, accountIdx, subaddressIdx));
     });
   }
   
@@ -291,8 +299,8 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     if (this.getWalletProxy()) return this.getWalletProxy().getAddressIndex(address);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = this.module.get_address_index(this.cppAddress, address);
-      if (resp.charAt(0) !== '{') throw new ZephyrError(resp);
+      let resp = ZephyrWalletError.checkBridgeResult("address", this.module.get_address_index(this.cppAddress, address));
+      if (typeof resp !== "string" || resp.charAt(0) !== '{') throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
       return new ZephyrSubaddress(JSON.parse(resp));
     });
   }
@@ -330,7 +338,7 @@ export class ZephyrWalletKeys extends ZephyrWallet {
       await this.module.queueTask(async () => {
         return new Promise<void>((resolve, reject) => {
           this.module.close(this.cppAddress, false, listenerHandle, (errMsg) => { // saving handled external to webassembly
-            if (errMsg) reject(new ZephyrError(errMsg));
+            if (errMsg) reject(ZephyrWalletError.fromBridgeResult("close", errMsg)); // handle kept; close may be retried
             else {
               delete this.cppAddress;
               resolve();
@@ -358,8 +366,20 @@ export class ZephyrWalletKeys extends ZephyrWallet {
     return subaddress
   }
   
+  /**
+   * Admission check at the start of every ordinary operation and of its queued task: a closed
+   * wallet rejects with WALLET_CLOSED; a wallet whose native password state became unknown rejects
+   * with NATIVE_ERROR/PASSWORD_STATE_UNKNOWN. Close does not use this check.
+   */
   protected assertNotClosed() {
-    if (this._isClosed) throw new ZephyrError("Wallet is closed");
+    if (this._isClosed) throw ZephyrWalletError.walletClosed();
+    if (this.passwordStateUnknown) throw new ZephyrWalletError("NATIVE_ERROR", "PASSWORD_STATE_UNKNOWN");
+  }
+
+  /** Stop ordinary admission after an unknown or unverifiable native password state. */
+  protected stopAdmissionForUnknownPasswordState(): ZephyrWalletError {
+    this.passwordStateUnknown = true;
+    return new ZephyrWalletError("NATIVE_ERROR", "PASSWORD_STATE_UNKNOWN");
   }
 
   protected getWalletProxy(): ZephyrWalletKeysProxy {
@@ -369,25 +389,26 @@ export class ZephyrWalletKeys extends ZephyrWallet {
 }
 
 /**
- * Implements a ZephyrWallet by proxying requests to a worker which runs a keys-only wallet.
+ * Implements a ZephyrWalletBase by proxying requests to a worker which runs a keys-only wallet.
  * 
- * TODO: sort these methods according to master sort in ZephyrWallet.ts
+ * TODO: sort these methods according to master sort in ZephyrWalletBase.ts
  * TODO: probably only allow one listener to worker then propogate to registered listeners for performance
  * 
  * @private
  */
-export class ZephyrWalletKeysProxy extends ZephyrWallet {
+export class ZephyrWalletKeysProxy extends ZephyrWalletBase {
 
   // state variables
   protected walletId: string;
   protected worker: Worker;
+  /** the wallet's own dedicated worker; terminated after a successful native close */
+  protected channel: ZephyrWorkerChannel;
   
   // -------------------------- WALLET STATIC UTILS ---------------------------
   
-  static async createWallet(config) {
-    let walletId = GenUtils.getUUID();
-    await LibraryUtils.invokeWorker(walletId, "createWalletKeys", [config.toJson()]);
-    return new ZephyrWalletKeysProxy(walletId, await LibraryUtils.getWorker());
+  static async createWallet(config: Partial<ZephyrWalletConfig>, signal?: AbortSignal) {
+    const handle = await LibraryUtils.constructWalletInWorker("createWalletKeys", [(config as ZephyrWalletConfig).toJson()], signal); // a ZephyrWalletConfig (createWallet normalizes it)
+    return new ZephyrWalletKeysProxy(handle.walletId, handle.channel);
   }
   
   // --------------------------- INSTANCE METHODS ----------------------------
@@ -399,14 +420,15 @@ export class ZephyrWalletKeysProxy extends ZephyrWallet {
    * static wallet creation utilities in this class.
    * 
    * @param {string} walletId - identifies the wallet with the worker
-   * @param {Worker} worker - worker to communicate with via messages
+   * @param {ZephyrWorkerChannel} channel - the wallet's own worker, owned exclusively by this proxy
    * 
    * @protected
    */
-  constructor(walletId, worker) {
+  constructor(walletId: string, channel: ZephyrWorkerChannel) {
     super();
     this.walletId = walletId;
-    this.worker = worker;
+    this.channel = channel;
+    this.worker = channel.worker as unknown as Worker;
   }
   
   async isViewOnly(): Promise<boolean> {
@@ -462,16 +484,33 @@ export class ZephyrWalletKeysProxy extends ZephyrWallet {
     return new ZephyrIntegratedAddress(await this.invokeWorker("decodeIntegratedAddress", Array.from(arguments)));
   }
 
+  /**
+   * Native close in the wallet's worker; after it succeeded the worker is terminated. A failed close
+   * keeps the worker and the native handle for a retry. A worker that already ended (context
+   * shutdown or WORKER_FAILED) holds no reachable native handle: close then resolves.
+   */
   async close(save) {
+    if (!this.channel.isOpen()) return;
     await this.invokeWorker("close", Array.from(arguments));
-    LibraryUtils.removeWorkerObject(this.walletId);
+    this.channel.removeObject(this.walletId);
+    await LibraryUtils.retireWalletWorker(this.channel);
   }
   
   async isClosed() {
+    if (!this.channel.isOpen()) return true;
     return this.invokeWorker("isClosed");
   }
 
+  /** @internal the wallet's own worker channel */
+  getWorkerChannel(): ZephyrWorkerChannel {
+    return this.channel;
+  }
+
   protected async invokeWorker(fnName: string, args?: any): Promise<any> {
-    return await LibraryUtils.invokeWorker(this.walletId, fnName, args);
+    try {
+      return await this.channel.invoke(this.walletId, fnName, args === undefined ? [] : GenUtils.listify(args));
+    } catch (e: any) {
+      throw e instanceof ZephyrWalletError ? e : ZephyrWalletError.fromEnvelope(undefined);
+    }
   }
 }
