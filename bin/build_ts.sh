@@ -56,7 +56,7 @@ for (const u of ["./zephyr.worker.js", "./zephyr.wasm"]) if (s.split("new URL(\"
 if ((s.match(/import\.meta/g) || []).length !== 2) bad.push("another use of import.meta");
 if (!/^export \{/m.test(s)) bad.push("no export statement");
 if (bad.length) { console.log(bad.join("; ")); process.exit(1); }
-console.log("dist/zephyr-ts.browser.mjs: " + s.length + " bytes, self-contained");
+console.log("dist/zephyr-ts.browser.mjs: " + require("fs").statSync(process.argv[2]).size + " bytes, self-contained");
 JS
 
 log "browser test pages and test worker (webpack.lifecycle-consumer.js)"
