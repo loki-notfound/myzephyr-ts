@@ -2,7 +2,12 @@
  * Node runner of the network stage (test only).
  *
  *   --mode direct|worker --out report.json --targets targets.json --marker TEXT --checks N01,N02,...
- *   [--seed-in dir] [--seed-out dir]
+ *   [--seed-in dir] [--seed-out dir] [--funded-in dir --funded-expect file [--funded-out dir]]
+ *
+ * --funded-in names a copy of a funded test wallet (keys.bin, cache.bin, password.txt) and
+ * --funded-expect its expected history (JSON, FundedExpectations); both come from outside the public
+ * tree and select check N20, which is reported as not run without them. --funded-out receives the
+ * synced bytes (0600) for a later comparison with another implementation; the inputs are never written.
  *
  * The seed directory (test output only, never published) holds a disposable wallet without funds saved
  * by the measured fresh sync, so later runs reopen it and sync a few blocks only. Writes a
@@ -13,7 +18,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
-import { NetworkTargets, RequestRecorder, SeedWallet, installRequestRecorder, runNetworkChecks } from "./NetworkChecks";
+import { FundedExpectations, FundedInputs, NetworkTargets, RequestRecorder, SeedWallet, installRequestRecorder, runNetworkChecks } from "./NetworkChecks";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf("--" + name);
@@ -41,10 +46,28 @@ async function main(): Promise<number> {
     fs.writeFileSync(path.join(seedOut, "cache.bin"), s.cache, { mode: 0o600 });
     fs.writeFileSync(path.join(seedOut, "password.txt"), s.password, { mode: 0o600 });
   };
+  const fundedIn = arg("funded-in");
+  const fundedExpect = arg("funded-expect");
+  const fundedOut = arg("funded-out");
+  let funded: FundedInputs | undefined = undefined;
+  if (fundedIn !== undefined && fundedExpect !== undefined) {
+    const wallet = { keys: new Uint8Array(fs.readFileSync(path.join(fundedIn, "keys.bin"))), cache: new Uint8Array(fs.readFileSync(path.join(fundedIn, "cache.bin"))), password: fs.readFileSync(path.join(fundedIn, "password.txt"), "utf8").replace(/\n$/, "") };
+    const expect = JSON.parse(fs.readFileSync(fundedExpect, "utf8")) as FundedExpectations;
+    const saveSynced = fundedOut === undefined ? undefined : async (s: SeedWallet): Promise<void> => {
+      if (fs.existsSync(fundedOut)) throw new Error("--funded-out must name a new directory");
+      fs.mkdirSync(fundedOut, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(fundedOut, "keys.bin"), s.keys, { mode: 0o600 });
+      fs.writeFileSync(path.join(fundedOut, "cache.bin"), s.cache, { mode: 0o600 });
+    };
+    funded = { wallet, expect, saveSynced };
+  } else if (fundedIn !== undefined || fundedExpect !== undefined) {
+    process.stderr.write("--funded-in and --funded-expect go together\n");
+    return 2;
+  }
   let recorder: RequestRecorder | undefined = undefined;
   if (mode === "direct") recorder = installRequestRecorder(async (b: Uint8Array) => crypto.createHash("sha256").update(b).digest("hex"));
   const log = (line: string): void => { process.stdout.write(line + "\n"); };
-  const report = await runNetworkChecks({ env: mode === "direct" ? "node-direct" : "node-worker", proxyToWorker: mode === "worker", targets, marker, checks, seed, saveSeed, recorder, log });
+  const report = await runNetworkChecks({ env: mode === "direct" ? "node-direct" : "node-worker", proxyToWorker: mode === "worker", targets, marker, checks, seed, saveSeed, funded, recorder, log });
   const output = Object.assign({}, report, { node: process.version, platform: process.platform + "-" + process.arch, artifacts: { "zephyr.js": crypto.createHash("sha256").update(fs.readFileSync(path.resolve(__dirname, "../../../zephyr.js"))).digest("hex"), ...(mode === "worker" ? { "ZephyrWebWorker.js": crypto.createHash("sha256").update(fs.readFileSync(LibraryUtils.WORKER_DIST_PATH)).digest("hex") } : {}) } });
   fs.writeFileSync(out, JSON.stringify(output, null, 2) + "\n");
   process.stdout.write("checks: " + report.checks.map((c) => c.id + "=" + c.status).join(" ") + "\n");

@@ -14,8 +14,9 @@ The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not
 
 ## Status
 
-The supported surface is the wallet lifecycle, read-only daemon access, and accounts and
-subaddresses (below). There are no transactions, transfers, conversions, history or listeners yet. Read
+The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
+and the read-only history of transactions and transfers (below). Creating or sending transactions,
+conversions and listeners are not supported yet. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 
 ## Core and pinned sources
@@ -64,6 +65,10 @@ The package entry (`src/main/ts/index.ts`) exports:
   does not have rejects with `ACCOUNT_NOT_FOUND` or `SUBADDRESS_NOT_FOUND`; the daemon address must
   be the final address: HTTP redirects are never followed, so a redirecting address or proxy fails
   by design ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md));
+* read-only history of full wallets: `getTxs`, `getTransfers` and `getTx`, transactions and
+  transfers per asset from what the last sync stored (no daemon request), with the types
+  `ZephyrWalletTx`, `ZephyrWalletTransfer`, `ZephyrTransferDestination`, `ZephyrTxConversion`,
+  `ZephyrHistoryQuery`, `ZephyrTransferDirection` and `ZephyrHistoryStatus`;
 * accounts and subaddresses of full wallets: `getAccounts`, `getAccount`, `createAccount`,
   `getSubaddresses`, `getSubaddress`, `createSubaddress`, `setSubaddressLabel` and
   `getAddressIndex`; results are read-only plain objects with the balance maps by asset (see
@@ -127,8 +132,53 @@ const all = await wallet.getAccounts({ includeSubaddresses: true });
 const where = await wallet.getAddressIndex(sub.address);               // { accountIndex: 1, subaddressIndex: 1 }
 ```
 
-Amounts other than zero have not been tested yet: no funded test has been run (see
-[docs/LIMITATIONS.md](docs/LIMITATIONS.md)).
+Balances other than zero are tested with a funded test wallet (incoming transfers in four assets
+and two accounts); see [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what is not proven yet.
+
+### History
+
+`getTxs(query?)`, `getTransfers(query?)` and `getTx(hash)` return the wallet's transactions and
+transfers per asset as the wallet stored them at its last sync. They send no request to the daemon;
+sync first to see new transactions. Full wallets only; keys-only wallets reject with
+`UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_HISTORY`.
+
+A transaction (`ZephyrWalletTx`) carries its `hash`, `height` and `timestamp` (absent while
+unconfirmed), `confirmations` (at the wallet's height), `isConfirmed`, `inPool`, `isFailed`,
+`isLocked`, `isMinerTx`, the core's `fee` with `feeAsset` (the asset of its outgoing transfer: fees
+are paid in the source asset; absent for a transaction without one), `unlockTime`, its
+`incomingTransfers` and its `outgoingTransfer`, and `conversion` (`sourceAsset`,
+`destinationAsset`, `sourceAmount`, `destinationAmount`) when the outgoing asset differs from the
+asset of its destinations. A transfer (`ZephyrWalletTransfer`) carries `direction`, `asset`,
+`amount`, `accountIndex`, `subaddressIndex` (incoming) or `subaddressIndices` and `destinations`
+(outgoing), and `txHash`, `height` and `confirmations` of its transaction. Amounts are `bigint` in
+atomic units; the asset is the core's string, historical names included; a value the core does not
+report is absent, never zero or a default asset. Results are frozen plain objects and arrays.
+
+* The query (`ZephyrHistoryQuery`) has optional fields only: `asset`, `accountIndex`,
+  `subaddressIndex` (with `accountIndex`), `direction` (`"incoming"` or `"outgoing"`), `status`
+  (`"confirmed"`, `"pool"` for own outgoing transactions in the pool, `"failed"`), `minHeight` and
+  `maxHeight` (inclusive, confirmed transactions only) and `hashes`. Unknown fields and bad values
+  reject with `INVALID_CONFIG` before any native call (`UNKNOWN_FIELD`, `FIELD_TYPE`, `ASSET_TYPE`,
+  `ADDRESS_INDEX_RANGE`, `QUERY_ACCOUNT_REQUIRED`, `HEIGHT_RANGE`, `TX_HASHES`, `TX_HASH`).
+  `getTxs` returns the transactions with at least one matching transfer, each with all of its
+  transfers; `getTransfers` returns the matching transfers.
+* A hash is 64 lowercase hexadecimal characters (`INVALID_CONFIG`/`TX_HASH`); a requested hash the
+  wallet has no transaction for rejects with `INVALID_CONFIG`/`TX_NOT_FOUND`.
+* One call selects at most 1,000 transactions with at most 2,000 transfers; a larger selection
+  rejects with `INVALID_CONFIG`/`LISTING_LIMIT`. The core has no cursor: page by height range.
+* Incoming transfers that are still in the pool are not listed until they are confirmed: the core
+  would fetch the pool from the daemon first.
+
+```typescript
+await wallet.sync();
+const received = await wallet.getTransfers({ direction: "incoming", asset: "ZSD" });
+const page = await wallet.getTxs({ minHeight: 905000, maxHeight: 905999 });
+const tx = await wallet.getTx(received[0].txHash);                     // { hash, height, incomingTransfers, ... }
+```
+
+Labels, destination addresses and any other text that comes from wallet bytes or the chain are
+untrusted display text: see "Text from wallets and the chain" in
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 
 ```typescript
 import { createRandomWallet, openWalletData, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
@@ -176,14 +226,14 @@ and proxy requirements.
 
 Everything else inherited from monero-ts stays in the source as unported classes under
 `src/main/ts/` and is not exported by the package: the daemon and wallet RPC clients, the
-connection manager, background synchronization, listeners, history, transactions, transfers,
-outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
+connection manager, background synchronization, listeners, the inherited query-based history,
+transaction creation and relay, outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
 most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
 inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and
 `ZephyrSubaddress`). The
 inherited Monero test suite and its root entry point are not part of this repository's tree; the
-tests are under `src/test/lifecycle/` and `src/test/network/`. Transactions and conversions need
+tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`. Transactions and conversions need
 further work and their own tests with funded wallets.
 
 ## Building and testing

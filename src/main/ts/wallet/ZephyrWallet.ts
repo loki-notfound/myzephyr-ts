@@ -17,6 +17,7 @@ import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAdd
 import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBalances";
 import { ZephyrAccount, ZephyrAccountOptions, ZephyrAddressIndex, ZephyrSubaddress, accountOptions } from "../common/ZephyrAccounts";
 import { checkLabel, checkSubaddressIndices } from "../common/ZephyrLifecycleContract";
+import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx, checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistory";
 
 
 /** Network types; numeric values match the core. */
@@ -453,10 +454,53 @@ export class ZephyrWallet {
     return this.call("address", () => wallet.getAddressIndexChecked(address));
   }
 
+  // --------------------------------- read-only history ---------------------------------
+  //
+  // Full wallets, direct and proxied; keys-only wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_HISTORY.
+  // The wallet's transactions and transfers per asset as the last sync stored them: none of these calls
+  // sends a request to the daemon. Results are read-only plain data with bigint amounts
+  // (common/ZephyrHistory.ts). The query is validated before any native or worker call. A selection holds
+  // at most 1,000 transactions with at most 2,000 transfers (else INVALID_CONFIG/LISTING_LIMIT); page by
+  // height range. Incoming transfers still in the pool are not listed until they are confirmed.
+
+  /**
+   * The wallet's transactions, confirmed by height then hash, unconfirmed (own pending and failed) after
+   * them. With transfer filters (asset, accountIndex, subaddressIndex, direction) only the transactions
+   * with at least one matching transfer, each with all of its transfers.
+   */
+  async getTxs(query?: ZephyrHistoryQuery): Promise<ReadonlyArray<ZephyrWalletTx>> {
+    const wallet = this.full("KEYS_ONLY_HISTORY");
+    const q = checkHistoryQuery(query);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    const txs = await this.call("other", () => wallet.getHistoryChecked(selectionOf(q)));
+    return filterTxs(txs, q);
+  }
+
+  /** The transfers that match the query, per transaction the outgoing transfer first, then the incoming ones. */
+  async getTransfers(query?: ZephyrHistoryQuery): Promise<ReadonlyArray<ZephyrWalletTransfer>> {
+    const wallet = this.full("KEYS_ONLY_HISTORY");
+    const q = checkHistoryQuery(query);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    const txs = await this.call("other", () => wallet.getHistoryChecked(selectionOf(q)));
+    return filterTransfers(txs, q);
+  }
+
+  /**
+   * One transaction of the wallet by its hash (64 lowercase hexadecimal characters, else
+   * INVALID_CONFIG/TX_HASH before any native call). A hash the wallet has no transaction for rejects
+   * with INVALID_CONFIG/TX_NOT_FOUND (also an incoming transaction that is still in the pool).
+   */
+  async getTx(hash: string): Promise<ZephyrWalletTx> {
+    const wallet = this.full("KEYS_ONLY_HISTORY");
+    const h = checkTxHash(hash);
+    const txs = await this.call("other", () => wallet.getHistoryChecked({ status: "all", hashes: [h] }));
+    if (txs.length !== 1 || txs[0].hash !== h) throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
+    return txs[0];
+  }
+
   // ----------------------- representative unsupported calls -----------------------
 
   async startSyncing(): Promise<never> { throw ZephyrWalletError.unsupported("SYNC"); }
-  async getTxs(): Promise<never> { throw ZephyrWalletError.unsupported("TRANSACTIONS"); }
   async createTxs(): Promise<never> { throw ZephyrWalletError.unsupported("TRANSACTIONS"); }
   async addListener(): Promise<never> { throw ZephyrWalletError.unsupported("LISTENERS"); }
   async getReserveProofWallet(): Promise<never> { throw ZephyrWalletError.unsupported("RESERVE_PROOF"); }

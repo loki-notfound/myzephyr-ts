@@ -23,6 +23,7 @@ import {ZephyrWalletKeys} from "../wallet/ZephyrWalletKeys";
 import { parseDaemonAddress } from "./ZephyrDaemonAddress";
 import { toAccountBalancesDto, toAssetBalancesDto } from "./ZephyrBalances";
 import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccounts";
+import { checkSelection, toTxDto } from "./ZephyrHistory";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
@@ -188,6 +189,9 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   getSubaddresses: async (walletId: string, accountIdx: number, indices: number[] | undefined) => (await walletOf(walletId).getSubaddressesChecked(accountIdx, indices)).map(toSubaddressDto),
   createSubaddress: async (walletId: string, accountIdx: number, label: string) => toSubaddressDto(await walletOf(walletId).createSubaddressChecked(accountIdx, label)),
   setSubaddressLabel: async (walletId: string, accountIdx: number, subaddressIdx: number, label: string) => { await walletOf(walletId).setSubaddressLabelChecked(accountIdx, subaddressIdx, label); },
+  // read-only history: the selection was validated by the table; the reply is a strict DTO (common/ZephyrHistory.ts)
+  getHistory: async (walletId: string, status: string, minHeight: number | undefined, maxHeight: number | undefined, hashes: string[] | undefined) =>
+    (await walletOf(walletId).getHistoryChecked(checkSelection(status, minHeight, maxHeight, hashes))).map(toTxDto),
   isClosed: async (walletId: string) => walletOf(walletId).isClosed(),
   prepareClose: async (walletId: string) => walletOf(walletId).prepareClose(),
   close: async (walletId: string) => {

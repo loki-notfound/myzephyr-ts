@@ -1,7 +1,8 @@
 // Type check of the shipped declarations (no emit): every exported type is usable as documented.
 import { createRandomWallet, ZephyrWallet, ZephyrWalletData, ZephyrWalletError, ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic, ZephyrWalletSyncResult,
   ZephyrDaemonConnection, ZephyrWalletConstructionOptions, ZephyrNetworkTypeInput, ZephyrAssetBalances, ZephyrAccountBalances,
-  ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions } from "@loki-notfound/zephyr-ts";
+  ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions, ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination,
+  ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "@loki-notfound/zephyr-ts";
 
 export async function demo(): Promise<bigint> {
   const net: ZephyrNetworkTypeInput = "mainnet";
@@ -24,7 +25,16 @@ export async function demo(): Promise<bigint> {
   const where: ZephyrAddressIndex = await w.getAddressIndex(created.address);
   const zph: bigint | undefined = created.balance.get("ZPH");
   const synced: boolean = await w.isDaemonSynced();
+  const direction: ZephyrTransferDirection = "incoming";
+  const status: ZephyrHistoryStatus = "confirmed";
+  const query: ZephyrHistoryQuery = { asset: "ZPH", accountIndex: 0, subaddressIndex: 0, direction, status, minHeight: 1, maxHeight: 2 };
+  const txs: ReadonlyArray<ZephyrWalletTx> = await w.getTxs(query);
+  const transfers: ReadonlyArray<ZephyrWalletTransfer> = await w.getTransfers({ hashes: [txs[0].hash] });
+  const one: ZephyrWalletTx = await w.getTx(transfers[0].txHash);
+  const amount: bigint = transfers[0].amount;
+  const dest: ZephyrTransferDestination | undefined = one.outgoingTransfer?.destinations?.[0];
+  const conversion: ZephyrTxConversion | undefined = one.conversion;
   await w.terminate();
-  void data; void all; void zsd; void daemon; void result; void err; void first; void where; void zph; void synced;
+  void data; void all; void zsd; void daemon; void result; void err; void first; void where; void zph; void synced; void amount; void dest; void conversion;
   return balance;
 }

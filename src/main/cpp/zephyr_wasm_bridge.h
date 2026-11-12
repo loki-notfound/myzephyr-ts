@@ -80,6 +80,9 @@ namespace zephyr_wasm_bridge
   string get_subaddresses(int handle, uint32_t account_idx, const string& subaddress_indices, uint32_t max_subaddresses);
   string create_subaddress(int handle, const uint32_t account_idx, const string& label);
   string set_subaddress_label(int handle, const uint32_t account_idx, const uint32_t subaddress_idx, const string& label);
+  // read-only history of full wallets: transactions with their transfers from what the last sync
+  // stored (no daemon request), fixed-format JSON, bounded by the given limits
+  string get_txs(int handle, const string& status, const string& min_height, const string& max_height, const string& hashes, uint32_t max_txs, uint32_t max_transfers);
   string get_version(int handle);
   string get_seed(int handle);
   string get_seed_language(int handle);
@@ -111,7 +114,6 @@ namespace zephyr_wasm_bridge
   void rescan_blockchain(int handle, emscripten::val callback);
   string get_balance_subaddress(int handle, const uint32_t account_idx, const uint32_t subaddress_idx);
   string get_unlocked_balance_subaddress(int handle, const uint32_t account_idx, const uint32_t subaddress_idx);
-  void get_txs(int handle, const string& tx_query_json, emscripten::val callback);
   void get_transfers(int handle, const string& transfer_query_json, emscripten::val callback);
   void get_outputs(int handle, const string& output_query_json, emscripten::val callback);
   void export_outputs(int handle, bool all, emscripten::val callback);

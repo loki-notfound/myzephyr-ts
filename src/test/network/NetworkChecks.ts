@@ -13,6 +13,7 @@ import * as F from "../../main/ts/index";
 import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import HttpClient from "../../main/ts/common/HttpClient";
+import http from "http";
 import { parseDaemonAddress } from "../../main/ts/common/ZephyrDaemonAddress";
 import { CheckFailure, CheckResult, codeOf, diagnosticOf, expect, expectCode, randomPassword, withDeadline } from "../lifecycle/LifecycleChecks";
 import { GUARD_LEDGER, channelOf, combinedGuard, installGuardLedger, readGuardInto } from "../lifecycle/testSupport";
@@ -57,6 +58,23 @@ export interface SeedWallet {
   readonly password: string;
 }
 
+/**
+ * Inputs of the funded history check N20, supplied from outside the public tree (never part of it):
+ * the bytes of a copy of a funded test wallet and the expectations it is compared with. Without them
+ * N20 is reported as not run.
+ */
+export interface FundedInputs {
+  readonly wallet: SeedWallet;
+  readonly expect: FundedExpectations;
+  /** where the synced bytes are written for a later two-way comparison (optional; memory only otherwise) */
+  readonly saveSynced?: (seed: SeedWallet) => Promise<void>;
+}
+
+/** Expected history of the funded wallet: every transfer by hash, and the totals per asset and account. */
+export interface FundedExpectations {
+  readonly transfers: ReadonlyArray<{ readonly hash: string; readonly height: number; readonly direction: "incoming" | "outgoing"; readonly asset: string; readonly amount: string; readonly accountIndex: number; readonly subaddressIndex: number }>;
+}
+
 export interface NetworkOptions {
   readonly env: "node-direct" | "node-worker" | "chromium-worker";
   readonly proxyToWorker: boolean;
@@ -67,6 +85,8 @@ export interface NetworkOptions {
   readonly seed?: SeedWallet;
   /** where a fresh measured restore stores its wallet for later runs */
   readonly saveSeed?: (seed: SeedWallet) => Promise<void>;
+  /** the funded history check's inputs (N20); absent: N20 is not run */
+  readonly funded?: FundedInputs;
   /** test-side request recorder of the calling context (direct mode only) */
   readonly recorder?: RequestRecorder;
   readonly log?: (line: string) => void;
@@ -790,6 +810,155 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     report.measurements.N16 = { estimate, estimateUnreachable: estimate2, daemonHeight: dh, blocksBelowDaemon: dh - estimate };
     notes.push("estimate " + estimate + " (unreachable daemon " + estimate2 + "), " + (dh - estimate) + " blocks below the daemon height " + dh);
   });
+
+  // ------------------------------------------------------------------ N19: history sends no request
+  /** Requests seen by the loopback forwarder (all listeners) and by the SDK's request allowlist of the wallet's context. */
+  async function requestCounts(w: F.ZephyrWallet): Promise<{ forwarder: number; upstream: number; allowlist: number }> {
+    const root = t.root as string;
+    type Stats = { routes: Record<string, { count: number }>; denied: Record<string, number>; upstreamRequests: number };
+    // the page reads its own origin with fetch; Node.js (whose monitor blocks fetch) uses a plain loopback request
+    const st: Stats = typeof window !== "undefined" || typeof (globalThis as { importScripts?: unknown }).importScripts === "function"
+      ? await (await fetch(root + "/__stats", { cache: "no-store" })).json() as Stats
+      : await new Promise<Stats>((resolve, reject) => {
+        http.get(root + "/__stats", (res) => { const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c)); res.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Stats); } catch (e) { reject(e); } }); }).on("error", reject);
+      });
+    const forwarder = Object.values(st.routes).reduce((n, r) => n + r.count, 0) + Object.values(st.denied).reduce((n, c) => n + c, 0);
+    let allowlist: number;
+    if (proxy) {
+      const ledger = { reports: 0, unreported: 0, blockedRequests: 0, allowedRequests: 0, blockedSummary: {}, allowedSummary: {} };
+      expect(await readGuardInto(channelOf(w), ledger), "the wallet worker reports its guard counts");
+      allowlist = ledger.allowedRequests + ledger.blockedRequests;
+    } else {
+      allowlist = HttpClient.ALLOWED_REQUESTS + HttpClient.BLOCKED_REQUESTS;
+    }
+    return { forwarder, upstream: st.upstreamRequests, allowlist };
+  }
+
+  await check("N19", "History reads what the last sync stored: getTxs, getTransfers and getTx send no request (loopback forwarder and request allowlist count none)", async (notes) => {
+    if (t.base === undefined || t.root === undefined) throw new CheckFailure("no target");
+    const w = await openSeed(t.base);
+    expect((await w.isConnectedToDaemon()) === true, "connected through the forwarder");
+    const before = await requestCounts(w);
+    const hash = "ab".repeat(32);
+    let listed = 0;
+    for (const q of [undefined, { status: "confirmed" as const }, { status: "pool" as const }, { asset: "ZPH" }, { accountIndex: 0, subaddressIndex: 0 }, { minHeight: 0 }]) {
+      listed += (await w.getTxs(q)).length + (await w.getTransfers(q)).length;
+    }
+    await expectCode(w.getTx(hash), "INVALID_CONFIG", "getTx of a hash the wallet does not have", notes, "TX_NOT_FOUND");
+    const after = await requestCounts(w);
+    notes.push("requests before/after 13 history calls: forwarder " + before.forwarder + "/" + after.forwarder + ", upstream " + before.upstream + "/" + after.upstream + ", allowlist " + before.allowlist + "/" + after.allowlist + "; listed " + listed);
+    expect(before.forwarder > 0 && before.allowlist > 0, "the counters saw the connection check (positive control)");
+    expect(after.forwarder === before.forwarder && after.upstream === before.upstream && after.allowlist === before.allowlist, "no request during the history calls");
+    expect(listed === 0, "the disposable wallet without funds has no history");
+    report.measurements.N19 = { before, after, historyCalls: 13 };
+    await w.close();
+  });
+
+  // ------------------------------------------------------------------ N20: funded history (inputs from outside the public tree)
+  await check("N20", "Funded history: transactions and transfers per asset and account equal the expectations; incoming sums equal the balances of wallet, accounts and subaddresses; every query filter; direct and proxied equal; confirmations grow with the daemon height", async (notes) => {
+    const funded = opts.funded;
+    if (funded === undefined) throw new CheckNotRun("no funded wallet supplied (FUNDED_WALLET_IN and FUNDED_EXPECT)");
+    if (t.base === undefined) throw new CheckFailure("no target");
+    const result = await fundedHistory(funded, notes);
+    report.measurements.N20 = result;
+  });
+
+  async function fundedHistory(funded: FundedInputs, notes: string[]): Promise<Record<string, unknown>> {
+    const show = (v: unknown) => JSON.stringify(v, (k, x) => (typeof x === "bigint" ? x.toString() + "n" : x instanceof Map ? Object.fromEntries(Array.from((x as Map<unknown, unknown>).entries()).map(([a, b]) => [String(a), b])) : x));
+    const w = await F.openWalletData({ networkType: 0, password: funded.wallet.password, keysData: new Uint8Array(funded.wallet.keys), cacheData: new Uint8Array(funded.wallet.cache), server: t.base, proxyToWorker: false });
+    try {
+      expect((await w.isConnectedToDaemon()) === true, "connected through the forwarder");
+      const dh0 = await w.getDaemonHeight();
+      const h0 = await w.getHeight();
+      expect(dh0 - h0 <= FRESH_SYNC_BLOCKS, "the copy starts within the sync window (" + (dh0 - h0) + " blocks below the daemon)");
+      const r1 = await sync("N20", w, "funded copy, forwarder base path", "real", undefined, dh0 - h0);
+      const h1 = await w.getHeight();
+      const txs = await w.getTxs();
+      const transfers = await w.getTransfers();
+      // every transfer equals the expectations, by hash, and nothing else is listed
+      const got = transfers.map((x) => ({ hash: x.txHash, height: x.height, direction: x.direction, asset: x.asset, amount: x.amount.toString(), accountIndex: x.accountIndex, subaddressIndex: x.subaddressIndex }));
+      const key = (x: { hash: string; accountIndex: number; subaddressIndex?: number; direction: string }) => x.hash + "/" + x.direction + "/" + x.accountIndex + "/" + x.subaddressIndex;
+      const want = funded.expect.transfers.slice().sort((a, b) => (key(a) < key(b) ? -1 : 1));
+      const have = got.slice().sort((a, b) => (key(a) < key(b) ? -1 : 1));
+      expect(show(have) === show(want), "transfers equal the expectations: " + show(have).substring(0, 600));
+      expect(txs.length === new Set(want.map((x) => x.hash)).size && txs.every((tx) => tx.isConfirmed && !tx.inPool && !tx.isFailed && tx.outgoingTransfer === undefined && tx.conversion === undefined && tx.feeAsset === undefined), "transactions: confirmed, incoming only");
+      expect(txs.every((tx) => tx.confirmations === h1 - (tx.height as number)), "confirmations equal the wallet height minus the transaction height");
+      // incoming sums equal the balances (wallet, account, subaddress, by asset)
+      const sum = (filter: (x: F.ZephyrWalletTransfer) => boolean) => { const m = new Map<string, bigint>(); for (const x of transfers) if (x.direction === "incoming" && filter(x)) m.set(x.asset as string, (m.get(x.asset as string) ?? BigInt(0)) + x.amount); return m; };
+      const balance = await w.getBalance();
+      const unlocked = await w.getUnlockedBalance();
+      const walletSums = sum(() => true);
+      for (const [asset, value] of balance) expect(value === (walletSums.get(asset) ?? BigInt(0)), "wallet balance " + asset + " equals the incoming sum");
+      for (const asset of walletSums.keys()) expect(balance.has(asset), "the wallet map has " + asset);
+      const accounts = await w.getAccounts({ includeSubaddresses: true });
+      const shapes: Record<string, unknown> = { wallet: show(balance), walletUnlocked: show(unlocked), accounts: [] as unknown[] };
+      for (const a of accounts) {
+        const accSums = sum((x) => x.accountIndex === a.index);
+        expect(show(new Map(Array.from(a.balance.entries()).sort())) === show(new Map(Array.from(accSums.entries()).sort())), "account " + a.index + " map equals its incoming sums");
+        const byMap = await w.getBalance(a.index);
+        for (const sub of a.subaddresses ?? []) {
+          const subSums = sum((x) => x.accountIndex === a.index && x.subaddressIndex === sub.index);
+          expect(show(new Map(Array.from(sub.balance.entries()).sort())) === show(new Map(Array.from(subSums.entries()).sort())), "subaddress " + a.index + "/" + sub.index + " map equals its incoming sums");
+          for (const [asset, v] of subSums) expect((await w.getBalance(asset, a.index, sub.index)) === v, "scalar " + asset + " " + a.index + "/" + sub.index);
+          const entry = byMap.get(sub.index);
+          expect(subSums.size === 0 ? entry === undefined || entry.size === 0 || Array.from(entry.values()).every((v) => v === BigInt(0)) : entry !== undefined && Array.from(subSums).every(([asset, v]) => entry.get(asset) === v), "account map entry of subaddress " + sub.index);
+        }
+        for (const [asset, v] of accSums) expect((await w.getBalance(asset, a.index)) === v, "scalar " + asset + " of account " + a.index);
+        (shapes.accounts as unknown[]).push({ index: a.index, balance: show(a.balance), unlockedBalance: show(a.unlockedBalance), accountMap: show(byMap), accountMapUnlocked: show(await w.getUnlockedBalance(a.index)),
+          subaddresses: (a.subaddresses ?? []).filter((x) => x.isUsed || x.balance.size > 0).map((x) => ({ index: x.index, balance: show(x.balance), unlockedBalance: show(x.unlockedBalance), isUsed: x.isUsed, numUnspentOutputs: x.numUnspentOutputs })),
+          unusedSubaddresses: (a.subaddresses ?? []).filter((x) => !x.isUsed && x.balance.size === 0).length });
+      }
+      // every filter on real data
+      const assets = Array.from(new Set(want.map((x) => x.asset))).sort();
+      const filters: Array<[string, F.ZephyrHistoryQuery, (x: FundedExpectations["transfers"][number]) => boolean]> = [];
+      for (const asset of assets) filters.push(["asset " + asset, { asset }, (x) => x.asset === asset]);
+      for (const a of Array.from(new Set(want.map((x) => x.accountIndex)))) { filters.push(["account " + a, { accountIndex: a }, (x) => x.accountIndex === a]); filters.push(["account " + a + " subaddress 0", { accountIndex: a, subaddressIndex: 0 }, (x) => x.accountIndex === a && x.subaddressIndex === 0]); }
+      filters.push(["incoming", { direction: "incoming" }, (x) => x.direction === "incoming"], ["outgoing", { direction: "outgoing" }, (x) => x.direction === "outgoing"],
+        ["confirmed", { status: "confirmed" }, () => true], ["pool", { status: "pool" }, () => false], ["failed", { status: "failed" }, () => false]);
+      const heights = want.map((x) => x.height).sort((a, b) => a - b);
+      const mid = heights[Math.floor(heights.length / 2)];
+      filters.push(["minHeight " + mid, { minHeight: mid }, (x) => x.height >= mid], ["maxHeight " + mid, { maxHeight: mid }, (x) => x.height <= mid], ["height range " + mid, { minHeight: mid, maxHeight: mid }, (x) => x.height === mid],
+        ["hashes", { hashes: [want[0].hash] }, (x) => x.hash === want[0].hash], ["asset and account", { asset: assets[0], accountIndex: 0 }, (x) => x.asset === assets[0] && x.accountIndex === 0]);
+      const filterResults: Record<string, number> = {};
+      for (const [label, q, pred] of filters) {
+        const list = await w.getTransfers(q);
+        const exp = want.filter(pred);
+        expect(list.length === exp.length && list.every((x) => exp.some((e) => e.hash === x.txHash && e.accountIndex === x.accountIndex && e.subaddressIndex === x.subaddressIndex && e.asset === x.asset)), "filter " + label + ": " + list.length + " transfers, expected " + exp.length);
+        const txList = await w.getTxs(q);
+        expect(txList.length === new Set(exp.map((e) => e.hash)).size, "filter " + label + ": transactions");
+        filterResults[label] = list.length;
+      }
+      for (const tx of txs) expect(show(await w.getTx(tx.hash)) === show(tx), "getTx " + tx.hash.substring(0, 8) + " equals the listing");
+      // direct and proxied results equal field by field (the synced bytes, opened in a worker without a sync)
+      const synced = await w.getData();
+      if (funded.saveSynced !== undefined) await funded.saveSynced({ keys: synced.keys, cache: synced.cache, password: funded.wallet.password });
+      const p = await F.openWalletData({ networkType: 0, password: funded.wallet.password, keysData: new Uint8Array(synced.keys), cacheData: new Uint8Array(synced.cache), proxyToWorker: true });
+      try {
+        expect(show(await p.getTxs()) === show(txs) && show(await p.getTransfers()) === show(transfers), "proxied listings equal the direct listings field by field");
+        for (const [label, q] of filters) expect(show(await p.getTransfers(q)) === show(await w.getTransfers(q)), "proxied filter " + label);
+        expect(show(await p.getAccounts({ includeSubaddresses: true })) === show(accounts) && show(await p.getBalance()) === show(balance), "proxied accounts and balances equal");
+      } finally { await p.close(); }
+      // confirmations grow with the daemon height: wait (bounded) for a new block, sync again
+      let dh = await w.getDaemonHeight();
+      const until = Date.now() + 480000;
+      while (dh <= h1 && Date.now() < until) { await new Promise((res) => setTimeout(res, 20000)); dh = await w.getDaemonHeight(); }
+      let grown: Record<string, unknown> = { waitedForBlock: dh > h1 };
+      if (dh > h1) {
+        await sync("N20", w, "funded copy, second sync", "real", undefined, dh - h1);
+        const h2 = await w.getHeight();
+        const later = await w.getTxs();
+        expect(h2 > h1 && later.length === txs.length && later.every((tx, i) => tx.hash === txs[i].hash && tx.confirmations === txs[i].confirmations + (h2 - h1)), "every transaction gained exactly the new blocks as confirmations");
+        grown = { waitedForBlock: true, h1, h2, confirmationsBefore: txs.map((tx) => tx.confirmations), confirmationsAfter: later.map((tx) => tx.confirmations) };
+      } else {
+        throw new CheckFailure("no new block within 8 minutes; confirmations not compared");
+      }
+      notes.push("funded copy: synced " + r1.numBlocksFetched + " blocks from " + h0 + " to " + h1 + "; " + txs.length + " transactions, " + transfers.length + " transfers; " + filters.length + " filters; direct and proxied equal");
+      return { startHeight: h0, height: h1, daemonHeight: dh0, numBlocksFetched: r1.numBlocksFetched, transactions: txs.map((tx) => ({ hash: tx.hash, height: tx.height, timestamp: tx.timestamp, confirmations: tx.confirmations, isLocked: tx.isLocked, fee: tx.fee === undefined ? undefined : tx.fee.toString(), unlockTime: tx.unlockTime.toString(), incoming: tx.incomingTransfers.length })),
+        transfers: got, shapes, filters: filterResults, confirmations: grown };
+    } finally {
+      await w.close();
+    }
+  }
 
   const entryGuard = await Internal.getNetworkGuardReport();
   report.networkGuard = combinedGuard(entryGuard, GUARD_LEDGER);

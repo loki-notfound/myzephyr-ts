@@ -1,4 +1,5 @@
 import ZephyrWalletError, { ZephyrWalletErrorDiagnostic, ZephyrWalletErrorCode, ZephyrNativeErrorContext } from "./ZephyrWalletError";
+import { checkTxHashes } from "./ZephyrHistory";
 
 /**
  * Central capability and argument specification of the supported wallet surface.
@@ -162,7 +163,9 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   "get_balance_wallet", "get_unlocked_balance_wallet", "get_balance_account", "get_unlocked_balance_account",
   "get_balance_asset", "get_unlocked_balance_asset", "is_daemon_synced",
   // accounts and subaddresses
-  "get_accounts", "get_account", "create_account", "get_subaddresses", "create_subaddress", "set_subaddress_label"
+  "get_accounts", "get_account", "create_account", "get_subaddresses", "create_subaddress", "set_subaddress_label",
+  // read-only history
+  "get_txs"
 ];
 
 /**
@@ -182,7 +185,6 @@ export const UNBUILT_BRIDGE_EXPORTS: readonly string[] = ["get_exception_message
   "get_height_by_date", "is_synced", "set_restore_height", "set_listener",
   "stop_syncing", "scan_txs", "rescan_spent", "rescan_blockchain",
   "get_balance_subaddress", "get_unlocked_balance_subaddress",
-  "get_txs",
   "get_transfers", "get_outputs", "export_outputs", "import_outputs", "export_key_images", "import_key_images", "freeze_output",
   "thaw_output", "is_output_frozen", "get_default_fee_priority", "create_txs", "sweep_output", "sweep_unlocked", "sweep_dust",
   "relay_txs", "describe_tx_set", "sign_txs", "submit_txs", "sign_message", "verify_message", "get_tx_key", "check_tx_key",
@@ -202,7 +204,7 @@ export const UNBUILT_KEEPALIVE_EXPORTS: readonly string[] = ["_request_wallet_sh
 export interface LifecycleArgSpec {
   readonly kind: "uint32" | "networkType" | "logLevel" | "string" | "optionalString" | "address" | "password"
     | "keysBytes" | "optionalBytes" | "emptyPath" | "absent" | "falseFlag" | "createConfig" | "keysConfig"
-    | "boolean" | "daemonUri" | "height" | "assetType" | "label" | "subaddressIndices";
+    | "boolean" | "daemonUri" | "height" | "assetType" | "label" | "subaddressIndices" | "historyStatus" | "historyHeight" | "txHashes";
   readonly optional?: boolean;
 }
 
@@ -263,6 +265,8 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   getSubaddresses: { scope: "wallet", kinds: FULL, args: [{ kind: "uint32" }, { kind: "subaddressIndices", optional: true }], nativeExports: ["get_subaddresses"], errorContext: "other" },
   createSubaddress: { scope: "wallet", kinds: FULL, args: [{ kind: "uint32" }, { kind: "label" }], nativeExports: ["create_subaddress"], errorContext: "other" },
   setSubaddressLabel: { scope: "wallet", kinds: FULL, args: [{ kind: "uint32" }, { kind: "uint32" }, { kind: "label" }], nativeExports: ["set_subaddress_label"], errorContext: "other" },
+  // read-only history of full wallets: one selection (status, height range, hashes); the reply is a strict DTO (common/ZephyrHistory.ts)
+  getHistory: { scope: "wallet", kinds: FULL, args: [{ kind: "historyStatus" }, { kind: "historyHeight", optional: true }, { kind: "historyHeight", optional: true }, { kind: "txHashes", optional: true }], nativeExports: ["get_txs"], errorContext: "other" },
   isClosed: { scope: "wallet", kinds: BOTH, args: [], nativeExports: [], errorContext: "other" },
   prepareClose: { scope: "wallet", kinds: FULL, args: [], nativeExports: [], errorContext: "close" },
   close: { scope: "wallet", kinds: BOTH, args: [{ kind: "falseFlag", optional: true }], nativeExports: ["close"], errorContext: "close" }
@@ -314,6 +318,9 @@ export function validateWorkerArgs(method: LifecycleWorkerMethod, args: readonly
       case "assetType": if (typeof value !== "string" || !/^[A-Z0-9]{1,16}$/.test(value)) fail("INVALID_CONFIG", "ASSET_TYPE"); break;
       case "label": checkLabel(value); break;
       case "subaddressIndices": checkSubaddressIndices(value); break;
+      case "historyStatus": if (value !== "all" && value !== "confirmed" && value !== "pool" && value !== "failed") fail("INVALID_CONFIG", "FIELD_TYPE"); break;
+      case "historyHeight": if (!isRestoreHeight(value)) fail("INVALID_CONFIG", "HEIGHT_RANGE"); break;
+      case "txHashes": checkTxHashes(value); break;
       case "createConfig":
       case "keysConfig": if (value === null || typeof value !== "object" || Array.isArray(value)) fail("INVALID_CONFIG", "CONFIG_TYPE"); break;
     }

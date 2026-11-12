@@ -42,8 +42,11 @@
  * at most 30 s, binary at most 120 s, the core's shorter bound where it has one); there is no
  * native cancellation, and a wallet's other calls, close included, wait for a running request;
  * terminate ends a proxied wallet's worker without waiting.
- * Not supported: listeners, background sync, history, outputs, transactions, key images, rescans
- * and any relay.
+ * Read-only history of full wallets: getTxs, getTransfers and getTx list the wallet's transactions
+ * and transfers per asset as the last sync stored them (no daemon request; incoming transfers still in
+ * the pool appear once confirmed).
+ * Not supported: listeners, background sync, outputs, creating or sending transactions, key images,
+ * rescans and any relay.
  */
 export {
   ZephyrWallet,
@@ -66,5 +69,6 @@ export type {
 } from "./wallet/ZephyrWallet";
 export type { ZephyrAssetBalances, ZephyrAccountBalances } from "./common/ZephyrBalances";
 export type { ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions } from "./common/ZephyrAccounts";
+export type { ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination, ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "./common/ZephyrHistory";
 export { default as ZephyrWalletError } from "./common/ZephyrWalletError";
 export type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./common/ZephyrWalletError";

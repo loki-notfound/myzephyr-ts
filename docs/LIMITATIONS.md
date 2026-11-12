@@ -85,6 +85,49 @@ created or restored by this library, not to imported bytes. Open bytes only from
 to the same degree as the wallet itself, and prefer the worker mode, which confines a failure to
 that wallet's worker.
 
+## History
+
+* The history reads what the wallet stored at its last sync; no call sends a request. Incoming
+  transfers that are still in the pool are not listed until they are confirmed: the core lists them
+  only after fetching the pool from the daemon, which the library does not let a listing do. Own
+  outgoing transactions in the pool and failed ones are listed (`status` `"pool"` and `"failed"`);
+  `getTx` of an incoming transaction still in the pool rejects with `TX_NOT_FOUND`.
+* Proven on real data: incoming transfers in ZPH, ZSD, ZRS and ZYS at two accounts, their heights,
+  confirmations, amounts and the sums per asset against the balances, read the same by
+  zephyr-javascript. Not proven on real data, because no test wallet has sent anything: outgoing
+  transfers and their destinations, conversions, fees paid, change, own transactions in the pool and
+  failed ones. Their decoding follows the core's records and is tested with constructed records only.
+* The core reports no fee asset. `feeAsset` is the asset of the outgoing transfer (fees are paid in
+  the source asset); a transaction without an outgoing transfer has no `feeAsset`, although its
+  `fee` (paid by the sender) is reported.
+* For an outgoing transfer the core computes the amount as inputs minus change minus fee, and the
+  fee as inputs minus outputs, from its own records; for a conversion, whose outputs are in another
+  asset, these values come from that computation as well and are unproven. `conversion` is derived
+  from the outgoing transfer's asset and its destinations' asset and amounts.
+* Not returned: transaction notes, payment identifiers, outputs and their assets (the core does not
+  store the asset of an output), key images, transaction keys and proofs (`checkTxKey` reads zero
+  amounts in this core).
+* A destination address is the text the sending wallet stored; it is returned only if it has the
+  form of an address (else the field is absent) and is otherwise untrusted.
+* Cost: every listing walks all of the wallet's stored transfers in the core (the height range
+  narrows what is returned, not what is read), and the bound is checked after the core built the
+  selection. A wallet with a long history therefore pays for its whole history on every call.
+* Memory: each listing call of the core keeps 944 bytes it never frees (plus about 104 bytes per
+  requested hash): the core copies the query into two objects that refer to each other. `getTxs()`,
+  `getTx` and listings without `status` make two such calls, the others one. A wallet in its own worker
+  returns this memory when it is closed or stopped; with `proxyToWorker: false` it stays until the
+  page or process ends. Avoid listing in a tight loop.
+
+## Text from wallets and the chain
+
+Labels, destination addresses and every other text that comes from wallet bytes or from the chain
+are untrusted display text. Wallet bytes made elsewhere are returned as stored, and a label may
+contain bidirectional controls (U+202A to U+202E, U+2066 to U+2069), zero-width characters and
+characters that look like others or like markup. A wallet application should render such text as
+text, never as markup (no `innerHTML`), isolate its direction (for example `<bdi>` or Unicode
+isolates), and show it apart from the application's own strings, so that a label cannot pass for a
+button, an amount or an address. The library never copies such text into an error or a log line.
+
 ## Other limits
 
 * The core's `change_password` does not verify the old password in the WebAssembly build; the
@@ -92,9 +135,10 @@ that wallet's worker.
   unknown; the wallet then refuses every operation except `close`.
 * Failed openings of wrong-password bytes leak a few kilobytes inside the core; in worker mode the
   leak goes away with the construction's worker.
-* No funded test has been run: balances are verified in shape, not in amounts. This includes the
-  account and subaddress maps, `isUsed` and `numUnspentOutputs`, which are zero or empty for every
-  wallet tested so far.
+* Balances other than zero are verified with a funded test wallet that received five transfers in
+  four assets (ZPH, ZSD, ZRS, ZYS) at two accounts: the wallet, account and subaddress maps,
+  `isUsed` and `numUnspentOutputs` equal the received transfers. Nothing has been sent from a test
+  wallet, so spent outputs, change and balances after a spend are not verified.
 * Account and subaddress calls check every index against the wallet's own listings, because the
   core's wallet wrapper has no count of them: a call with a subaddress index, or one that lists
   subaddresses, takes time proportional to the account's number of subaddresses times the wallet's

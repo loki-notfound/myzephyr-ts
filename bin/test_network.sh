@@ -22,6 +22,12 @@
 # without funds is kept in build/test-wallets/ between the runs. Results (codes, counts, heights and
 # timings only) go to build/test-results/network/.
 #
+# N19 (history sends no request) runs in every run; N20 (the history of a funded test wallet) only in the
+# Node direct run and only with FUNDED_WALLET_IN (a directory with a copy of the wallet: keys.bin,
+# cache.bin, password.txt) and FUNDED_EXPECT (its expected history, JSON), both from outside this tree;
+# without them N20 is reported as not run. N20 makes two more syncs of that copy (one after the next
+# block) and never writes the copy; FUNDED_WALLET_OUT=<new directory> receives the synced bytes.
+#
 # Environment (optional): CHROMIUM=<browser binary> (default: chromium); DIRECT_CHECKS, WORKER_CHECKS
 # and BROWSER_CHECKS select a subset of the checks per run (checks after N02 that reopen the measured
 # wallet need N02 in DIRECT_CHECKS); ZEPHYR_TS_TEST_KEEP_WALLET=<new directory> keeps a copy of the
@@ -36,9 +42,15 @@ CHROMIUM=${CHROMIUM:-chromium}
 OUT=$ROOT/build/test-results/network; SEED=$ROOT/build/test-wallets/network-seed
 rm -rf "$OUT" "$SEED"; mkdir -p "$OUT" "$(dirname "$SEED")"; chmod 700 "$OUT" "$(dirname "$SEED")"
 MARKER=MARKERnodetext
-DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18}
-WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16}
-BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16}
+DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N20}
+WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16,N19}
+BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16,N19}
+FUNDED_ARGS=()
+if [ -n "${FUNDED_WALLET_IN:-}" ] || [ -n "${FUNDED_EXPECT:-}" ]; then
+  [ -s "${FUNDED_WALLET_IN:-}/keys.bin" ] && [ -s "${FUNDED_EXPECT:-}" ] || die "FUNDED_WALLET_IN and FUNDED_EXPECT go together"
+  FUNDED_ARGS=(--funded-in "$FUNDED_WALLET_IN" --funded-expect "$FUNDED_EXPECT")
+  [ -z "${FUNDED_WALLET_OUT:-}" ] || FUNDED_ARGS+=(--funded-out "$FUNDED_WALLET_OUT")
+fi
 UPSTREAM=$(node -e 'console.log(require(process.argv[1]).requireTestEndpoints().upstream.url)' "$ROOT/src/test/network/testEndpoints.cjs")
 
 NOT_RUN=$OUT/not-run.txt; : > "$NOT_RUN"
@@ -79,7 +91,7 @@ fs.writeFileSync(process.argv[3], JSON.stringify({ direct: e.direct.url, lb: e.t
   ! grep -q '"allowed":false' "$run/monitor.jsonl" || die "Node network run ($mode): a connection outside the configured daemons was blocked"
 }
 
-node_run direct "$DIRECT_CHECKS" --seed-out "$SEED"
+node_run direct "$DIRECT_CHECKS" --seed-out "$SEED" "${FUNDED_ARGS[@]}"
 if [[ ",$DIRECT_CHECKS," == *",N02,"* ]]; then
   [ -s "$SEED/keys.bin" ] || die "seed wallet missing after the direct run"
   node_run worker "$WORKER_CHECKS" --seed-in "$SEED"

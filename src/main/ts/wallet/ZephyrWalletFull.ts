@@ -40,6 +40,7 @@ import { MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL, checkLabel, checkSuba
 import HttpClient from "../common/HttpClient";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
 import { ZephyrAccountBalances, ZephyrAssetBalances, fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalances";
+import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, ZephyrWalletTx, checkSelection, fromTxsDto, parseBridgeTxs } from "../common/ZephyrHistory";
 import { ZephyrAccount, ZephyrAddressIndex, ZephyrSubaddress, fromAccountDto, fromAccountsDto, fromAddressIndexDto, fromSubaddressDto, fromSubaddressesDto, parseBridgeAccount, parseBridgeAccounts, parseBridgeAddressIndex, parseBridgeSubaddress, parseBridgeSubaddresses } from "../common/ZephyrAccounts";
 import { configFields, toCoreConfigJson, validateCreateConfig, validateOpenConfig } from "./model/ZephyrWalletCoreConfig";
 import { ZephyrWalletKeys, ZephyrWalletKeysProxy } from "./ZephyrWalletKeys";
@@ -937,37 +938,23 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     });
   }
   
-  async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> {
-    if (this.getWalletProxy()) return this.getWalletProxy().getTxs(query);
-
-    // copy and normalize query up to block
-    const queryNormalized = query = ZephyrWalletBase.normalizeTxQuery(query);
-    
-    // schedule task
+  /**
+   * Read-only history: the wallet's transactions in a selection (status, height range, hashes), each
+   * with all of its transfers, from what the last sync stored; no daemon request (common/ZephyrHistory.ts).
+   */
+  async getHistoryChecked(selection: ZephyrHistorySelection): Promise<ReadonlyArray<ZephyrWalletTx>> {
+    const s = checkSelection(selection?.status, selection?.minHeight, selection?.maxHeight, selection?.hashes);
+    if (this.getWalletProxy()) return this.getWalletProxy().getHistoryChecked(s);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return new Promise((resolve, reject) => {
-        
-        // call wasm which invokes callback
-        this.module.get_txs(this.cppAddress, JSON.stringify(queryNormalized.getBlock().toJson()), (blocksJsonStr) => {
-          
-          // check for error
-          if (blocksJsonStr.charAt(0) !== '{') {
-            reject(new ZephyrError(blocksJsonStr));
-            return;
-          }
-          
-          // resolve with deserialized txs
-          try {
-            resolve(ZephyrWalletFull.deserializeTxs(queryNormalized, blocksJsonStr));
-          } catch (err) {
-            reject(err);
-          }
-        });
-      });
+      return parseBridgeTxs(ZephyrWalletError.checkBridgeResult("other", this.module.get_txs(this.cppAddress, s.status, s.minHeight === undefined ? "" : String(s.minHeight),
+        s.maxHeight === undefined ? "" : String(s.maxHeight), s.hashes === undefined ? "" : s.hashes.join(","), MAX_TXS_PER_CALL, MAX_TRANSFERS_PER_CALL)), s);
     });
   }
-  
+
+  // the inherited query-based listing reached a binding whose signature changed (get_txs); see getHistoryChecked
+  async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+
   async getTransfers(query?: Partial<ZephyrTransferQuery>): Promise<ZephyrTransfer[]> {
     if (this.getWalletProxy()) return this.getWalletProxy().getTransfers(query);
     
@@ -2354,11 +2341,13 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     return fromAddressIndexDto(await this.invokeWorker("getAddressIndex", [address]));
   }
   
-  async getTxs(query) {
-    query = ZephyrWalletBase.normalizeTxQuery(query);
-    let respJson = await this.invokeWorker("getTxs", [query.getBlock().toJson()]);
-    return ZephyrWalletFull.deserializeTxs(query, JSON.stringify({blocks: respJson.blocks})); // initialize txs from blocks json string TODO: this stringifies then utility parses, avoid
+  async getHistoryChecked(selection: ZephyrHistorySelection): Promise<ReadonlyArray<ZephyrWalletTx>> {
+    const args: unknown[] = [selection.status, selection.minHeight, selection.maxHeight];
+    if (selection.hashes !== undefined) args.push(selection.hashes.slice());
+    return fromTxsDto(await this.invokeWorker("getHistory", args), selection);
   }
+
+  async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
   
   async getTransfers(query) {
     query = ZephyrWalletBase.normalizeTransferQuery(query);

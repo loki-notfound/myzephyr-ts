@@ -1,7 +1,8 @@
 /**
  * Node runner of the redirect checks (test only): starts the two loopback servers of
  * redirectServers.cjs in this process and runs RedirectChecks.ts with a wallet in the main thread
- * (--mode direct) or in its own worker (--mode worker), with the release module.
+ * (--mode direct) or in its own worker (--mode worker), with the release module; then the history
+ * check of HistoryRequestCheck.ts (no request during getTxs, getTransfers and getTx).
  *
  *   node --require nodeMonitor.cjs runRedirectNode.js --mode direct|worker --out report.json
  *
@@ -12,6 +13,7 @@
 import fs from "fs";
 import path from "path";
 import { runRedirectChecks } from "./RedirectChecks";
+import { runHistoryRequestCheck } from "./HistoryRequestCheck";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf("--" + name);
@@ -31,8 +33,12 @@ async function main(): Promise<number> {
   const servers = await startRedirectServers();
   process.env.LIFECYCLE_MONITOR_ALLOW_CONNECT = "127.0.0.1:" + servers.ports.first + ",127.0.0.1:" + servers.ports.second;
   let report;
+  let history;
   try {
-    report = await runRedirectChecks("node-" + mode, mode, { first: servers.first, stats: async () => servers.snapshot() });
+    const targets = { first: servers.first, stats: async () => servers.snapshot() };
+    report = await runRedirectChecks("node-" + mode, mode, targets);
+    history = await runHistoryRequestCheck(mode, targets);
+    report = Object.assign({}, report, { checks: report.checks.concat([history.check]), history: { requestsBeforeHistory: history.requestsBeforeHistory, requestsDuringHistory: history.requestsDuringHistory, historyCalls: history.historyCalls } });
   } finally {
     await servers.close();
   }

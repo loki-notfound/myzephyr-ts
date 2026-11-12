@@ -13,6 +13,7 @@ import ZephyrWalletError, { bridgeErrorOf, bridgePasswordErrorOf } from "../../m
 import { RawWorker, channelOf, combinedGuard, installGuardLedger, newMessageId, postRawWorkerMessage, sanitize, skipGuardRead, walletIdOf } from "./testSupport";
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
+import * as History from "../../main/ts/common/ZephyrHistory";
 
 export type CheckStatus = "pass" | "fail" | "not-run";
 
@@ -570,7 +571,7 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
   await check("C12", "Unsupported calls reject as UNSUPPORTED_CAPABILITY before native access", async (notes) => {
     const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
     const calls: Array<[string, () => Promise<unknown>]> = [
-      ["startSyncing", () => w.startSyncing()], ["getTxs", () => w.getTxs()],
+      ["startSyncing", () => w.startSyncing()],
       ["createTxs", () => w.createTxs()], ["addListener", () => w.addListener()],
       ["getReserveProofWallet", () => w.getReserveProofWallet()], ["rescanSpent", () => w.rescanSpent()], ["importKeyImages", () => w.importKeyImages()],
       ["asset-less getBalance(account, subaddress)", () => (w.getBalance as unknown as (a: number, b: number) => Promise<unknown>)(0, 0)]
@@ -1475,6 +1476,115 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       await l.close();
     }
     notes.push("lookahead 1x20000 and 20000x1: creation, listing, lookahead addresses resolve with getAddressIndex but are not listed until created");
+  });
+
+  await check("C31", "History of a wallet without transactions: empty frozen listings in every selection, TX_NOT_FOUND for a hash it does not have; query, hash and kind rejections before any native call", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    const hash = Array.from({ length: 64 }, (_, i) => "0123456789abcdef"[(i * 7 + 3) % 16]).join("");
+    for (const q of [undefined, {}, { status: "confirmed" }, { status: "pool" }, { status: "failed" }, { minHeight: 0, maxHeight: 2000000 }, { asset: "ZPH", direction: "incoming" }, { accountIndex: 0, subaddressIndex: 0 }] as Array<F.ZephyrHistoryQuery | undefined>) {
+      const txs = await w.getTxs(q);
+      const transfers = await w.getTransfers(q);
+      expect(Array.isArray(txs) && txs.length === 0 && Object.isFrozen(txs), "getTxs(" + JSON.stringify(q) + ") is an empty frozen array");
+      expect(Array.isArray(transfers) && transfers.length === 0 && Object.isFrozen(transfers), "getTransfers(" + JSON.stringify(q) + ") is an empty frozen array");
+    }
+    await expectCode(w.getTx(hash), "INVALID_CONFIG", "getTx of a hash the wallet does not have", notes, "TX_NOT_FOUND");
+    await expectCode(w.getTxs({ hashes: [hash] }), "INVALID_CONFIG", "getTxs with a hash the wallet does not have", notes, "TX_NOT_FOUND");
+    await expectCode(w.getTransfers({ hashes: [hash], status: "confirmed" }), "INVALID_CONFIG", "getTransfers with a hash the wallet does not have", notes, "TX_NOT_FOUND");
+    const upper = hash.toUpperCase();
+    const many = Array.from({ length: 1001 }, (_, i) => i.toString(16).padStart(64, "0"));
+    const rejected: Array<[string, () => Promise<unknown>, string, string]> = [];
+    for (const [q, diag] of [[5, "CONFIG_TYPE"], ["x", "CONFIG_TYPE"], [[], "CONFIG_TYPE"], [null, "CONFIG_TYPE"], [new Date(0), "CONFIG_TYPE"], [{ other: 1 }, "UNKNOWN_FIELD"],
+      [{ asset: "zph" }, "ASSET_TYPE"], [{ asset: "" }, "ASSET_TYPE"], [{ asset: 7 }, "ASSET_TYPE"], [{ accountIndex: -1 }, "ADDRESS_INDEX_RANGE"], [{ accountIndex: 4294967296 }, "ADDRESS_INDEX_RANGE"],
+      [{ accountIndex: 0, subaddressIndex: 1.5 }, "ADDRESS_INDEX_RANGE"], [{ subaddressIndex: 0 }, "QUERY_ACCOUNT_REQUIRED"], [{ direction: "in" }, "FIELD_TYPE"], [{ status: "all" }, "FIELD_TYPE"],
+      [{ status: true }, "FIELD_TYPE"], [{ minHeight: -1 }, "HEIGHT_RANGE"], [{ maxHeight: 1.5 }, "HEIGHT_RANGE"], [{ minHeight: 2 ** 53 }, "HEIGHT_RANGE"], [{ minHeight: "5" }, "HEIGHT_RANGE"],
+      [{ minHeight: 10, maxHeight: 9 }, "HEIGHT_RANGE"], [{ hashes: [] }, "TX_HASHES"], [{ hashes: hash }, "TX_HASHES"], [{ hashes: [hash, hash] }, "TX_HASHES"], [{ hashes: [upper] }, "TX_HASH"],
+      [{ hashes: [hash.substring(1)] }, "TX_HASH"], [{ hashes: [7] }, "TX_HASH"], [{ hashes: many }, "LISTING_LIMIT"]] as Array<[unknown, string]>) {
+      rejected.push(["getTxs(" + diag + ")", () => w.getTxs(q as F.ZephyrHistoryQuery), "INVALID_CONFIG", diag]);
+      rejected.push(["getTransfers(" + diag + ")", () => w.getTransfers(q as F.ZephyrHistoryQuery), "INVALID_CONFIG", diag]);
+    }
+    for (const [h, what] of [["", "empty"], [upper, "upper case"], [hash + "0", "65 characters"], [hash.substring(1), "63 characters"], ["g" + hash.substring(1), "not hexadecimal"], [7, "a number"], [undefined, "absent"]] as Array<[unknown, string]>) {
+      rejected.push(["getTx(" + what + ")", () => w.getTx(h as string), "INVALID_CONFIG", "TX_HASH"]);
+    }
+    rejected.push(["getTxs with a second argument", () => (w.getTxs as (...a: unknown[]) => Promise<unknown>)({}, {}), "INVALID_CONFIG", "FIELD_TYPE"]);
+    const native = await countNativeCalls(async () => {
+      for (const [what, fn, code, diag] of rejected) await expectCode(fn(), code, what, notes, diag);
+    });
+    if (!proxy) expect(native === 0, "no native export called by " + rejected.length + " rejected calls, got " + native);
+    notes.push(rejected.length + " rejections before dispatch" + (proxy ? "" : "; native calls " + native));
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy });
+    for (const [label, fn] of [["getTxs", () => k.getTxs()], ["getTransfers", () => k.getTransfers()], ["getTx", () => k.getTx(hash)]] as Array<[string, () => Promise<unknown>]>) {
+      await expectCode(fn(), "UNSUPPORTED_CAPABILITY", "keys-only " + label, notes, "KEYS_ONLY_HISTORY");
+    }
+    await k.close();
+    await w.close();
+    await expectCode(w.getTxs(), "WALLET_CLOSED", "getTxs after close", notes);
+    await expectCode(w.getTx(hash), "WALLET_CLOSED", "getTx after close", notes);
+  });
+
+  await check("C32", "History decoding: the bridge's transaction shape and the worker DTO are accepted exactly, every deviation rejects with a fixed code; conversion and fee asset as derived; DTOs round-trip", async (notes) => {
+    const h = (n: number) => n.toString(16).padStart(64, "0");
+    const addr = address; // the primary address of C01's wallet, a well-formed address of this network
+    // wire records of the core's shape (decimal strings for uint64 values): a confirmed incoming transaction in
+    // two subaddresses, a confirmed outgoing conversion with change, a pending outgoing transfer, a failed one
+    const incoming = { hash: h(1), height: "905900", timestamp: "1794460000", confirmations: "10", isConfirmed: true, inPool: false, isFailed: false, isLocked: false, isMinerTx: false,
+      fee: "12340000", unlockTime: "0", incoming: [{ asset: "ZPH", amount: "100000000000000", accountIndex: 0, subaddressIndex: 0 }, { asset: "ZSD", amount: "5", accountIndex: 1, subaddressIndex: 0 }] };
+    const conversion = { hash: h(2), height: "905901", timestamp: "1794460100", confirmations: "9", isConfirmed: true, inPool: false, isFailed: false, isLocked: true, isMinerTx: false,
+      fee: "3000000", unlockTime: "0", incoming: [{ asset: "ZRS", amount: "52604320000000", accountIndex: 0, subaddressIndex: 0 }],
+      outgoing: { asset: "ZPH", amount: "50000000000000", accountIndex: 0, subaddressIndices: [0], destinations: [{ address: addr, amount: "52604320000000", asset: "ZRS" }] } };
+    const pending = { hash: h(4), confirmations: "0", isConfirmed: false, inPool: true, isFailed: false, isLocked: true, isMinerTx: false, fee: "1", unlockTime: "0", incoming: [],
+      outgoing: { asset: "ZSD", amount: "7", accountIndex: 0, subaddressIndices: [0, 3], destinations: [{ amount: "7", asset: "ZSD" }] } };
+    const failed = { hash: h(3), confirmations: "0", isConfirmed: false, inPool: false, isFailed: true, isLocked: true, isMinerTx: false, unlockTime: "0", incoming: [],
+      outgoing: { amount: "1", accountIndex: 0, subaddressIndices: [], destinations: [] } };
+    const records = [incoming, conversion, failed, pending];
+    const all = { status: "all" as const };
+    const bridgeJson = (txs: unknown[]) => JSON.stringify({ txs });
+    const txs = History.parseBridgeTxs(bridgeJson(records), all);
+    expect(txs.length === 4 && Object.isFrozen(txs) && txs.every((t) => Object.isFrozen(t) && Object.isFrozen(t.incomingTransfers)), "four transactions, frozen");
+    const [a, b, c, d] = txs;
+    expect(a.height === 905900 && a.timestamp === 1794460000 && a.confirmations === 10 && a.fee === BigInt(12340000) && a.feeAsset === undefined && a.unlockTime === BigInt(0), "confirmed incoming: fields; no fee asset without an outgoing transfer");
+    expect(a.incomingTransfers.map((t) => t.direction + ":" + t.asset + ":" + t.amount + ":" + t.accountIndex + "/" + t.subaddressIndex + ":" + t.txHash.substring(60) + ":" + t.height + ":" + t.confirmations).join() ===
+      "incoming:ZPH:100000000000000:0/0:0001:905900:10,incoming:ZSD:5:1/0:0001:905900:10", "incoming transfers with their transaction reference");
+    expect(b.outgoingTransfer?.asset === "ZPH" && b.feeAsset === "ZPH" && b.conversion?.sourceAsset === "ZPH" && b.conversion.destinationAsset === "ZRS" && b.conversion.sourceAmount === BigInt("50000000000000")
+      && b.conversion.destinationAmount === BigInt("52604320000000") && b.outgoingTransfer.destinations?.[0].address === addr, "conversion: source and destination as derived from the core's fields");
+    expect(c.isFailed && c.height === undefined && c.timestamp === undefined && c.fee === undefined && c.feeAsset === undefined && c.conversion === undefined && c.outgoingTransfer?.asset === undefined, "failed: absent values stay absent");
+    expect(d.inPool && d.conversion === undefined && d.outgoingTransfer?.subaddressIndices?.join() === "0,3" && d.outgoingTransfer.destinations?.[0].address === undefined, "pending: no conversion for a same-asset transfer, a destination without address");
+    // the worker DTO round-trips field by field and parses to equal results
+    const dtos = txs.map(History.toTxDto);
+    const again = History.fromTxsDto(JSON.parse(JSON.stringify(dtos)), all);
+    const show = (list: ReadonlyArray<unknown>) => JSON.stringify(list, (k, v) => (typeof v === "bigint" ? "n" + v.toString() : v));
+    expect(show(again) === show(txs), "DTO round trip equals the bridge result");
+    expect(JSON.stringify(dtos.map((x) => Object.keys(x))) === JSON.stringify(records.map((x) => Object.keys(x).filter((k) => k !== "asset"))), "DTO fields are the wire fields");
+    // filters on the decoded data
+    expect(History.filterTxs(txs, { asset: "ZSD" }).map((t) => t.hash.substring(60)).join() === "0001,0004", "asset filter selects transactions by any transfer");
+    expect(History.filterTransfers(txs, { direction: "outgoing" }).length === 3 && History.filterTransfers(txs, { accountIndex: 1 }).length === 1 && History.filterTransfers(txs, { accountIndex: 0, subaddressIndex: 3 }).length === 1, "transfer filters");
+    // every deviation rejects: the bridge with NATIVE_ERROR/UNEXPECTED_RESULT, the worker DTO with MALFORMED_MESSAGE/MESSAGE_SHAPE
+    const mutate = (fn: (r: Record<string, any>) => void): unknown[] => { const copy = JSON.parse(JSON.stringify(records)); fn(copy[0]); return copy; };
+    const cases: Array<[string, unknown[], History.ZephyrHistorySelection]> = [
+      ["extra field", mutate((r) => { r.note = "text"; }), all], ["missing field", mutate((r) => { delete r.isLocked; }), all], ["upper-case hash", mutate((r) => { r.hash = "AB".repeat(32); }), all],
+      ["short hash", mutate((r) => { r.hash = "00"; }), all], ["confirmed without height", mutate((r) => { delete r.height; }), all], ["two states", mutate((r) => { r.inPool = true; }), all],
+      ["unconfirmed with confirmations", JSON.parse(JSON.stringify(records)).map((r: Record<string, unknown>) => (r.inPool ? Object.assign(r, { confirmations: "1" }) : r)), all],
+      ["amount as a number", mutate((r) => { r.incoming[0].amount = 1; }), all], ["amount above 2^64-1", mutate((r) => { r.incoming[0].amount = "18446744073709551616"; }), all],
+      ["amount with a sign", mutate((r) => { r.incoming[0].amount = "-1"; }), all], ["negative index", mutate((r) => { r.incoming[0].accountIndex = -1; }), all],
+      ["lower-case asset", mutate((r) => { r.incoming[0].asset = "zph"; }), all], ["incoming out of order", mutate((r) => { r.incoming.reverse(); }), all],
+      ["extra transfer field", mutate((r) => { r.incoming[0].address = addr; }), all], ["no transfer", mutate((r) => { r.incoming = []; }), all],
+      ["height above 2^53", mutate((r) => { r.height = "9007199254740993"; }), all], ["duplicate hash", JSON.parse(JSON.stringify(records)).map((r: Record<string, unknown>) => Object.assign(r, { hash: h(1) })), all],
+      ["out of order", JSON.parse(JSON.stringify(records)).reverse(), all], ["outside the status", JSON.parse(JSON.stringify(records)), { status: "confirmed" }],
+      ["outside the height range", JSON.parse(JSON.stringify(records)).slice(0, 2), { status: "all", minHeight: 905901 }], ["not a requested hash", JSON.parse(JSON.stringify(records)).slice(0, 1), { status: "all", hashes: [h(9)] }],
+      ["a requested hash missing", JSON.parse(JSON.stringify(records)).slice(0, 1), { status: "all", hashes: [h(1), h(2)] }],
+      ["destination with an invalid address", JSON.parse(JSON.stringify(records)).map((r: Record<string, any>) => (r.outgoing && r.outgoing.destinations.length ? (r.outgoing.destinations[0].address = "<b>x</b>", r) : r)), all],
+      ["more than 1,000 transactions", Array.from({ length: 1001 }, (_, i) => Object.assign(JSON.parse(JSON.stringify(incoming)), { hash: h(1000 + i) })), all]
+    ];
+    let rejectedBridge = 0;
+    let rejectedDto = 0;
+    for (const [what, list, sel] of cases) {
+      try { History.parseBridgeTxs(bridgeJson(list), sel); notes.push("bridge accepted: " + what); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") rejectedBridge++; else notes.push("bridge " + what + ": " + codeOf(err)); }
+      try { History.fromTxsDto(list, sel); notes.push("dto accepted: " + what); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "MALFORMED_MESSAGE/MESSAGE_SHAPE") rejectedDto++; else notes.push("dto " + what + ": " + codeOf(err) + diagnosticOf(err)); }
+    }
+    expect(rejectedBridge === cases.length && rejectedDto === cases.length, "every deviation rejected (" + rejectedBridge + " and " + rejectedDto + " of " + cases.length + ")");
+    for (const bad of ["", "[]", "{\"txs\":{}}", "{\"txs\":[],\"more\":1}", "{bad json"]) {
+      try { History.parseBridgeTxs(bad, all); expect(false, "bridge text accepted"); } catch (err) { expect(codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT", "malformed bridge text rejected"); }
+    }
+    notes.push(cases.length + " deviations rejected by the bridge parser and by the worker DTO parser; 5 malformed bridge texts rejected");
   });
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close

@@ -114,7 +114,12 @@ export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // subaddress indices and a listing above the per-call bounds reject with INVALID_CONFIG; a foreign
   // address with INVALID_ADDRESS/ADDRESS_NOT_IN_WALLET (a malformed one: CORE_INVALID_ADDRESS)
   "KEYS_ONLY_ACCOUNTS", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LABEL_TYPE", "LABEL_LENGTH", "LABEL_CHARACTERS",
-  "SUBADDRESS_INDICES", "LISTING_LIMIT", "ADDRESS_NOT_IN_WALLET"
+  "SUBADDRESS_INDICES", "LISTING_LIMIT", "ADDRESS_NOT_IN_WALLET",
+  // read-only history of full wallets: keys-only wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_HISTORY;
+  // with INVALID_CONFIG a malformed transaction hash, a hash list that is not a non-empty array of distinct
+  // hashes, a height range that is not a pair of safe integers from low to high, a subaddress index
+  // without an account index, and a hash the wallet's selection does not contain
+  "KEYS_ONLY_HISTORY", "TX_HASH", "TX_HASHES", "HEIGHT_RANGE", "QUERY_ACCOUNT_REQUIRED", "TX_NOT_FOUND"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];
@@ -141,7 +146,9 @@ export const BRIDGE_ERROR_IDENTIFIERS = [
   "SYNC_START_HEIGHT", "ASSET_TYPE", "UNEXPECTED_ASSET_TYPE",
   // accounts and subaddresses (and the index checks of the account and asset balance bindings)
   "KEYS_ONLY_ACCOUNTS", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS",
-  "SUBADDRESS_INDICES", "ADDRESS_NOT_IN_WALLET", "UNEXPECTED_RESULT"
+  "SUBADDRESS_INDICES", "ADDRESS_NOT_IN_WALLET", "UNEXPECTED_RESULT",
+  // read-only history
+  "KEYS_ONLY_HISTORY", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND"
 ] as const;
 
 export type ZephyrBridgeErrorIdentifier = typeof BRIDGE_ERROR_IDENTIFIERS[number];
@@ -153,12 +160,12 @@ const BRIDGE_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})"\}$/;
 const BRIDGE_PASSWORD_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})","passwordState":"(unchanged|changed|unknown)"\}$/;
 
 /** Bridge identifiers whose code does not depend on the call context. */
-const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "REGTEST", "LISTENER", "SAVE_ON_CLOSE", "KEYS_ONLY_ACCOUNTS"]);
+const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "REGTEST", "LISTENER", "SAVE_ON_CLOSE", "KEYS_ONLY_ACCOUNTS", "KEYS_ONLY_HISTORY"]);
 const BRIDGE_INVALID_CONFIG: ReadonlySet<string> = new Set(["NETWORK_TYPE", "CREATE_MODE", "SEED_LANGUAGE", "SEED_AND_KEYS", "CORE_UNKNOWN_LANGUAGE", "CORE_LOOKAHEAD"]);
 const BRIDGE_INVALID_RECOVERY: ReadonlySet<string> = new Set(["SEED_EMPTY", "KEYS_MISSING"]);
 /** Daemon results keep DAEMON_ERROR and argument checks INVALID_CONFIG in every context */
 const BRIDGE_DAEMON: ReadonlySet<string> = new Set(["DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED"]);
-const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS", "SUBADDRESS_INDICES"]);
+const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS", "SUBADDRESS_INDICES", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND"]);
 
 function isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic {
   return typeof value === "string" && (ZEPHYR_WALLET_ERROR_DIAGNOSTICS as readonly string[]).includes(value);

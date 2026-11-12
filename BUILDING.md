@@ -89,8 +89,8 @@ host.
 
 runs, with no network access:
 
-* the lifecycle suite (checks `C01`-`C30`) with the release module and the instrumented suite
-  (`T00`-`T18`) with the test module, in Node.js directly and through wallet workers, under a
+* the lifecycle suite (checks `C01`-`C32`) with the release module and the instrumented suite
+  (`T00`-`T19`) with the test module, in Node.js directly and through wallet workers, under a
   preloaded monitor that blocks every connection and records unexpected file writes;
 * the module loading cases in Node.js, directly and through workers: a missing `zephyr.wasm`,
   a file that is not WebAssembly, a module of another program or build, a changed byte and a
@@ -100,7 +100,8 @@ runs, with no network access:
   loopback servers started by the runner (the only connections the monitor lets through), the
   first answering 301, 302, 303, 307 and 308 to JSON requests with a body, to the same origin and
   to the binary request of a running sync; the redirect target must receive nothing and the call
-  must fail with the fixed daemon diagnostic;
+  must fail with the fixed daemon diagnostic; then `H01`: with a wallet connected to the first
+  server, the history calls `getTxs`, `getTransfers` and `getTx` send no request;
 * the same two suites and the module loading cases in headless Chromium, in a wallet worker,
   with every non-loopback request sent to a closed proxy port and under the page policy of
   `docs/DEPLOYMENT.md`, and the redirect checks in the page and in a wallet worker (the policy then
@@ -147,6 +148,20 @@ saved by `N02`. Set `DIRECT_CHECKS` without `N17` (and without `ZEPHYR_TS_TEST_D
 keep it to one. A disposable wallet without funds lives in `build/test-wallets/` during the run and
 is removed afterwards; set `ZEPHYR_TS_TEST_KEEP_WALLET` to a new directory to keep a copy for the
 packaging tests.
+
+`N19` (every run) counts the requests at the forwarder and in the request allowlist while the
+history calls run: there must be none. `N20` reads the history of a funded test wallet and runs only
+in the Node.js direct run with inputs you keep outside this repository:
+
+    export FUNDED_WALLET_IN=<directory with a copy of the wallet: keys.bin, cache.bin, password.txt>
+    export FUNDED_EXPECT=<its expected transfers, JSON: {"transfers":[{hash, height, direction, asset, amount, accountIndex, subaddressIndex}]}>
+
+It syncs the copy (never the input), compares every transfer with the expectations, the incoming
+sums per asset with the balances of the wallet, its accounts and subaddresses, applies every query
+filter, compares direct and worker results field by field, and syncs again after the next block to
+see the confirmations grow (two more syncs; up to eight minutes of waiting).
+`FUNDED_WALLET_OUT=<new directory>` receives the synced bytes. Without the two variables `N20` is
+reported as not run.
 
 ## Packaging tests
 

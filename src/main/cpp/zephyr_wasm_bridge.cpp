@@ -1167,6 +1167,261 @@ string zephyr_wasm_bridge::set_subaddress_label(int handle, const uint32_t accou
   }
 }
 
+// -------------------------------- HISTORY ------------------------------------
+
+// Read-only transactions of full wallets with their transfers, from what the wallet stored at its
+// last sync; no request reaches the daemon. The core's get_transfers is asked only for selections
+// that stay inside the wallet: confirmed incoming and outgoing transfers (wallet2::get_payments,
+// get_payments_out) and failed or pending outgoing transfers (wallet2::get_unconfirmed_payments_out).
+// Its incoming pool selection is never requested, because the core first asks the daemon for its pool
+// (wallet2::update_pool_state); an incoming transfer still in the pool is therefore not listed until
+// it is confirmed. Every transaction is returned with all of its transfers (the selections carry no
+// transfer filter), checked against the selection and the core's types before anything is written.
+namespace {
+  // strict "h1,h2,..." of distinct transaction hashes (64 lowercase hex characters); "" means none
+  std::vector<std::string> parse_tx_hashes(const string& text, uint32_t max_count) {
+    std::vector<std::string> out;
+    if (text.empty()) return out;
+    size_t pos = 0;
+    while (true) {
+      size_t end = text.find(',', pos);
+      string item = text.substr(pos, end == string::npos ? string::npos : end - pos);
+      if (item.size() != 64) throw bridge_failure("TX_HASH");
+      for (char c : item) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) throw bridge_failure("TX_HASH");
+      if (std::find(out.begin(), out.end(), item) != out.end()) throw bridge_failure("TX_HASH");
+      out.push_back(item);
+      if (out.size() > max_count) throw bridge_failure("LISTING_LIMIT");
+      if (end == string::npos) break;
+      pos = end + 1;
+    }
+    return out;
+  }
+
+  // "" (none) or strict decimal height text (the SDK sends checked safe integers)
+  boost::optional<uint64_t> parse_optional_height(const string& text) {
+    if (text.empty()) return boost::none;
+    if (text.size() > 20 || (text.size() > 1 && text[0] == '0')) throw bridge_failure("HEIGHT_RANGE");
+    for (char c : text) if (c < '0' || c > '9') throw bridge_failure("HEIGHT_RANGE");
+    if (text.size() == 20 && text > string("18446744073709551615")) throw bridge_failure("HEIGHT_RANGE");
+    return (uint64_t) std::stoull(text);
+  }
+
+  bool is_tx_hash(const boost::optional<std::string>& hash) {
+    if (!hash || hash->size() != 64) return false;
+    for (char c : *hash) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    return true;
+  }
+
+  // An address as the wallet stored it: written only if it has the form of an address (base58
+  // characters, 90 to 140 of them); any other stored text is left out, never copied.
+  bool is_address_text(const std::string& text) {
+    if (text.size() < 90 || text.size() > 140) return false;
+    for (char c : text) {
+      bool ok = (c >= '1' && c <= '9') || (c >= 'A' && c <= 'H') || (c >= 'J' && c <= 'N') || (c >= 'P' && c <= 'Z') || (c >= 'a' && c <= 'k') || (c >= 'm' && c <= 'z');
+      if (!ok) return false;
+    }
+    return true;
+  }
+
+  // the asset of a transfer or destination: absent when the core reports none, else one of its types
+  void write_asset_field(json_writer& w, const std::string& asset) {
+    if (asset.empty()) return;
+    if (!is_core_asset_type(asset)) throw bridge_failure("UNEXPECTED_ASSET_TYPE");
+    w.Key("asset"); write_string(w, asset);
+  }
+
+  // {"asset":".."?,"amount":"n","accountIndex":a,"subaddressIndex":s}
+  void write_incoming_transfer(json_writer& w, const monero_incoming_transfer& t) {
+    if (!t.m_amount || !t.m_account_index || !t.m_subaddress_index) throw bridge_failure("UNEXPECTED_RESULT");
+    w.StartObject();
+    write_asset_field(w, t.m_asset_type);
+    w.Key("amount"); write_string(w, decimal(*t.m_amount));
+    w.Key("accountIndex"); w.Uint(*t.m_account_index);
+    w.Key("subaddressIndex"); w.Uint(*t.m_subaddress_index);
+    w.EndObject();
+  }
+
+  // {"asset":".."?,"amount":"n","accountIndex":a,"subaddressIndices":[..],"destinations":[{"address":".."?,"amount":"n","asset":".."?},..]}
+  void write_outgoing_transfer(json_writer& w, const monero_outgoing_transfer& t) {
+    if (!t.m_amount || !t.m_account_index) throw bridge_failure("UNEXPECTED_RESULT");
+    w.StartObject();
+    write_asset_field(w, t.m_asset_type);
+    w.Key("amount"); write_string(w, decimal(*t.m_amount));
+    w.Key("accountIndex"); w.Uint(*t.m_account_index);
+    w.Key("subaddressIndices");
+    w.StartArray();
+    for (uint32_t i : t.m_subaddress_indices) w.Uint(i);
+    w.EndArray();
+    w.Key("destinations");
+    w.StartArray();
+    for (const auto& d : t.m_destinations) {
+      if (!d || !d->m_amount) throw bridge_failure("UNEXPECTED_RESULT");
+      w.StartObject();
+      if (d->m_address && is_address_text(*d->m_address)) { w.Key("address"); write_string(w, *d->m_address); }
+      w.Key("amount"); write_string(w, decimal(*d->m_amount));
+      write_asset_field(w, d->m_asset_type);
+      w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+  }
+
+  // the transaction's place in the selection: confirmed, pending in the pool, or failed
+  bool tx_in_selection(const monero_tx_wallet& tx, const string& status, bool height_filter) {
+    if (!tx.m_is_confirmed || !tx.m_in_tx_pool || !tx.m_is_failed) throw bridge_failure("UNEXPECTED_RESULT");
+    bool confirmed = *tx.m_is_confirmed, pool = *tx.m_in_tx_pool, failed = *tx.m_is_failed;
+    if ((int) confirmed + (int) pool + (int) failed != 1) throw bridge_failure("UNEXPECTED_RESULT");
+    if (height_filter && !confirmed) return false;
+    if (status == "confirmed") return confirmed;
+    if (status == "pool") return pool;
+    if (status == "failed") return failed;
+    return true;
+  }
+
+  // {"hash":"..","height":"n"?,"timestamp":"n"?,"confirmations":"n","isConfirmed":b,"inPool":b,"isFailed":b,
+  //  "isLocked":b,"isMinerTx":b,"fee":"n"?,"unlockTime":"n","incoming":[..],"outgoing":{..}?}
+  void write_tx(json_writer& w, const monero_tx_wallet& tx) {
+    if (!is_tx_hash(tx.m_hash) || !tx.m_num_confirmations || !tx.m_is_locked || !tx.m_is_miner_tx || !tx.m_unlock_height) throw bridge_failure("UNEXPECTED_RESULT");
+    bool confirmed = *tx.m_is_confirmed;
+    if (confirmed != (tx.m_block != boost::none)) throw bridge_failure("UNEXPECTED_RESULT");
+    if (confirmed && (!tx.m_block.get() || !tx.m_block.get()->m_height || !tx.m_block.get()->m_timestamp)) throw bridge_failure("UNEXPECTED_RESULT");
+    w.StartObject();
+    w.Key("hash"); write_string(w, *tx.m_hash);
+    if (confirmed) {
+      w.Key("height"); write_string(w, decimal(*tx.m_block.get()->m_height));
+      w.Key("timestamp"); write_string(w, decimal(*tx.m_block.get()->m_timestamp));
+    }
+    w.Key("confirmations"); write_string(w, decimal(*tx.m_num_confirmations));
+    w.Key("isConfirmed"); w.Bool(confirmed);
+    w.Key("inPool"); w.Bool(*tx.m_in_tx_pool);
+    w.Key("isFailed"); w.Bool(*tx.m_is_failed);
+    w.Key("isLocked"); w.Bool(*tx.m_is_locked);
+    w.Key("isMinerTx"); w.Bool(*tx.m_is_miner_tx);
+    if (tx.m_fee) { w.Key("fee"); write_string(w, decimal(*tx.m_fee)); }
+    w.Key("unlockTime"); write_string(w, decimal(*tx.m_unlock_height));
+    w.Key("incoming");
+    w.StartArray();
+    for (const auto& t : tx.m_incoming_transfers) { if (!t) throw bridge_failure("UNEXPECTED_RESULT"); write_incoming_transfer(w, *t); }
+    w.EndArray();
+    if (tx.m_outgoing_transfer != boost::none) {
+      if (!tx.m_outgoing_transfer.get()) throw bridge_failure("UNEXPECTED_RESULT");
+      w.Key("outgoing"); write_outgoing_transfer(w, *tx.m_outgoing_transfer.get());
+    }
+    w.EndObject();
+  }
+
+  // the core's transactions reference their blocks and transfers and back: break those references
+  // so that the result is freed (as monero_utils::free does for blocks)
+  void release_txs(const std::vector<std::shared_ptr<monero_tx_wallet>>& txs) {
+    for (const auto& tx : txs) {
+      if (tx->m_block != boost::none && tx->m_block.get()) {
+        std::shared_ptr<monero_block> block = tx->m_block.get();
+        for (auto& other : block->m_txs) if (other) other->m_block.reset();
+        block->m_txs.clear();
+      }
+      tx->m_block.reset();
+      if (tx->m_outgoing_transfer != boost::none && tx->m_outgoing_transfer.get()) tx->m_outgoing_transfer.get()->m_tx.reset();
+      for (auto& t : tx->m_incoming_transfers) if (t) t->m_tx.reset();
+    }
+  }
+
+  // one local selection of the core: transfers of the wallet, collected into their transactions
+  void collect_selection(monero_wallet* wallet, bool pool, bool confirmed_only, bool failed_only, const boost::optional<uint64_t>& min_height, const boost::optional<uint64_t>& max_height,
+                         const std::vector<std::string>& hashes, std::vector<std::shared_ptr<monero_tx_wallet>>& txs) {
+    std::shared_ptr<monero_tx_query> tx_query = std::make_shared<monero_tx_query>();
+    std::shared_ptr<monero_transfer_query> transfer_query = std::make_shared<monero_transfer_query>();
+    if (pool) {
+      // own pending outgoing transfers only: with outgoing transfers selected the core never takes its
+      // incoming pool path, which would ask the daemon for the pool
+      transfer_query->m_is_incoming = false;
+      tx_query->m_in_tx_pool = true;
+      tx_query->m_is_failed = false;
+    } else {
+      tx_query->m_in_tx_pool = false; // confirmed and failed transfers; never the pool
+      if (confirmed_only) tx_query->m_is_confirmed = true;
+      if (failed_only) tx_query->m_is_failed = true;
+      tx_query->m_min_height = min_height;
+      tx_query->m_max_height = max_height;
+    }
+    tx_query->m_hashes = hashes;
+    transfer_query->m_tx_query = tx_query;
+    tx_query->m_transfer_query = transfer_query;
+    std::vector<std::shared_ptr<monero_transfer>> transfers;
+    try {
+      transfers = wallet->get_transfers(*transfer_query);
+    } catch (...) {
+      tx_query->m_transfer_query = boost::none;
+      transfer_query->m_tx_query = boost::none;
+      throw;
+    }
+    tx_query->m_transfer_query = boost::none; // break the query's own reference cycle
+    transfer_query->m_tx_query = boost::none;
+    for (const auto& transfer : transfers) {
+      std::shared_ptr<monero_tx_wallet> tx = transfer ? std::dynamic_pointer_cast<monero_tx_wallet>(transfer->m_tx) : nullptr;
+      if (!tx) { release_txs(txs); throw bridge_failure("UNEXPECTED_RESULT"); }
+      if (std::find(txs.begin(), txs.end(), tx) == txs.end()) txs.push_back(tx);
+    }
+  }
+
+  // confirmed transactions by height then hash, unconfirmed ones after them by hash
+  bool tx_before(const std::shared_ptr<monero_tx_wallet>& a, const std::shared_ptr<monero_tx_wallet>& b) {
+    bool ca = a->m_block != boost::none && a->m_block.get() && a->m_block.get()->m_height;
+    bool cb = b->m_block != boost::none && b->m_block.get() && b->m_block.get()->m_height;
+    if (ca != cb) return ca;
+    if (ca && *a->m_block.get()->m_height != *b->m_block.get()->m_height) return *a->m_block.get()->m_height < *b->m_block.get()->m_height;
+    return a->m_hash.value_or("") < b->m_hash.value_or("");
+  }
+}
+
+// {"txs":[<tx>,...]}: the wallet's transactions in the selection. status: "all" (confirmed, pending
+// and failed), "confirmed", "pool" (own pending outgoing) or "failed"; min_height and max_height ""
+// or decimal (only confirmed transactions in that range, both inclusive); hashes "" or "h1,h2,..."
+// (TX_NOT_FOUND if one of them is not in the selection). At most max_txs transactions with at most
+// max_transfers transfers in total, else LISTING_LIMIT, checked before the result is written.
+string zephyr_wasm_bridge::get_txs(int handle, const string& status, const string& min_height, const string& max_height, const string& hashes, uint32_t max_txs, uint32_t max_transfers) {
+  std::vector<std::shared_ptr<monero_tx_wallet>> txs;
+  try {
+    if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_HISTORY");
+    monero_wallet* wallet = (monero_wallet*) handle;
+    if (status != "all" && status != "confirmed" && status != "pool" && status != "failed") throw bridge_failure("UNEXPECTED_RESULT");
+    boost::optional<uint64_t> min_h = parse_optional_height(min_height);
+    boost::optional<uint64_t> max_h = parse_optional_height(max_height);
+    if (min_h && max_h && *min_h > *max_h) throw bridge_failure("HEIGHT_RANGE");
+    std::vector<std::string> requested = parse_tx_hashes(hashes, max_txs);
+    bool height_filter = min_h || max_h;
+    ZEPHYR_TS_TEST_THROW("error.history", hashes);
+    if (status != "pool") collect_selection(wallet, false, status == "confirmed" || height_filter, status == "failed", min_h, max_h, requested, txs);
+    if ((status == "all" || status == "pool") && !height_filter) collect_selection(wallet, true, false, false, boost::none, boost::none, requested, txs);
+    std::vector<std::shared_ptr<monero_tx_wallet>> selected;
+    for (const auto& tx : txs) if (tx_in_selection(*tx, status, height_filter)) selected.push_back(tx);
+    std::sort(selected.begin(), selected.end(), tx_before);
+    for (size_t i = 1; i < selected.size(); i++) if (selected[i]->m_hash == selected[i - 1]->m_hash) throw bridge_failure("UNEXPECTED_RESULT");
+    for (const auto& h : requested) {
+      bool found = false;
+      for (const auto& tx : selected) if (tx->m_hash && *tx->m_hash == h) { found = true; break; }
+      if (!found) throw bridge_failure("TX_NOT_FOUND");
+    }
+    if (selected.size() > max_txs) throw bridge_failure("LISTING_LIMIT");
+    size_t transfers = 0;
+    for (const auto& tx : selected) transfers += tx->m_incoming_transfers.size() + (tx->m_outgoing_transfer != boost::none ? 1 : 0);
+    if (transfers > max_transfers) throw bridge_failure("LISTING_LIMIT");
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    w.StartObject();
+    w.Key("txs");
+    w.StartArray();
+    for (const auto& tx : selected) write_tx(w, *tx);
+    w.EndArray();
+    w.EndObject();
+    release_txs(txs);
+    return string(buffer.GetString(), buffer.GetSize());
+  } catch (...) {
+    const char* identifier = classify_current_exception(ERROR_CONTEXT_GETTER);
+    release_txs(txs);
+    return bridge_error(identifier);
+  }
+}
+
 string zephyr_wasm_bridge::get_version(int handle) {
   monero_wallet* wallet = (monero_wallet*) handle;
   try {
@@ -1421,31 +1676,6 @@ string zephyr_wasm_bridge::get_unlocked_balance_subaddress(int handle, const uin
   rapidjson::Value value;
   doc.AddMember("unlockedBalance", rapidjson::Value().SetUint64(wallet->get_unlocked_balance(account_idx, subaddress_idx)), doc.GetAllocator());
   return gen_utils::serialize(doc);
-}
-
-void zephyr_wasm_bridge::get_txs(int handle, const string& tx_query_json, emscripten::val callback) {
-  monero_wallet* wallet = (monero_wallet*) handle;
-  try {
-
-    // deserialize tx query string
-    shared_ptr<monero_tx_query> tx_query = monero_tx_query::deserialize_from_block(tx_query_json);
-
-    // get txs
-    vector<shared_ptr<monero_tx_wallet>> txs = wallet->get_txs(*tx_query);
-
-    // wrap and serialize blocks
-    vector<shared_ptr<monero_block>> blocks = monero_utils::get_blocks_from_txs(txs);
-    rapidjson::Document doc;
-    doc.SetObject();
-    doc.AddMember("blocks", monero_utils::to_rapidjson_val(doc.GetAllocator(), blocks), doc.GetAllocator());
-    callback(gen_utils::serialize(doc));
-
-    // free memory
-    monero_utils::free(blocks);
-    monero_utils::free(tx_query);
-  } catch (exception& e) {
-    callback(string(e.what()));
-  }
 }
 
 void zephyr_wasm_bridge::get_transfers(int handle, const string& transfer_query_json, emscripten::val callback) {

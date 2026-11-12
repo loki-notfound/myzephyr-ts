@@ -954,6 +954,53 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await w.close();
   });
 
+  await check("T19", "History: the allocator grows by the same fixed amount per core listing call and by nothing else (the core's own query copies, see LIMITATIONS.md); an injected native failure reports a fixed identifier and never carries the requested hashes", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    const hash = "9d".repeat(32);
+    const heap = async () => (await hooks.state()).heapInUse;
+    // warm-up of every path
+    await w.getTxs(); await w.getTransfers({ status: "pool" }); try { await w.getTx(hash); } catch (err) { /* TX_NOT_FOUND */ }
+    // one core listing call per getTransfers({ status: "confirmed" }): the growth of each call
+    const deltas: number[] = [];
+    for (let i = 0; i < 10; i++) { const h0 = await heap(); await w.getTransfers({ status: "confirmed" }); deltas.push((await heap()) - h0); }
+    const perCall = deltas[0];
+    notes.push("allocator growth of 10 single core listing calls: " + deltas.join(","));
+    // the allocator may place the leaked blocks a few bytes apart (alignment): a tolerance of 16 bytes per call
+    expect(deltas.every((d) => Math.abs(d - perCall) <= 16) && perCall > 0 && perCall <= 2048, "every core listing call grows the allocator by the same amount (at most 2,048 bytes)");
+    // every other path: exactly one core call per selection, nothing more (getTxs and getTx select confirmed and pool: two calls)
+    const paths: Array<[string, () => Promise<unknown>, number]> = [
+      ["getTxs()", () => w.getTxs(), 2], ["getTxs(confirmed, height range)", () => w.getTxs({ status: "confirmed", minHeight: 0, maxHeight: 1000000 }), 1],
+      ["getTransfers(pool)", () => w.getTransfers({ status: "pool" }), 1], ["getTransfers(failed, ZPH)", () => w.getTransfers({ status: "failed", asset: "ZPH" }), 1]];
+    for (const [label, fn, calls] of paths) {
+      const h0 = await heap();
+      for (let i = 0; i < 5; i++) await fn();
+      const grown = (await heap()) - h0;
+      notes.push(label + ": " + grown + " bytes over 5 calls (" + calls + " core call(s) each)");
+      expect(Math.abs(grown - 5 * calls * perCall) <= 16 * 5 * calls, label + ": growth is the core's per-call amount");
+    }
+    // with requested hashes the core's copied query also holds the hashes: a fixed amount more per call and hash
+    const hashDeltas: number[] = [];
+    for (let i = 0; i < 5; i++) { const h0 = await heap(); try { await w.getTx(hash); } catch (err) { /* TX_NOT_FOUND, checked in C31 */ } hashDeltas.push((await heap()) - h0); }
+    const perHash = (hashDeltas[0] - 2 * perCall) / 2;
+    notes.push("getTx (TX_NOT_FOUND, two core calls with one hash each): " + hashDeltas.join(",") + " bytes per call; the hash adds " + perHash + " bytes per core call");
+    expect(hashDeltas.every((d) => Math.abs(d - hashDeltas[0]) <= 32) && perHash > 0 && perHash <= 128, "getTx grows by the same amount each time: two core calls and the requested hash in each");
+    // a rejection before the core (a malformed hash) does not grow it at all
+    const h1 = await heap();
+    for (let i = 0; i < 5; i++) { try { await w.getTx("x"); } catch (err) { /* TX_HASH */ } }
+    expect((await heap()) === h1, "rejections before the core leave the allocator unchanged");
+    notes.push("bytes per core listing call: " + perCall);
+    // injected native failure in the history binding: a fixed identifier; the requested hash never reaches the error
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "error.history": 1 } });
+    const err = await expectCode(w.getTx(hash), "NATIVE_ERROR", "injected failure in get_txs", notes, "CORE_UNCLASSIFIED");
+    const st = await hooks.state();
+    expect(st.events.includes("injected:error.history"), "the injection fired");
+    expect(!scanText(err).includes(hash) && !scanText(err.toEnvelope()).includes(hash), "the hash is not in the error or its envelope");
+    expect((await w.getTxs()).length === 0, "the wallet still answers after the injected failure");
+    await w.close();
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

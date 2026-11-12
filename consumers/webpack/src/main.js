@@ -30,15 +30,16 @@ async function run() {
     const height = await saved.getHeight();
     const daemonHeight = await saved.getDaemonHeight();
     const balances = await saved.getBalance();
+    const history = (await saved.getTxs()).length + (await saved.getTransfers({ direction: "incoming" })).length; // a wallet without funds
     await saved.close();
     let unsupported = "none";
-    try { await reopened.getTxs(); } catch (e) { unsupported = e instanceof ZephyrWalletError ? e.code : "other"; } // outside the supported surface
+    try { await reopened.createTxs(); } catch (e) { unsupported = e instanceof ZephyrWalletError ? e.code : "other"; } // outside the supported surface
     const atDaemonHeight = restoreHeight <= createdDaemonHeight && createdDaemonHeight - restoreHeight <= 3;
     notes.push("restore height at the daemon height " + atDaemonHeight + "; same address after reopening " + sameAddress);
-    notes.push("saved bytes at " + savedHeight + " synced " + sync.numBlocksFetched + " blocks to " + height + " (daemon " + daemonHeight + "); balance keys " + balances.size);
+    notes.push("saved bytes at " + savedHeight + " synced " + sync.numBlocksFetched + " blocks to " + height + " (daemon " + daemonHeight + "); balance keys " + balances.size + "; history entries " + history);
     notes.push("unsupported call: " + unsupported);
     pass = atDaemonHeight && sameAddress && daemonHeight - height <= 1 && height >= savedHeight && daemonHeight - savedHeight <= 2000
-      && sync.numBlocksFetched <= daemonHeight - savedHeight + 1 && balances.size === 8 && unsupported === "UNSUPPORTED_CAPABILITY";
+      && sync.numBlocksFetched <= daemonHeight - savedHeight + 1 && balances.size === 8 && history === 0 && unsupported === "UNSUPPORTED_CAPABILITY";
   } catch (e) {
     notes.push("FAILED: " + (e instanceof ZephyrWalletError ? e.code + "/" + e.diagnostic : e && e.name));
   }
