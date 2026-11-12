@@ -15,6 +15,8 @@ import { ZephyrWalletCreateIntent, validateCreateConfig, validateOpenConfig } fr
 import { ZephyrWalletWorkers } from "../common/ZephyrWalletWorkers";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
 import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBalances";
+import { ZephyrAccount, ZephyrAccountOptions, ZephyrAddressIndex, ZephyrSubaddress, accountOptions } from "../common/ZephyrAccounts";
+import { checkLabel, checkSubaddressIndices } from "../common/ZephyrLifecycleContract";
 
 
 /** Network types; numeric values match the core. */
@@ -330,7 +332,9 @@ export class ZephyrWallet {
    * Balances: getBalance() returns the wallet map (the core's asset keys, zero entries
    * included); getBalance(accountIdx) the account map keyed by subaddress index (only subaddresses the
    * core reports); getBalance(assetType, accountIdx[, subaddressIdx]) the asset-first scalar for one of
-   * the core's asset types. The inherited asset-less (account, subaddress) call is not offered.
+   * the core's asset types. The inherited asset-less (account, subaddress) call is not offered. An
+   * account or subaddress index the wallet does not have rejects with INVALID_CONFIG and
+   * ACCOUNT_NOT_FOUND or SUBADDRESS_NOT_FOUND instead of the core's empty answer.
    */
   getBalance(): Promise<ZephyrAssetBalances>;
   getBalance(accountIdx: number): Promise<ZephyrAccountBalances>;
@@ -361,6 +365,92 @@ export class ZephyrWallet {
     }
     if (typeof args[0] === "number") throw ZephyrWalletError.unsupported("BALANCE"); // the inherited asset-less (account, subaddress) scalar
     throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+  }
+
+  // ------------------------- accounts and subaddresses -------------------------
+  //
+  // Full wallets, direct and proxied; keys-only wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_ACCOUNTS.
+  // Results are read-only plain data (common/ZephyrAccounts.ts). Every index is an integer 0..2^32-1,
+  // checked before any native or worker call (INVALID_CONFIG/ADDRESS_INDEX_RANGE); an account or
+  // subaddress the wallet does not have rejects with INVALID_CONFIG and ACCOUNT_NOT_FOUND or
+  // SUBADDRESS_NOT_FOUND. A label is a string of at most 255 bytes in UTF-8 without control characters
+  // or unpaired surrogates (INVALID_CONFIG: LABEL_TYPE, LABEL_LENGTH, LABEL_CHARACTERS); "" clears it.
+  // The SDK never copies a label into an error or a log line.
+
+  /**
+   * Every account in index order. With includeSubaddresses, every subaddress of each account as well.
+   * Bounded per call: at most 1,000 accounts and, with subaddresses, at most 1,000 subaddresses in
+   * total; a larger listing rejects with INVALID_CONFIG/LISTING_LIMIT (page an account's
+   * subaddresses with getSubaddresses and explicit indices, using its subaddressCount).
+   */
+  async getAccounts(options?: ZephyrAccountOptions): Promise<ReadonlyArray<ZephyrAccount>> {
+    const wallet = this.full("KEYS_ONLY_ACCOUNTS");
+    const include = accountOptions(options);
+    return this.call("other", () => wallet.getAccountsChecked(include));
+  }
+
+  /** One account; with includeSubaddresses every subaddress of it (at most 1,000, else LISTING_LIMIT). */
+  async getAccount(accountIdx: number, options?: ZephyrAccountOptions): Promise<ZephyrAccount> {
+    const wallet = this.full("KEYS_ONLY_ACCOUNTS");
+    checkAddressIndices(accountIdx, 0);
+    const include = accountOptions(options);
+    return this.call("other", () => wallet.getAccountChecked(accountIdx, include));
+  }
+
+  /** Create one account with an optional label (default ""); returns it. */
+  async createAccount(label?: string): Promise<ZephyrAccount> {
+    const wallet = this.full("KEYS_ONLY_ACCOUNTS");
+    const text = label === undefined ? "" : checkLabel(label);
+    return this.call("other", () => wallet.createAccountChecked(text));
+  }
+
+  /**
+   * Subaddresses of one account: every subaddress in index order (at most 1,000, else
+   * LISTING_LIMIT), or the given indices in the given order: a non-empty array of at most 1,000
+   * distinct indices (INVALID_CONFIG/SUBADDRESS_INDICES or LISTING_LIMIT otherwise).
+   */
+  async getSubaddresses(accountIdx: number, subaddressIndices?: readonly number[]): Promise<ReadonlyArray<ZephyrSubaddress>> {
+    const wallet = this.full("KEYS_ONLY_ACCOUNTS");
+    checkAddressIndices(accountIdx, 0);
+    const indices = subaddressIndices === undefined ? undefined : checkSubaddressIndices(subaddressIndices);
+    return this.call("other", () => wallet.getSubaddressesChecked(accountIdx, indices));
+  }
+
+  /** One subaddress. */
+  async getSubaddress(accountIdx: number, subaddressIdx: number): Promise<ZephyrSubaddress> {
+    const wallet = this.full("KEYS_ONLY_ACCOUNTS");
+    checkAddressIndices(accountIdx, subaddressIdx);
+    const list = await this.call("other", () => wallet.getSubaddressesChecked(accountIdx, [subaddressIdx]));
+    return list[0];
+  }
+
+  /** Create one subaddress of an account with an optional label (default ""); returns it. */
+  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddress> {
+    const wallet = this.full("KEYS_ONLY_ACCOUNTS");
+    checkAddressIndices(accountIdx, 0);
+    const text = label === undefined ? "" : checkLabel(label);
+    return this.call("other", () => wallet.createSubaddressChecked(accountIdx, text));
+  }
+
+  /** Set (or with "" clear) the label of a subaddress; subaddress 0 carries the account's label. */
+  async setSubaddressLabel(accountIdx: number, subaddressIdx: number, label: string): Promise<void> {
+    const wallet = this.full("KEYS_ONLY_ACCOUNTS");
+    checkAddressIndices(accountIdx, subaddressIdx);
+    const text = checkLabel(label);
+    return this.call("other", () => wallet.setSubaddressLabelChecked(accountIdx, subaddressIdx, text));
+  }
+
+  /**
+   * The account and subaddress an address of this wallet belongs to (standard addresses and
+   * subaddresses of the wallet's network). A malformed address or one of another network rejects with
+   * INVALID_ADDRESS/CORE_INVALID_ADDRESS, an address of another wallet with
+   * INVALID_ADDRESS/ADDRESS_NOT_IN_WALLET. The core also resolves the addresses of subaddresses within
+   * the wallet's lookahead that were not created yet (it watches them for incoming outputs).
+   */
+  async getAddressIndex(address: string): Promise<ZephyrAddressIndex> {
+    const wallet = this.full("KEYS_ONLY_ACCOUNTS");
+    if (typeof address !== "string" || address.length === 0 || address.length > 256) throw new ZephyrWalletError("INVALID_ADDRESS", "ADDRESS_TYPE");
+    return this.call("address", () => wallet.getAddressIndexChecked(address));
   }
 
   // ----------------------- representative unsupported calls -----------------------

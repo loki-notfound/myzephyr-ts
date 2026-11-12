@@ -1317,6 +1317,166 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     await expectCode(w.isDaemonSynced(), "WALLET_CLOSED", "isDaemonSynced after close", notes);
   });
 
+
+  await check("C28", "Accounts and subaddresses: create, list, labels set, changed and cleared, addresses equal getAddress and resolve with getAddressIndex; everything survives getData and reopening; plain read-only results", async (notes) => {
+    const w = await F.createRandomWallet({ networkType: 0, password: pw, proxyToWorker: proxy });
+    const primary = await w.getPrimaryAddress();
+    let accounts = await w.getAccounts();
+    expect(accounts.length === 1 && accounts[0].index === 0 && accounts[0].primaryAddress === primary && accounts[0].subaddressCount === 1 && accounts[0].subaddresses === undefined, "a new wallet has one account with one subaddress");
+    expect(accounts[0].label === "Primary account", "the core's label of account 0");
+    expect(accounts[0].balance instanceof Map && accounts[0].balance.size === 0 && accounts[0].unlockedBalance instanceof Map && accounts[0].unlockedBalance.size === 0, "a new account's balance maps are empty (the core lists no asset without outputs)");
+    expect(Object.isFrozen(accounts) && Object.isFrozen(accounts[0]), "results are frozen plain data");
+    expect(Object.getPrototypeOf(accounts[0]) === Object.prototype, "an account is a plain object");
+    const L1 = "Savings " + randomPassword().substring(0, 6) + " \u00e9\u20ac\ud83d\ude00"; // UTF-8 forms of two, three and four bytes
+    const L2 = "Shop " + randomPassword().substring(0, 6);
+    const a1 = await w.createAccount(L1);
+    expect(a1.index === 1 && a1.label === L1 && a1.subaddressCount === 1 && a1.primaryAddress === (await w.getAddress(1, 0)), "createAccount returns the new account with its label and address");
+    const s01 = await w.createSubaddress(0, L2);
+    expect(s01.accountIndex === 0 && s01.index === 1 && s01.address === (await w.getAddress(0, 1)) && s01.label === L2 && s01.isUsed === false && s01.numUnspentOutputs === 0 && s01.balance.size === 0, "createSubaddress returns the new subaddress");
+    const s11 = await w.createSubaddress(1);
+    expect(s11.index === 1 && s11.label === "" && s11.address === (await w.getAddress(1, 1)), "a subaddress without a label");
+    await w.setSubaddressLabel(1, 1, L2);
+    await w.setSubaddressLabel(0, 1, L1);
+    await w.setSubaddressLabel(1, 0, "");
+    const sub = await w.getSubaddress(1, 1);
+    expect(sub.label === L2, "label set");
+    const subs0 = await w.getSubaddresses(0);
+    expect(subs0.length === 2 && subs0[0].index === 0 && subs0[0].address === primary && subs0[1].label === L1, "label changed; listing in index order");
+    accounts = await w.getAccounts({ includeSubaddresses: true });
+    expect(accounts.length === 2 && accounts[1].label === "" && accounts[1].subaddresses !== undefined && accounts[1].subaddresses[0].label === "", "label of subaddress 0 cleared: the account's label is cleared");
+    const picked = await w.getSubaddresses(1, [1, 0]);
+    expect(picked.length === 2 && picked[0].index === 1 && picked[1].index === 0, "explicit indices in the requested order");
+    const one = await w.getAccount(1, { includeSubaddresses: true });
+    expect(one.index === 1 && one.subaddresses !== undefined && one.subaddresses.length === 2 && Object.isFrozen(one.subaddresses), "getAccount with its subaddresses");
+    for (const [a, i] of [[0, 0], [0, 1], [1, 0], [1, 1]]) {
+      const idx = await w.getAddressIndex(await w.getAddress(a, i));
+      expect(idx.accountIndex === a && idx.subaddressIndex === i, "getAddressIndex(" + a + "," + i + ")");
+    }
+    const other = await F.createRandomWallet({ networkType: 0, password: pw, proxyToWorker: proxy });
+    await expectCode(w.getAddressIndex(await other.getPrimaryAddress()), "INVALID_ADDRESS", "an address of another wallet", notes, "ADDRESS_NOT_IN_WALLET");
+    await expectCode(w.getAddressIndex(primary.substring(0, primary.length - 1) + (primary.endsWith("A") ? "B" : "A")), "INVALID_ADDRESS", "a malformed address", notes, "CORE_INVALID_ADDRESS");
+    const testnet = await F.createRandomWallet({ networkType: 1, password: pw, proxyToWorker: proxy });
+    await expectCode(w.getAddressIndex(await testnet.getPrimaryAddress()), "INVALID_ADDRESS", "an address of another network", notes, "CORE_INVALID_ADDRESS");
+    await other.close(); await testnet.close();
+    // everything survives getData and reopening
+    const data = await w.getData();
+    const before = JSON.stringify(accounts.map((a) => [a.index, a.primaryAddress, a.label, a.subaddressCount, (a.subaddresses ?? []).map((s) => [s.index, s.address, s.label])]));
+    await w.close();
+    // reopened in this run's mode (the other mode is the other run of this suite; the cross-open test reads such bytes in both)
+    const r = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(data.keys), cacheData: copyBytes(data.cache), proxyToWorker: proxy });
+    const again = await r.getAccounts({ includeSubaddresses: true });
+    const after = JSON.stringify(again.map((a) => [a.index, a.primaryAddress, a.label, a.subaddressCount, (a.subaddresses ?? []).map((s) => [s.index, s.address, s.label])]));
+    expect(after === before, "accounts, subaddresses and labels survive getData and reopening");
+    await r.close();
+    notes.push("2 accounts, 4 subaddresses; labels set, changed and cleared (ASCII and multi-byte UTF-8); addresses equal getAddress and resolve; foreign, malformed and other-network addresses rejected; reopened identically");
+  });
+
+  await check("C29", "Index, label, option and kind rejections before any native call; ACCOUNT_NOT_FOUND and SUBADDRESS_NOT_FOUND for indices the wallet does not have, also for the balance calls", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    const bad = [-1, 4294967296, 1.5, Number.NaN, "0" as unknown as number];
+    const rejected: Array<[string, () => Promise<unknown>, string, string]> = [];
+    for (const v of bad) {
+      rejected.push(["getAccount(" + String(v) + ")", () => w.getAccount(v), "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"]);
+      rejected.push(["getSubaddresses(" + String(v) + ")", () => w.getSubaddresses(v), "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"]);
+      rejected.push(["getSubaddress(0," + String(v) + ")", () => w.getSubaddress(0, v), "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"]);
+      rejected.push(["createSubaddress(" + String(v) + ")", () => w.createSubaddress(v), "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"]);
+      rejected.push(["setSubaddressLabel(0," + String(v) + ")", () => w.setSubaddressLabel(0, v, ""), "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"]);
+    }
+    const longAscii = "x".repeat(256), longTwo = "\u00e9".repeat(128), okThree = "\u20ac".repeat(85), longFour = "\ud83d\ude00".repeat(64);
+    for (const [label, diag] of [[7, "LABEL_TYPE"], [null, "LABEL_TYPE"], [longAscii, "LABEL_LENGTH"], [longTwo, "LABEL_LENGTH"], [longFour, "LABEL_LENGTH"],
+      ["a\u0000b", "LABEL_CHARACTERS"], ["line\nbreak", "LABEL_CHARACTERS"], ["del\u007f", "LABEL_CHARACTERS"], ["c1\u0085", "LABEL_CHARACTERS"],
+      ["lone \ud800", "LABEL_CHARACTERS"], ["lone \udc00 low", "LABEL_CHARACTERS"], ["swapped \ude00\ud83d", "LABEL_CHARACTERS"]] as Array<[unknown, string]>) {
+      rejected.push(["createAccount(label " + diag + ")", () => w.createAccount(label as string), "INVALID_CONFIG", diag]);
+      rejected.push(["setSubaddressLabel(label " + diag + ")", () => w.setSubaddressLabel(0, 0, label as string), "INVALID_CONFIG", diag]);
+    }
+    for (const [idx, diag] of [[[], "SUBADDRESS_INDICES"], [[0, 0], "SUBADDRESS_INDICES"], ["0", "SUBADDRESS_INDICES"], [[0, -1], "ADDRESS_INDEX_RANGE"], [Array.from({ length: 1001 }, (_, i) => i), "LISTING_LIMIT"]] as Array<[unknown, string]>) {
+      rejected.push(["getSubaddresses(0, " + diag + ")", () => w.getSubaddresses(0, idx as number[]), "INVALID_CONFIG", diag]);
+    }
+    for (const [opt, diag] of [[5, "CONFIG_TYPE"], [{ other: true }, "UNKNOWN_FIELD"], [{ includeSubaddresses: "yes" }, "FIELD_TYPE"]] as Array<[unknown, string]>) {
+      rejected.push(["getAccounts(options " + diag + ")", () => w.getAccounts(opt as F.ZephyrAccountOptions), "INVALID_CONFIG", diag]);
+    }
+    rejected.push(["getAddressIndex(\"\")", () => w.getAddressIndex(""), "INVALID_ADDRESS", "ADDRESS_TYPE"]);
+    rejected.push(["getAddressIndex(7)", () => w.getAddressIndex(7 as unknown as string), "INVALID_ADDRESS", "ADDRESS_TYPE"]);
+    const native = await countNativeCalls(async () => {
+      for (const [what, fn, code, diag] of rejected) await expectCode(fn(), code, what, notes, diag);
+    });
+    if (!proxy) expect(native === 0, "no native export called by " + rejected.length + " rejected calls, got " + native);
+    notes.push(rejected.length + " rejections before dispatch" + (proxy ? "" : "; native calls " + native));
+    // accepted bounds: exactly 255 UTF-8 bytes (85 three-byte characters), an emoji pair, the largest index domain value
+    const okAccount = await w.createAccount(okThree);
+    expect(okAccount.label === okThree, "a label of exactly 255 UTF-8 bytes is accepted and returned unchanged");
+    await w.setSubaddressLabel(okAccount.index, 0, "\ud83d\ude00");
+    expect((await w.getAccount(okAccount.index)).label === "\ud83d\ude00", "a surrogate pair is accepted");
+    // indices the wallet does not have: rejected by the bridge's checks instead of the core's empty answer
+    const accounts = (await w.getAccounts()).length;
+    const notFound: Array<[string, () => Promise<unknown>, string]> = [
+      ["getAccount(n)", () => w.getAccount(accounts), "ACCOUNT_NOT_FOUND"], ["getAccount(2^32-1)", () => w.getAccount(4294967295), "ACCOUNT_NOT_FOUND"],
+      ["getSubaddresses(n)", () => w.getSubaddresses(accounts), "ACCOUNT_NOT_FOUND"], ["getSubaddresses(n, [0])", () => w.getSubaddresses(accounts, [0]), "ACCOUNT_NOT_FOUND"],
+      ["getSubaddress(0, 2^32-1)", () => w.getSubaddress(0, 4294967295), "SUBADDRESS_NOT_FOUND"], ["getSubaddresses(0, [0, 99])", () => w.getSubaddresses(0, [0, 99]), "SUBADDRESS_NOT_FOUND"],
+      ["createSubaddress(n)", () => w.createSubaddress(accounts), "ACCOUNT_NOT_FOUND"], ["setSubaddressLabel(n, 0)", () => w.setSubaddressLabel(accounts, 0, "x"), "ACCOUNT_NOT_FOUND"],
+      ["setSubaddressLabel(0, 99)", () => w.setSubaddressLabel(0, 99, "x"), "SUBADDRESS_NOT_FOUND"],
+      ["getBalance(n)", () => w.getBalance(accounts), "ACCOUNT_NOT_FOUND"], ["getUnlockedBalance(n)", () => w.getUnlockedBalance(accounts), "ACCOUNT_NOT_FOUND"],
+      ["getBalance(ZPH, n)", () => w.getBalance("ZPH", accounts), "ACCOUNT_NOT_FOUND"], ["getUnlockedBalance(ZPH, n, 0)", () => w.getUnlockedBalance("ZPH", accounts, 0), "ACCOUNT_NOT_FOUND"],
+      ["getBalance(ZPH, 0, 99)", () => w.getBalance("ZPH", 0, 99), "SUBADDRESS_NOT_FOUND"], ["getUnlockedBalance(ZPH, 0, 99)", () => w.getUnlockedBalance("ZPH", 0, 99), "SUBADDRESS_NOT_FOUND"]
+    ];
+    for (const [what, fn, diag] of notFound) await expectCode(fn(), "INVALID_CONFIG", what, notes, diag);
+    expect((await w.getBalance("ZPH", 0, 0)) === BigInt(0) && (await w.getBalance(0)).size === 0, "existing indices keep their answers");
+    expect((await w.getAccounts()).length === accounts, "no rejected call created an account");
+    // keys-only wallets
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy });
+    for (const [label, fn] of [["getAccounts", () => k.getAccounts()], ["getAccount", () => k.getAccount(0)], ["createAccount", () => k.createAccount("x")],
+      ["getSubaddresses", () => k.getSubaddresses(0)], ["getSubaddress", () => k.getSubaddress(0, 0)], ["createSubaddress", () => k.createSubaddress(0)],
+      ["setSubaddressLabel", () => k.setSubaddressLabel(0, 0, "x")], ["getAddressIndex", () => k.getAddressIndex(address)]] as Array<[string, () => Promise<unknown>]>) {
+      await expectCode(fn(), "UNSUPPORTED_CAPABILITY", "keys-only " + label, notes, "KEYS_ONLY_ACCOUNTS");
+    }
+    await k.close();
+    await w.close();
+    await expectCode(w.getAccounts(), "WALLET_CLOSED", "getAccounts after close", notes);
+  });
+
+  await check("C30", "Listing bounds: at most 1,000 subaddresses and 1,000 accounts per call; LISTING_LIMIT above; paging with explicit indices; the largest accepted lookahead", async (notes) => {
+    // a wallet with the smallest lookahead, so that creating many subaddresses and accounts stays cheap
+    const w = await F.createRandomWallet({ networkType: 0, password: pw, accountLookahead: 1, subaddressLookahead: 1, proxyToWorker: proxy });
+    for (let i = 1; i < 1000; i++) await w.createSubaddress(0);
+    let all = await w.getSubaddresses(0);
+    expect(all.length === 1000 && all[999].index === 999, "1,000 subaddresses list in one call");
+    expect((await w.getAccounts({ includeSubaddresses: true }))[0].subaddresses?.length === 1000, "1,000 subaddresses in getAccounts");
+    const last = await w.createSubaddress(0);
+    expect(last.index === 1000 && last.address === (await w.getAddress(0, 1000)), "subaddress 1,000 created");
+    await expectCode(w.getSubaddresses(0), "INVALID_CONFIG", "every subaddress of an account with 1,001", notes, "LISTING_LIMIT");
+    await expectCode(w.getAccounts({ includeSubaddresses: true }), "INVALID_CONFIG", "getAccounts with 1,001 subaddresses", notes, "LISTING_LIMIT");
+    await expectCode(w.getAccount(0, { includeSubaddresses: true }), "INVALID_CONFIG", "getAccount with 1,001 subaddresses", notes, "LISTING_LIMIT");
+    const account = await w.getAccount(0);
+    expect(account.subaddressCount === 1001, "the account reports 1,001 subaddresses");
+    const pages: number[] = [];
+    for (let start = 0; start < account.subaddressCount; start += 1000) {
+      const page = await w.getSubaddresses(0, Array.from({ length: Math.min(1000, account.subaddressCount - start) }, (_, i) => start + i));
+      pages.push(page.length);
+      all = page;
+    }
+    expect(pages.join(",") === "1000,1" && all[0].index === 1000, "two pages of explicit indices cover every subaddress");
+    for (let i = 1; i < 1000; i++) await w.createAccount();
+    expect((await w.getAccounts()).length === 1000, "1,000 accounts list in one call");
+    await w.createAccount();
+    await expectCode(w.getAccounts(), "INVALID_CONFIG", "getAccounts with 1,001 accounts", notes, "LISTING_LIMIT");
+    expect((await w.getAccount(1000)).index === 1000, "account 1,000 is still reachable by index");
+    await w.close();
+    notes.push("bounds: 1,000 subaddresses and 1,000 accounts per call; 1,001 rejected with LISTING_LIMIT; paged with explicit indices");
+    // the largest accepted lookahead (each value and the product at most 20,000)
+    for (const [major, minor] of [[1, 20000], [20000, 1]]) {
+      const l = await F.createRandomWallet({ networkType: 0, password: pw, accountLookahead: major, subaddressLookahead: minor, proxyToWorker: proxy });
+      const a = await l.createAccount("lookahead");
+      const s = await l.createSubaddress(0, "lookahead");
+      expect(a.index === 1 && s.index === 1 && (await l.getAccounts({ includeSubaddresses: true })).length === 2, "lookahead " + major + "x" + minor + ": creation and listing");
+      const far = await l.getAddressIndex(await l.getAddress(major === 1 ? 0 : 19999, major === 1 ? 19999 : 0));
+      expect(far.accountIndex === (major === 1 ? 0 : 19999) && far.subaddressIndex === (major === 1 ? 19999 : 0), "an address in the lookahead window resolves before it is created");
+      if (major === 1) await expectCode(l.getSubaddress(0, 19999), "INVALID_CONFIG", "a lookahead subaddress that was not created", notes, "SUBADDRESS_NOT_FOUND");
+      else await expectCode(l.getAccount(19999), "INVALID_CONFIG", "a lookahead account that was not created", notes, "ACCOUNT_NOT_FOUND");
+      await l.close();
+    }
+    notes.push("lookahead 1x20000 and 20000x1: creation, listing, lookahead addresses resolve with getAddressIndex but are not listed until created");
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   if (proxy) {
     const proof = await postRawWorkerMessage([newMessageId(), "getNetworkGuardReport", newMessageId()], 10000);

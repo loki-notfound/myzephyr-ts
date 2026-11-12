@@ -35,6 +35,20 @@ async function compare(w, entry) {
   return { addressMatch: (await w.getPrimaryAddress()) === entry.address, networkMatch: Number(await w.getNetworkType()) === entry.networkType,
            restoreHeightMatch: (await w.getRestoreHeight()) === entry.restoreHeight, seedMatch: (await w.getMnemonic()) === entry.seed };
 }
+// accounts and subaddresses through the reference library's own API: its account model cannot read the core's balance
+// maps, so every account is walked with getSubaddresses until an index lists none
+async function accountsOf(w) {
+  const out = [];
+  for (let a = 0; a < 1000; a++) {
+    const subs = await w.getSubaddresses(a);
+    if (subs.length === 0) break;
+    out.push(subs.map((s) => ({ address: s.getAddress(), label: s.getLabel() === undefined ? "" : s.getLabel() })));
+  }
+  return out;
+}
+function sameAccounts(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+const zjLabel = (kind) => kind + "-" + crypto.randomBytes(4).toString("hex") + " \u00e9\u20ac\ud83d\ude00";
+
 async function save(meta, w, entry) {
   const [keys, cache] = await w.getData();
   const e = Object.assign({}, entry, { keysFile: entry.id + ".keys", cacheFile: entry.id + ".cache" });
@@ -45,14 +59,28 @@ async function save(meta, w, entry) {
   const out = { zjWasmSha256: sha(path.join(ZJ, "dist", "monero_wallet_full.wasm")), zjKeysWasmSha256: sha(path.join(ZJ, "dist", "monero_wallet_keys.wasm")), results: {} };
   const meta = readMeta();
   const sources = PHASE === "final" ? meta.filter((e) => e.origin === "sdk-resaved-zj") : meta.filter((e) => e.origin === "sdk");
+  if (PHASE !== "final") out.accountsWallets = sources.filter((e) => e.accounts !== undefined).length;
   for (const entry of sources) {
     const r = {};
     const w = await open(entry);
     Object.assign(r, await compare(w, entry));
+    let resavedAccounts = undefined;
+    if (entry.accounts !== undefined) {
+      r.accountsMatch = sameAccounts(await accountsOf(w), entry.accounts);
+      if (PHASE !== "final") {
+        // a new account with a subaddress, a changed label and a cleared label, through the reference library
+        await w.createAccount(zjLabel("zj-account"));
+        await w.createSubaddress(2, zjLabel("zj-sub"));
+        await w.setSubaddressLabel(1, 1, zjLabel("zj-changed"));
+        await w.setSubaddressLabel(0, 1, "");
+        resavedAccounts = await accountsOf(w);
+      }
+    }
     if (PHASE !== "final") {
-      const resaved = await save(meta, w, Object.assign({}, entry, { id: entry.id.replace(/^sdk-/, "zj-resaved-sdk-"), origin: "zj-resaved-sdk" }));
+      const resaved = await save(meta, w, Object.assign({}, entry, { id: entry.id.replace(/^sdk-/, "zj-resaved-sdk-"), origin: "zj-resaved-sdk" }, resavedAccounts === undefined ? {} : { accounts: resavedAccounts }));
       const w2 = await open(resaved);
-      r.zjReopenAfterResave = (await w2.getPrimaryAddress()) === entry.address && (await w2.getRestoreHeight()) === entry.restoreHeight;
+      r.zjReopenAfterResave = (await w2.getPrimaryAddress()) === entry.address && (await w2.getRestoreHeight()) === entry.restoreHeight
+        && (resavedAccounts === undefined || sameAccounts(await accountsOf(w2), resavedAccounts));
       await w2.close();
     }
     await w.close();

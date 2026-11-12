@@ -14,8 +14,8 @@ The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not
 
 ## Status
 
-The supported surface is the wallet lifecycle and read-only daemon access (below). There are no
-transactions, transfers, conversions, history or listeners yet. Read
+The supported surface is the wallet lifecycle, read-only daemon access, and accounts and
+subaddresses (below). There are no transactions, transfers, conversions, history or listeners yet. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 
 ## Core and pinned sources
@@ -60,13 +60,19 @@ The package entry (`src/main/ts/index.ts`) exports:
   `setDaemonConnection`, `isConnectedToDaemon`, `getDaemonHeight`, `isDaemonSynced`, `getHeight`, one blocking
   `sync(startHeight?)`, and the balances `getBalance()` (map by asset), `getBalance(accountIdx)`
   (map by subaddress index) and `getBalance(assetType, accountIdx, subaddressIdx?)`, with the same
-  shapes for `getUnlockedBalance`; amounts are `bigint`;
+  shapes for `getUnlockedBalance`; amounts are `bigint`; an account or subaddress index the wallet
+  does not have rejects with `ACCOUNT_NOT_FOUND` or `SUBADDRESS_NOT_FOUND`;
+* accounts and subaddresses of full wallets: `getAccounts`, `getAccount`, `createAccount`,
+  `getSubaddresses`, `getSubaddress`, `createSubaddress`, `setSubaddressLabel` and
+  `getAddressIndex`; results are read-only plain objects with the balance maps by asset (see
+  below);
 * `validateAddress`, `ZephyrWalletError` (a fixed code and an optional fixed diagnostic; no
   native or daemon text, no secrets), `setWorkerDistPath`, `setWasmModuleUrl` and
   `terminateWorker`;
 * the types `ZephyrWalletData`, `ZephyrDaemonConnection`, `ZephyrWalletSyncResult`,
   `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, `ZephyrAssetBalances` (the map by
-  asset), `ZephyrAccountBalances` (the map by subaddress index), `ZephyrWalletErrorCode` and
+  asset), `ZephyrAccountBalances` (the map by subaddress index), `ZephyrAccount`,
+  `ZephyrSubaddress`, `ZephyrAddressIndex`, `ZephyrAccountOptions`, `ZephyrWalletErrorCode` and
   `ZephyrWalletErrorDiagnostic`.
 
 By default each wallet runs in its own worker with its own WebAssembly instance
@@ -79,6 +85,48 @@ on a plain `http://` origin other than `localhost`) with `NATIVE_ERROR`/`WASM_MO
 This detects a wrong file next to the JavaScript; it is not a signature.
 
 Calls outside this surface reject with `UNSUPPORTED_CAPABILITY` before any native code runs.
+
+### Accounts and subaddresses
+
+An account (`ZephyrAccount`) carries its `index`, `primaryAddress` (the address of its subaddress
+0), `label` (the label of its subaddress 0, where the core stores it; account 0 of a new wallet is
+labelled `Primary account`), `subaddressCount` and the maps `balance` and `unlockedBalance` by asset;
+with `{ includeSubaddresses: true }` also its `subaddresses`. A subaddress (`ZephyrSubaddress`)
+carries `accountIndex`, `index`, `address`, `label`, `balance` and `unlockedBalance` by asset,
+`isUsed` and `numUnspentOutputs`. The maps hold the core's keys only: an asset without outputs at
+that account or subaddress is absent (a wallet without funds has empty account and subaddress maps,
+while `getBalance()` lists every asset with `0n`); reported zeros stay `0n`; historical asset names
+pass through. Results are frozen plain objects and arrays.
+
+* Indices are integers from 0 to 2^32-1, checked before any native call
+  (`INVALID_CONFIG`/`ADDRESS_INDEX_RANGE`); an account or subaddress the wallet does not have rejects
+  with `INVALID_CONFIG` and `ACCOUNT_NOT_FOUND` or `SUBADDRESS_NOT_FOUND`.
+* A label is a string of at most 255 bytes in UTF-8, without control characters (U+0000 to U+001F,
+  U+007F to U+009F) and without unpaired surrogates (`INVALID_CONFIG`: `LABEL_TYPE`, `LABEL_LENGTH`,
+  `LABEL_CHARACTERS`); `""` clears a label. Labels read from wallet bytes made elsewhere are returned
+  as stored. The library never copies a label into an error or a log line.
+* Creation is one account or subaddress per call. A listing returns at most 1,000 accounts and at
+  most 1,000 subaddresses (also counted over all accounts of `getAccounts` with subaddresses); a
+  larger one rejects with `INVALID_CONFIG`/`LISTING_LIMIT`. Page through an account's subaddresses
+  with `getSubaddresses(accountIdx, indices)`, at most 1,000 distinct indices per call, using the
+  account's `subaddressCount`.
+* `getAddressIndex(address)` returns `{ accountIndex, subaddressIndex }` for an address of the
+  wallet; a malformed address or one of another network rejects with
+  `INVALID_ADDRESS`/`CORE_INVALID_ADDRESS`, an address of another wallet with
+  `INVALID_ADDRESS`/`ADDRESS_NOT_IN_WALLET`. The core also resolves the subaddresses of the wallet's
+  lookahead window that were not created yet.
+* Keys-only wallets reject every account call with `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_ACCOUNTS`.
+
+```typescript
+const account = await wallet.createAccount("Savings");                 // { index: 1, label: "Savings", ... }
+const sub = await wallet.createSubaddress(account.index, "Shop");      // { accountIndex: 1, index: 1, address, ... }
+await wallet.setSubaddressLabel(account.index, sub.index, "Online shop");
+const all = await wallet.getAccounts({ includeSubaddresses: true });
+const where = await wallet.getAddressIndex(sub.address);               // { accountIndex: 1, subaddressIndex: 1 }
+```
+
+Amounts other than zero have not been tested yet: no funded test has been run (see
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md)).
 
 ```typescript
 import { createRandomWallet, openWalletData, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
@@ -128,7 +176,10 @@ Everything else inherited from monero-ts stays in the source as unported classes
 `src/main/ts/` and is not exported by the package: the daemon and wallet RPC clients, the
 connection manager, background synchronization, listeners, history, transactions, transfers,
 outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
-most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase`). The
+most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
+inherited account and subaddress models, renamed `ZephyrAccountInherited` and
+`ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and
+`ZephyrSubaddress`). The
 inherited Monero test suite and its root entry point are not part of this repository's tree; the
 tests are under `src/test/lifecycle/` and `src/test/network/`. Transactions and conversions need
 further work and their own tests with funded wallets.

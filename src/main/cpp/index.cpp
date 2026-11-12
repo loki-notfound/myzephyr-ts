@@ -7,9 +7,10 @@
 // register bindings from JS to C++ using emscripten
 EMSCRIPTEN_BINDINGS(module)
 {
-  // Supported wallet lifecycle and read-only daemon access: only the bindings below are exported. Every other
-  // inherited monero-ts binding is excluded together with its definition in
-  // zephyr_wasm_bridge.cpp (ZEPHYR_WASM_BRIDGE_UNPORTED) until it is adapted to the fixed core.
+  // Supported wallet lifecycle, read-only daemon access, accounts and subaddresses: only the bindings
+  // below are exported. Every other inherited monero-ts binding is excluded together with its
+  // definition in zephyr_wasm_bridge.cpp (ZEPHYR_WASM_BRIDGE_UNPORTED) until it is adapted to the
+  // fixed core.
 
   // ------------------------------ UTILITIES ---------------------------------
 
@@ -63,6 +64,14 @@ EMSCRIPTEN_BINDINGS(module)
   emscripten::function("get_balance_asset", &zephyr_wasm_bridge::get_balance_asset);
   emscripten::function("get_unlocked_balance_asset", &zephyr_wasm_bridge::get_unlocked_balance_asset);
   emscripten::function("is_daemon_synced", &zephyr_wasm_bridge::is_daemon_synced);
+
+  // accounts and subaddresses (full wallets)
+  emscripten::function("get_accounts", &zephyr_wasm_bridge::get_accounts);
+  emscripten::function("get_account", &zephyr_wasm_bridge::get_account);
+  emscripten::function("create_account", &zephyr_wasm_bridge::create_account);
+  emscripten::function("get_subaddresses", &zephyr_wasm_bridge::get_subaddresses);
+  emscripten::function("create_subaddress", &zephyr_wasm_bridge::create_subaddress);
+  emscripten::function("set_subaddress_label", &zephyr_wasm_bridge::set_subaddress_label);
   emscripten::function("close", &zephyr_wasm_bridge::close);
 
 #if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)

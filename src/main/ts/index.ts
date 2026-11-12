@@ -29,7 +29,8 @@
  *
  * Read-only network access, full wallets only: a daemon address at construction (config field
  * server) or through setDaemonConnection; isConnectedToDaemon, getDaemonHeight, isDaemonSynced,
- * getHeight, one blocking sync and the asset balance maps. Construction itself is offline; the daemon is set right
+ * getHeight, one blocking sync and the asset balance maps. Accounts and subaddresses of full wallets
+ * (listing, creation, labels and address lookup) with their balance maps by asset. Construction itself is offline; the daemon is set right
  * after it, and if that step fails the wallet is closed and its worker retired before the
  * construction rejects. A new random wallet whose daemon answers the connection check starts at the
  * daemon height; without a daemon it keeps the core's date-based estimate. The address contract is
@@ -64,5 +65,6 @@ export type {
   ZephyrNetworkTypeInput
 } from "./wallet/ZephyrWallet";
 export type { ZephyrAssetBalances, ZephyrAccountBalances } from "./common/ZephyrBalances";
+export type { ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions } from "./common/ZephyrAccounts";
 export { default as ZephyrWalletError } from "./common/ZephyrWalletError";
 export type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./common/ZephyrWalletError";

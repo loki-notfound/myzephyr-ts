@@ -85,6 +85,67 @@ export function isLogLevel(value: unknown): value is number {
   return isIntegerIn(value, 0, INT32_MAX);
 }
 
+// ------------------------------- ACCOUNTS AND LABELS ------------------------
+
+/**
+ * Listing bounds of the accounts and subaddresses API (resource policy, provisional): one call
+ * returns at most MAX_ACCOUNTS_PER_CALL accounts and at most MAX_SUBADDRESSES_PER_CALL subaddresses,
+ * also counted over every account of getAccounts with its subaddresses. A larger listing rejects
+ * with INVALID_CONFIG/LISTING_LIMIT before anything crosses the bridge; the caller then pages: an
+ * account reports its subaddressCount, and getSubaddresses takes at most MAX_SUBADDRESSES_PER_CALL
+ * explicit indices per call.
+ */
+export const MAX_ACCOUNTS_PER_CALL = 1000;
+export const MAX_SUBADDRESSES_PER_CALL = 1000;
+
+/**
+ * Label policy: a label is a string of at most LABEL_MAX_BYTES bytes in UTF-8 (the form the core
+ * stores) without control characters (U+0000 to U+001F, U+007F to U+009F) and without unpaired
+ * UTF-16 surrogates, which have no UTF-8 form. "" clears a label. Violations reject with
+ * INVALID_CONFIG and LABEL_TYPE, LABEL_LENGTH or LABEL_CHARACTERS before any native or worker
+ * call; the label itself is never copied into an error.
+ */
+export const LABEL_MAX_BYTES = 255;
+
+export function checkLabel(label: unknown): string {
+  if (typeof label !== "string") throw new ZephyrWalletError("INVALID_CONFIG", "LABEL_TYPE");
+  let bytes = 0;
+  for (let i = 0; i < label.length; i++) {
+    const c = label.charCodeAt(i);
+    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) throw new ZephyrWalletError("INVALID_CONFIG", "LABEL_CHARACTERS");
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = i + 1 < label.length ? label.charCodeAt(i + 1) : 0;
+      if (d < 0xdc00 || d > 0xdfff) throw new ZephyrWalletError("INVALID_CONFIG", "LABEL_CHARACTERS");
+      bytes += 4;
+      i++;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      throw new ZephyrWalletError("INVALID_CONFIG", "LABEL_CHARACTERS");
+    } else {
+      bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+    }
+    if (bytes > LABEL_MAX_BYTES) throw new ZephyrWalletError("INVALID_CONFIG", "LABEL_LENGTH");
+  }
+  return label;
+}
+
+/**
+ * Explicit subaddress indices of getSubaddresses: a non-empty array of at most
+ * MAX_SUBADDRESSES_PER_CALL distinct uint32 indices (INVALID_CONFIG: SUBADDRESS_INDICES for anything
+ * else but the count and the domain, LISTING_LIMIT for a longer array, ADDRESS_INDEX_RANGE for an
+ * index outside 0..2^32-1). Omitting the array lists every subaddress of the account.
+ */
+export function checkSubaddressIndices(indices: unknown): readonly number[] {
+  if (!Array.isArray(indices) || indices.length === 0) throw new ZephyrWalletError("INVALID_CONFIG", "SUBADDRESS_INDICES");
+  if (indices.length > MAX_SUBADDRESSES_PER_CALL) throw new ZephyrWalletError("INVALID_CONFIG", "LISTING_LIMIT");
+  const seen = new Set<number>();
+  for (const i of indices) {
+    if (!isAddressIndex(i)) throw new ZephyrWalletError("INVALID_CONFIG", "ADDRESS_INDEX_RANGE");
+    if (seen.has(i)) throw new ZephyrWalletError("INVALID_CONFIG", "SUBADDRESS_INDICES");
+    seen.add(i);
+  }
+  return indices.slice();
+}
+
 // ------------------------------- NATIVE EXPORTS -----------------------------
 
 /** Embind exports of the release lifecycle module (src/main/cpp/index.cpp). */
@@ -99,7 +160,9 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   // read-only daemon access
   "set_daemon_connection", "is_connected_to_daemon", "get_daemon_height", "set_restore_height_from_daemon", "get_height", "sync",
   "get_balance_wallet", "get_unlocked_balance_wallet", "get_balance_account", "get_unlocked_balance_account",
-  "get_balance_asset", "get_unlocked_balance_asset", "is_daemon_synced"
+  "get_balance_asset", "get_unlocked_balance_asset", "is_daemon_synced",
+  // accounts and subaddresses
+  "get_accounts", "get_account", "create_account", "get_subaddresses", "create_subaddress", "set_subaddress_label"
 ];
 
 /**
@@ -119,7 +182,7 @@ export const UNBUILT_BRIDGE_EXPORTS: readonly string[] = ["get_exception_message
   "get_height_by_date", "is_synced", "set_restore_height", "set_listener",
   "stop_syncing", "scan_txs", "rescan_spent", "rescan_blockchain",
   "get_balance_subaddress", "get_unlocked_balance_subaddress",
-  "get_accounts", "get_account", "create_account", "get_subaddresses", "create_subaddress", "set_subaddress_label", "get_txs",
+  "get_txs",
   "get_transfers", "get_outputs", "export_outputs", "import_outputs", "export_key_images", "import_key_images", "freeze_output",
   "thaw_output", "is_output_frozen", "get_default_fee_priority", "create_txs", "sweep_output", "sweep_unlocked", "sweep_dust",
   "relay_txs", "describe_tx_set", "sign_txs", "submit_txs", "sign_message", "verify_message", "get_tx_key", "check_tx_key",
@@ -139,7 +202,7 @@ export const UNBUILT_KEEPALIVE_EXPORTS: readonly string[] = ["_request_wallet_sh
 export interface LifecycleArgSpec {
   readonly kind: "uint32" | "networkType" | "logLevel" | "string" | "optionalString" | "address" | "password"
     | "keysBytes" | "optionalBytes" | "emptyPath" | "absent" | "falseFlag" | "createConfig" | "keysConfig"
-    | "boolean" | "daemonUri" | "height" | "assetType";
+    | "boolean" | "daemonUri" | "height" | "assetType" | "label" | "subaddressIndices";
   readonly optional?: boolean;
 }
 
@@ -176,7 +239,7 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   getPublicViewKey: { scope: "wallet", kinds: BOTH, args: [], nativeExports: ["get_public_view_key"], errorContext: "other" },
   getPublicSpendKey: { scope: "wallet", kinds: BOTH, args: [], nativeExports: ["get_public_spend_key"], errorContext: "other" },
   getAddress: { scope: "wallet", kinds: BOTH, args: [{ kind: "uint32" }, { kind: "uint32" }], nativeExports: ["get_address"], errorContext: "other" },
-  getAddressIndex: { scope: "wallet", kinds: BOTH, args: [{ kind: "address" }], nativeExports: ["get_address_index"], errorContext: "address" },
+  getAddressIndex: { scope: "wallet", kinds: FULL, args: [{ kind: "address" }], nativeExports: ["get_address_index"], errorContext: "address" },
   getIntegratedAddress: { scope: "wallet", kinds: BOTH, args: [{ kind: "optionalString", optional: true }, { kind: "optionalString", optional: true }], nativeExports: ["get_integrated_address"], errorContext: "address" },
   decodeIntegratedAddress: { scope: "wallet", kinds: BOTH, args: [{ kind: "address" }], nativeExports: ["decode_integrated_address"], errorContext: "address" },
   getRestoreHeight: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_restore_height"], errorContext: "other" },
@@ -193,6 +256,13 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   getBalances: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }], nativeExports: ["get_balance_wallet", "get_unlocked_balance_wallet"], errorContext: "other" },
   getAccountBalances: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }, { kind: "uint32" }], nativeExports: ["get_balance_account", "get_unlocked_balance_account"], errorContext: "other" },
   getAssetBalance: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }, { kind: "assetType" }, { kind: "uint32" }, { kind: "uint32", optional: true }], nativeExports: ["get_balance_asset", "get_unlocked_balance_asset"], errorContext: "other" },
+  // accounts and subaddresses of full wallets; replies are strict DTOs (common/ZephyrAccounts.ts)
+  getAccounts: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }], nativeExports: ["get_accounts"], errorContext: "other" },
+  getAccount: { scope: "wallet", kinds: FULL, args: [{ kind: "uint32" }, { kind: "boolean" }], nativeExports: ["get_account"], errorContext: "other" },
+  createAccount: { scope: "wallet", kinds: FULL, args: [{ kind: "label" }], nativeExports: ["create_account"], errorContext: "other" },
+  getSubaddresses: { scope: "wallet", kinds: FULL, args: [{ kind: "uint32" }, { kind: "subaddressIndices", optional: true }], nativeExports: ["get_subaddresses"], errorContext: "other" },
+  createSubaddress: { scope: "wallet", kinds: FULL, args: [{ kind: "uint32" }, { kind: "label" }], nativeExports: ["create_subaddress"], errorContext: "other" },
+  setSubaddressLabel: { scope: "wallet", kinds: FULL, args: [{ kind: "uint32" }, { kind: "uint32" }, { kind: "label" }], nativeExports: ["set_subaddress_label"], errorContext: "other" },
   isClosed: { scope: "wallet", kinds: BOTH, args: [], nativeExports: [], errorContext: "other" },
   prepareClose: { scope: "wallet", kinds: FULL, args: [], nativeExports: [], errorContext: "close" },
   close: { scope: "wallet", kinds: BOTH, args: [{ kind: "falseFlag", optional: true }], nativeExports: ["close"], errorContext: "close" }
@@ -242,6 +312,8 @@ export function validateWorkerArgs(method: LifecycleWorkerMethod, args: readonly
       case "daemonUri": if (value !== undefined && (typeof value !== "string" || value.length === 0 || value.length > 512)) fail("INVALID_CONFIG", "DAEMON_ADDRESS"); break;
       case "height": if (!isRestoreHeight(value)) fail("INVALID_CONFIG", "SYNC_START_HEIGHT"); break;
       case "assetType": if (typeof value !== "string" || !/^[A-Z0-9]{1,16}$/.test(value)) fail("INVALID_CONFIG", "ASSET_TYPE"); break;
+      case "label": checkLabel(value); break;
+      case "subaddressIndices": checkSubaddressIndices(value); break;
       case "createConfig":
       case "keysConfig": if (value === null || typeof value !== "object" || Array.isArray(value)) fail("INVALID_CONFIG", "CONFIG_TYPE"); break;
     }

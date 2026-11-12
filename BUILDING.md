@@ -89,8 +89,8 @@ host.
 
 runs, with no network access:
 
-* the lifecycle suite (checks `C01`-`C27`) with the release module and the instrumented suite
-  (`T00`-`T17`) with the test module, in Node.js directly and through wallet workers, under a
+* the lifecycle suite (checks `C01`-`C30`) with the release module and the instrumented suite
+  (`T00`-`T18`) with the test module, in Node.js directly and through wallet workers, under a
   preloaded monitor that blocks every connection and records unexpected file writes;
 * the module loading cases in Node.js, directly and through workers: a missing `zephyr.wasm`,
   a file that is not WebAssembly, a module of another program or build, a changed byte and a
@@ -110,7 +110,8 @@ the Node.js parts only.
 
 clones zephyr-javascript at its pinned, signed tag `v2.3.0-sec.1` into `build/`, then moves a
 disposable wallet both ways: created here, opened, changed and saved there, opened here again and
-checked there. Both sides run offline under the monitor.
+checked there. A second wallet carries accounts, subaddresses and labels: created, changed and
+cleared on each side and read on the other. Both sides run offline under the monitor.
 
 ## Network tests
 

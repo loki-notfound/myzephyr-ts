@@ -24,7 +24,7 @@ namespace zephyr_wasm_bridge
 
   // Retained bindings report failures with the fixed error protocol of zephyr_wasm_bridge.cpp
   // ({"error":"<IDENTIFIER>"} or -1); no native exception text reaches JavaScript.
-  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC };
+  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC, ERROR_CONTEXT_ADDRESS_INDEX };
   const char* classify_current_exception(int context); // only inside a catch handler
   const char* probe_password_state(int handle, const string& old_password, const string& new_password);
 
@@ -72,6 +72,14 @@ namespace zephyr_wasm_bridge
   string get_balance_asset(int handle, const string& asset_type, const uint32_t account_idx, bool has_subaddress, const uint32_t subaddress_idx);
   string get_unlocked_balance_asset(int handle, const string& asset_type, const uint32_t account_idx, bool has_subaddress, const uint32_t subaddress_idx);
   void is_daemon_synced(int handle, emscripten::val callback);
+  // accounts and subaddresses of full wallets: fixed-format JSON results, indices checked against the
+  // wallet's own accounts and subaddresses, listings bounded by the given limits
+  string get_accounts(int handle, bool include_subaddresses, uint32_t max_accounts, uint32_t max_subaddresses);
+  string get_account(int handle, uint32_t account_idx, bool include_subaddresses, uint32_t max_subaddresses);
+  string create_account(int handle, const string& label);
+  string get_subaddresses(int handle, uint32_t account_idx, const string& subaddress_indices, uint32_t max_subaddresses);
+  string create_subaddress(int handle, const uint32_t account_idx, const string& label);
+  string set_subaddress_label(int handle, const uint32_t account_idx, const uint32_t subaddress_idx, const string& label);
   string get_version(int handle);
   string get_seed(int handle);
   string get_seed_language(int handle);
@@ -103,12 +111,6 @@ namespace zephyr_wasm_bridge
   void rescan_blockchain(int handle, emscripten::val callback);
   string get_balance_subaddress(int handle, const uint32_t account_idx, const uint32_t subaddress_idx);
   string get_unlocked_balance_subaddress(int handle, const uint32_t account_idx, const uint32_t subaddress_idx);
-  string get_accounts(int handle, bool include_subaddresses = false, const string& tag = "");
-  string get_account(int handle, uint32_t account_idx, bool include_subaddresses = false);
-  string create_account(int handle, const string& label);
-  string get_subaddresses(int handle, const string& args);
-  string create_subaddress(int handle, const uint32_t account_idx, const string& label);
-  void set_subaddress_label(int handle, const uint32_t account_idx, const uint32_t subaddress_idx, const string& label);
   void get_txs(int handle, const string& tx_query_json, emscripten::val callback);
   void get_transfers(int handle, const string& transfer_query_json, emscripten::val callback);
   void get_outputs(int handle, const string& output_query_json, emscripten::val callback);

@@ -92,7 +92,17 @@ that wallet's worker.
   unknown; the wallet then refuses every operation except `close`.
 * Failed openings of wrong-password bytes leak a few kilobytes inside the core; in worker mode the
   leak goes away with the construction's worker.
-* No funded test has been run: balances are verified in shape, not in amounts.
+* No funded test has been run: balances are verified in shape, not in amounts. This includes the
+  account and subaddress maps, `isUsed` and `numUnspentOutputs`, which are zero or empty for every
+  wallet tested so far.
+* Account and subaddress calls check every index against the wallet's own listings, because the
+  core's wallet wrapper has no count of them: a call with a subaddress index, or one that lists
+  subaddresses, takes time proportional to the account's number of subaddresses times the wallet's
+  number of outputs. Wallet bytes made elsewhere can hold any number of accounts and subaddresses and
+  labels of any length; the listing bounds limit what one call returns, not what the core holds.
+* The core resolves addresses of the wallet's lookahead window with `getAddressIndex` before those
+  subaddresses are created; listings show only created subaddresses (the core creates them when an
+  output arrives at one).
 * Runtime coverage so far: Node.js 22 and headless Chromium on Linux x86_64. Firefox, Safari,
   Electron, Windows and macOS have not been tested. The browser entry is tested with Vite 8 and
   webpack 5 only.

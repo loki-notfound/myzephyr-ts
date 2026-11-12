@@ -22,6 +22,7 @@ import ZephyrWalletListener from "../wallet/model/ZephyrWalletListener"
 import {ZephyrWalletKeys} from "../wallet/ZephyrWalletKeys";
 import { parseDaemonAddress } from "./ZephyrDaemonAddress";
 import { toAccountBalancesDto, toAssetBalancesDto } from "./ZephyrBalances";
+import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccounts";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
@@ -163,7 +164,7 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   getPublicViewKey: async (walletId: string) => walletOf(walletId).getPublicViewKey(),
   getPublicSpendKey: async (walletId: string) => walletOf(walletId).getPublicSpendKey(),
   getAddress: async (walletId: string, accountIdx: number, subaddressIdx: number) => walletOf(walletId).getAddress(accountIdx, subaddressIdx),
-  getAddressIndex: async (walletId: string, address: string) => (await walletOf(walletId).getAddressIndex(address)).toJson(),
+  getAddressIndex: async (walletId: string, address: string) => toAddressIndexDto(await walletOf(walletId).getAddressIndexChecked(address)),
   getIntegratedAddress: async (walletId: string, standardAddress: string | undefined, paymentId: string | undefined) => (await walletOf(walletId).getIntegratedAddress(standardAddress, paymentId)).toJson(),
   decodeIntegratedAddress: async (walletId: string, integratedAddress: string) => (await walletOf(walletId).decodeIntegratedAddress(integratedAddress)).toJson(),
   getRestoreHeight: async (walletId: string) => walletOf(walletId).getRestoreHeight(),
@@ -180,6 +181,13 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   getBalances: async (walletId: string, unlocked: boolean) => toAssetBalancesDto(await walletOf(walletId).getBalanceMap(unlocked)),
   getAccountBalances: async (walletId: string, unlocked: boolean, accountIdx: number) => toAccountBalancesDto(await walletOf(walletId).getAccountBalanceMap(unlocked, accountIdx)),
   getAssetBalance: async (walletId: string, unlocked: boolean, assetType: string, accountIdx: number, subaddressIdx: number | undefined) => (await walletOf(walletId).getAssetBalance(unlocked, assetType, accountIdx, subaddressIdx)).toString(),
+  // accounts and subaddresses: strict DTOs (common/ZephyrAccounts.ts)
+  getAccounts: async (walletId: string, includeSubaddresses: boolean) => (await walletOf(walletId).getAccountsChecked(includeSubaddresses)).map(toAccountDto),
+  getAccount: async (walletId: string, accountIdx: number, includeSubaddresses: boolean) => toAccountDto(await walletOf(walletId).getAccountChecked(accountIdx, includeSubaddresses)),
+  createAccount: async (walletId: string, label: string) => toAccountDto(await walletOf(walletId).createAccountChecked(label)),
+  getSubaddresses: async (walletId: string, accountIdx: number, indices: number[] | undefined) => (await walletOf(walletId).getSubaddressesChecked(accountIdx, indices)).map(toSubaddressDto),
+  createSubaddress: async (walletId: string, accountIdx: number, label: string) => toSubaddressDto(await walletOf(walletId).createSubaddressChecked(accountIdx, label)),
+  setSubaddressLabel: async (walletId: string, accountIdx: number, subaddressIdx: number, label: string) => { await walletOf(walletId).setSubaddressLabelChecked(accountIdx, subaddressIdx, label); },
   isClosed: async (walletId: string) => walletOf(walletId).isClosed(),
   prepareClose: async (walletId: string) => walletOf(walletId).prepareClose(),
   close: async (walletId: string) => {

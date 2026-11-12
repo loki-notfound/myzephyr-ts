@@ -916,6 +916,44 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await other.close();
   });
 
+
+  await check("T18", "Accounts and subaddresses: allocator unchanged over repeated listings, creations rejected before the core and label changes; injected native failures report fixed identifiers and never carry the label", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    await w.createAccount("acct");
+    await w.createSubaddress(0, "sub");
+    // warm-up, then repeated listings and label changes must leave the allocator where it was
+    await w.getAccounts({ includeSubaddresses: true }); await w.getSubaddresses(0); await w.getAccount(1, { includeSubaddresses: true }); await w.setSubaddressLabel(0, 1, "sub");
+    const heap0 = (await hooks.state()).heapInUse;
+    for (let i = 0; i < 25; i++) {
+      await w.getAccounts({ includeSubaddresses: true });
+      await w.getAccount(1, { includeSubaddresses: true });
+      await w.getSubaddresses(0, [1, 0]);
+      await w.getAddressIndex(await w.getAddress(0, 1));
+      await w.setSubaddressLabel(0, 1, "sub");
+      await w.getBalance("ZPH", 0, 1);
+      try { await w.getSubaddress(0, 77); } catch (err) { /* SUBADDRESS_NOT_FOUND, checked below */ }
+      try { await w.getAccount(9); } catch (err) { /* ACCOUNT_NOT_FOUND */ }
+    }
+    const heap1 = (await hooks.state()).heapInUse;
+    notes.push("allocator in use before/after 25 rounds of listings, lookups, label changes and not-found rejections: " + heap0 + " / " + heap1 + " bytes");
+    expect(heap1 === heap0, "allocation accounting unchanged over repeated listings");
+    // injected native failures in the account bindings: fixed identifiers, the label never reaches the error
+    const marker = "LabelMarker" + randomPassword().substring(0, 8);
+    for (const [what, fn] of [["createAccount", () => w.createAccount(marker)], ["createSubaddress", () => w.createSubaddress(0, marker)], ["setSubaddressLabel", () => w.setSubaddressLabel(0, 1, marker)],
+      ["getAccounts", () => w.getAccounts()], ["getSubaddresses", () => w.getSubaddresses(0)]] as Array<[string, () => Promise<unknown>]>) {
+      await hooks.resetCounters();
+      await hooks.arm({ fail: { "error.accounts": 1 } });
+      const err = await expectCode(fn(), "NATIVE_ERROR", "injected failure in " + what, notes, "CORE_UNCLASSIFIED");
+      const st = await hooks.state();
+      expect(st.events.includes("injected:error.accounts"), what + ": the injection fired");
+      expect(!scanText(err).includes(marker.toLowerCase()) && !scanText(err.toEnvelope()).includes(marker.toLowerCase()), what + ": the label is not in the error or its envelope");
+    }
+    const labels = (await w.getSubaddresses(0)).map((s) => s.label);
+    expect(!labels.includes(marker) && (await w.getAccounts()).length === 2, "no injected creation or label change reached the core");
+    await w.close();
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

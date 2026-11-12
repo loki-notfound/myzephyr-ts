@@ -344,7 +344,13 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     await expectCode(w.getBalance("zeph", 0), "INVALID_CONFIG", "scalar with a lower-case asset token", notes, "ASSET_TYPE");
     await expectCode((w.getBalance as unknown as (a: number, b: number) => Promise<unknown>)(0, 0), "UNSUPPORTED_CAPABILITY", "asset-less (account, subaddress) scalar", notes, "BALANCE");
     await expectCode(w.getBalance(-1), "INVALID_CONFIG", "negative account index", notes, "ADDRESS_INDEX_RANGE");
-    notes.push("wallet map keys " + keys.join(",") + " (all 0n), account map size " + account.size + ", scalars 0n");
+    // accounts and subaddresses of a synced wallet without funds: empty maps (no asset without outputs), nothing used
+    const accounts = await w.getAccounts({ includeSubaddresses: true });
+    expect(accounts.length >= 1 && accounts.every((a) => a.balance instanceof Map && a.balance.size === 0 && a.unlockedBalance instanceof Map && a.unlockedBalance.size === 0), "account maps by asset are empty for a wallet without funds");
+    const subs = accounts.flatMap((a) => Array.from(a.subaddresses ?? []));
+    expect(subs.length >= 1 && subs.every((sub) => sub.balance.size === 0 && sub.unlockedBalance.size === 0 && sub.isUsed === false && sub.numUnspentOutputs === 0), "subaddress maps are empty, nothing used, no unspent output");
+    await expectCode(w.getBalance(accounts.length), "INVALID_CONFIG", "account map of an account the wallet does not have", notes, "ACCOUNT_NOT_FOUND");
+    notes.push("wallet map keys " + keys.join(",") + " (all 0n), account map size " + account.size + ", scalars 0n; " + accounts.length + " account(s), " + subs.length + " subaddress(es) with empty maps");
     return keys;
   }
 

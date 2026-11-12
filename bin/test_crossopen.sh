@@ -2,7 +2,8 @@
 # Optional two-way file compatibility test with the reference wallet library zephyr-javascript
 # (tag ZEPHYR_JAVASCRIPT_TAG, signed by the zephyr-backports release key): a disposable wallet
 # created here is opened, re-saved and changed there and opened here again, offline on both sides
-# under the network-blocking monitor. Run bin/build.sh first.
+# under the network-blocking monitor. One wallet carries accounts, subaddresses and labels (created,
+# changed and cleared on each side and read on the other). Run bin/build.sh first.
 #
 # Environment (optional): ZEPHYR_JAVASCRIPT_URL to clone from a local mirror; OFFLINE=1 installs its
 # npm dependencies from the npm cache only.
@@ -48,17 +49,25 @@ for (const st of ["2-reference-import-export", "4-reference-final"]) {
   for (const [id, r] of Object.entries(res(st).results)) {
     if (id === "zj-mainnet-seed-created") { if (r.restoreHeight333333 !== true) bad.push(st + " " + id); continue; }
     for (const k of ["addressMatch", "networkMatch", "restoreHeightMatch", "seedMatch"]) if (r[k] !== true) bad.push(st + " " + id + " " + k);
+    if (/accounts/.test(id) && r.accountsMatch !== true) bad.push(st + " " + id + " accounts and labels");
+    if (st === "2-reference-import-export" && r.zjReopenAfterResave !== true) bad.push(st + " " + id + " reopen after re-save");
     if (!String(r.wrongPassword || "").toLowerCase().startsWith("invalid password")) bad.push(st + " " + id + " wrong password");
   }
 }
 const imp = res("3-sdk-import");
-if (Object.keys(imp).length !== 6) bad.push("import count " + Object.keys(imp).length);
+if (Object.keys(imp).length !== 7) bad.push("import count " + Object.keys(imp).length);
+const final = res("4-reference-final").results;
+if (!Object.keys(final).some((id) => /accounts/.test(id))) bad.push("the reference library did not reopen the accounts wallet");
 for (const [id, r] of Object.entries(imp)) {
   for (const m of ["direct", "worker"]) for (const k of ["AddressMatch", "NetworkMatch", "RestoreHeightMatch", "SeedMatch"]) if (r[m + k] !== true) bad.push("import " + id + " " + m + k);
+  if (/accounts/.test(id)) {
+    for (const m of ["direct", "worker"]) for (const k of ["AccountsAddressesMatch", "AccountsLabelsMatch", "AccountsGetAddressMatch", "AccountsFieldsMatch"]) if (r[m + k] !== true) bad.push("import " + id + " " + m + k);
+    if (r.sdkAccountsAfterResave !== true) bad.push("import " + id + " re-saved accounts");
+  }
   if (r.wrongPassword !== "WRONG_PASSWORD") bad.push("import " + id + " wrong password");
 }
 if (bad.length) { console.log("mismatches: " + bad.join("; ")); process.exit(1); }
-console.log("addresses, networks, restore heights and seeds match both ways; wrong passwords rejected");
+console.log("addresses, networks, restore heights, seeds, accounts, subaddresses and labels match both ways; wrong passwords rejected");
 JS
 rm -rf "$W"
 echo "two-way file compatibility passed"

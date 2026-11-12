@@ -15,6 +15,9 @@ import crypto from "crypto";
 import * as F from "../../main/ts/index";
 import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
 
+/** Accounts and subaddresses of a wallet: per account, its subaddresses' addresses and labels in index order. */
+type AccountsRecord = Array<Array<{ address: string; label: string }>>;
+
 interface WalletMeta {
   id: string;
   origin: "sdk" | "zj" | "sdk-resaved-zj" | "zj-resaved-sdk";
@@ -25,6 +28,38 @@ interface WalletMeta {
   restoreHeight: number;
   keysFile: string;
   cacheFile: string;
+  /** set for the wallet that carries accounts, subaddresses and labels across both libraries */
+  accounts?: AccountsRecord;
+}
+
+/** Disposable labels: ASCII, an empty label, and text whose UTF-8 form takes two, three and four bytes per character. */
+function testLabel(kind: string): string {
+  return kind + "-" + crypto.randomBytes(4).toString("hex") + " \u00e9\u20ac\ud83d\ude00";
+}
+
+/** The wallet's accounts and subaddresses as the SDK reports them (getAccounts with subaddresses). */
+async function accountsRecord(w: F.ZephyrWallet): Promise<AccountsRecord> {
+  const accounts = await w.getAccounts({ includeSubaddresses: true });
+  return accounts.map((a) => (a.subaddresses ?? []).map((s) => ({ address: s.address, label: s.label })));
+}
+
+/** Compare the SDK's view of a wallet with a record: structure, labels, every address equal to getAddress, the account label of subaddress 0. */
+async function compareAccounts(w: F.ZephyrWallet, want: AccountsRecord): Promise<Record<string, boolean>> {
+  const accounts = await w.getAccounts({ includeSubaddresses: true });
+  let addressesMatch = accounts.length === want.length, labelsMatch = accounts.length === want.length, getAddressMatch = true, accountFieldsMatch = true;
+  for (let a = 0; a < accounts.length && a < want.length; a++) {
+    const subs = accounts[a].subaddresses ?? [];
+    if (subs.length !== want[a].length || accounts[a].subaddressCount !== want[a].length) { addressesMatch = false; labelsMatch = false; continue; }
+    if (accounts[a].primaryAddress !== subs[0].address || accounts[a].label !== subs[0].label || accounts[a].index !== a) accountFieldsMatch = false;
+    for (let i = 0; i < subs.length; i++) {
+      if (subs[i].address !== want[a][i].address) addressesMatch = false;
+      if (subs[i].label !== want[a][i].label) labelsMatch = false;
+      if ((await w.getAddress(a, i)) !== subs[i].address) getAddressMatch = false;
+      const idx = await w.getAddressIndex(subs[i].address);
+      if (idx.accountIndex !== a || idx.subaddressIndex !== i) getAddressMatch = false;
+    }
+  }
+  return { accountsAddressesMatch: addressesMatch, accountsLabelsMatch: labelsMatch, accountsGetAddressMatch: getAddressMatch, accountsFieldsMatch: accountFieldsMatch };
 }
 
 function arg(name: string): string {
@@ -64,6 +99,18 @@ async function exportPhase(dir: string): Promise<Record<string, unknown>> {
   const r = await F.createRandomWallet({ networkType: 0, password: pr, proxyToWorker: false });
   await saveWallet(dir, meta, r, { id: "sdk-mainnet-random", origin: "sdk", networkType: 0, password: pr, seed: await r.getSeed(), address: await r.getPrimaryAddress(), restoreHeight: await r.getRestoreHeight() });
   await r.close(); await a.close();
+  // accounts, subaddresses and labels: created, changed and cleared here, read and extended by the reference library
+  const pc = pw();
+  const c = await F.createRandomWallet({ networkType: 0, password: pc, proxyToWorker: false });
+  await c.createAccount(testLabel("account"));
+  await c.createSubaddress(0, testLabel("sub"));
+  await c.createSubaddress(1, testLabel("sub"));
+  await c.createSubaddress(1, "");
+  await c.createSubaddress(1, testLabel("cleared"));
+  await c.setSubaddressLabel(0, 1, testLabel("changed"));
+  await c.setSubaddressLabel(1, 3, "");
+  await saveWallet(dir, meta, c, { id: "sdk-mainnet-accounts", origin: "sdk", networkType: 0, password: pc, seed: await c.getSeed(), address: await c.getPrimaryAddress(), restoreHeight: await c.getRestoreHeight(), accounts: await accountsRecord(c) });
+  await c.close();
   const pt = pw();
   const t = await F.createRandomWallet({ networkType: 1, password: pt, proxyToWorker: false });
   await saveWallet(dir, meta, t, { id: "sdk-testnet-random", origin: "sdk", networkType: 1, password: pt, seed: await t.getSeed(), address: await t.getPrimaryAddress(), restoreHeight: await t.getRestoreHeight() });
@@ -86,6 +133,18 @@ async function importPhase(dir: string): Promise<Record<string, unknown>> {
       r[label + "NetworkMatch"] = (await w.getNetworkType()) === m.networkType;
       r[label + "RestoreHeightMatch"] = (await w.getRestoreHeight()) === m.restoreHeight;
       r[label + "SeedMatch"] = (await w.getSeed()) === m.seed;
+      if (m.accounts !== undefined) for (const [k, v] of Object.entries(await compareAccounts(w, m.accounts))) r[label + k.charAt(0).toUpperCase() + k.substring(1)] = v;
+      if (!proxy && m.accounts !== undefined && m.origin === "zj-resaved-sdk") {
+        // extend the reference library's changes once more and hand the bytes back for its final reopen
+        await w.createSubaddress(2, testLabel("sdk"));
+        await w.setSubaddressLabel(2, 0, testLabel("account"));
+        const id = "sdk-resaved-zj-accounts";
+        await saveWallet(dir, meta, w, { id, origin: "sdk-resaved-zj", networkType: m.networkType, password: m.password, seed: m.seed, address: m.address, restoreHeight: m.restoreHeight, accounts: await accountsRecord(w) });
+        const again = meta[meta.length - 1];
+        const w2 = await F.openWalletData({ networkType: m.networkType, password: m.password, keysData: new Uint8Array(fs.readFileSync(path.join(dir, again.keysFile))), cacheData: new Uint8Array(fs.readFileSync(path.join(dir, again.cacheFile))), proxyToWorker: false });
+        r.sdkAccountsAfterResave = Object.values(await compareAccounts(w2, again.accounts as AccountsRecord)).every((x) => x === true);
+        await w2.close();
+      }
       if (!proxy && m.origin === "zj") {
         const id = m.id.replace(/^zj-/, "sdk-resaved-zj-");
         await saveWallet(dir, meta, w, { id, origin: "sdk-resaved-zj", networkType: m.networkType, password: m.password, seed: m.seed, address: m.address, restoreHeight: m.restoreHeight });

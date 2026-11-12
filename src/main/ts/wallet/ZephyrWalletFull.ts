@@ -36,10 +36,11 @@ import ZephyrTxWallet from "./model/ZephyrTxWallet";
 import ZephyrWalletBase from "./ZephyrWalletBase";
 import ZephyrWalletConfig from "./model/ZephyrWalletConfig";
 import ZephyrWalletError, { ZephyrBridgeErrorIdentifier, ZephyrBridgePasswordState, bridgePasswordErrorOf } from "../common/ZephyrWalletError";
-import { isAddressIndex, isRestoreHeight, parseRestoreHeightText } from "../common/ZephyrLifecycleContract";
+import { MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL, checkLabel, checkSubaddressIndices, isAddressIndex, isRestoreHeight, parseRestoreHeightText } from "../common/ZephyrLifecycleContract";
 import HttpClient from "../common/HttpClient";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
 import { ZephyrAccountBalances, ZephyrAssetBalances, fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalances";
+import { ZephyrAccount, ZephyrAddressIndex, ZephyrSubaddress, fromAccountDto, fromAccountsDto, fromAddressIndexDto, fromSubaddressDto, fromSubaddressesDto, parseBridgeAccount, parseBridgeAccounts, parseBridgeAddressIndex, parseBridgeSubaddress, parseBridgeSubaddresses } from "../common/ZephyrAccounts";
 import { configFields, toCoreConfigJson, validateCreateConfig, validateOpenConfig } from "./model/ZephyrWalletCoreConfig";
 import { ZephyrWalletKeys, ZephyrWalletKeysProxy } from "./ZephyrWalletKeys";
 import { ZephyrWorkerChannel } from "../common/ZephyrWalletWorkers";
@@ -854,70 +855,85 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     });
   }
   
-  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> {
-    if (this.getWalletProxy()) return this.getWalletProxy().getAccounts(includeSubaddresses, tag);
-    return this.module.queueTask(async () => {
-      this.assertNotClosed();
-      let accountsStr = this.module.get_accounts(this.cppAddress, includeSubaddresses ? true : false, tag ? tag : "");
-      let accounts = [];
-      for (let accountJson of JSON.parse(GenUtils.stringifyBigInts(accountsStr)).accounts) {
-        accounts.push(ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson)));
-      }
-      return accounts;
-    });
-  }
-  
-  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> {
-    if (this.getWalletProxy()) return this.getWalletProxy().getAccount(accountIdx, includeSubaddresses);
-    return this.module.queueTask(async () => {
-      this.assertNotClosed();
-      let accountStr = this.module.get_account(this.cppAddress, accountIdx, includeSubaddresses ? true : false);
-      let accountJson = JSON.parse(GenUtils.stringifyBigInts(accountStr));
-      return ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson));
-    });
+  // The inherited model methods of accounts and subaddresses are not ported (their bindings now have the
+  // checked signatures below); they reject with a typed error instead of a binding failure.
+  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async createAccount(label?: string): Promise<ZephyrAccountInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async setSubaddressLabel(accountIdx: number, subaddressIdx: number, label: string): Promise<void> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
 
-  }
-  
-  async createAccount(label?: string): Promise<ZephyrAccountInherited> {
-    if (this.getWalletProxy()) return this.getWalletProxy().createAccount(label);
-    if (label === undefined) label = "";
+  /**
+   * Accounts and subaddresses (checked): arguments are validated again here (the facade validated them
+   * first), every index is checked against the wallet in the bridge, and results are parsed strictly
+   * from the bridge's fixed-format JSON (common/ZephyrAccounts.ts). Listings are bounded by
+   * MAX_ACCOUNTS_PER_CALL and MAX_SUBADDRESSES_PER_CALL.
+   */
+  async getAccountsChecked(includeSubaddresses: boolean): Promise<ReadonlyArray<ZephyrAccount>> {
+    if (typeof includeSubaddresses !== "boolean") throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    if (this.getWalletProxy()) return this.getWalletProxy().getAccountsChecked(includeSubaddresses);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let accountStr = this.module.create_account(this.cppAddress, label);
-      let accountJson = JSON.parse(GenUtils.stringifyBigInts(accountStr));
-      return ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson));
-    });
-  }
-  
-  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> {
-    if (this.getWalletProxy()) return this.getWalletProxy().getSubaddresses(accountIdx, subaddressIndices);
-    let args = {accountIdx: accountIdx, subaddressIndices: subaddressIndices === undefined ? [] : GenUtils.listify(subaddressIndices)};
-    return this.module.queueTask(async () => {
-      this.assertNotClosed();
-      let subaddressesJson = JSON.parse(GenUtils.stringifyBigInts(this.module.get_subaddresses(this.cppAddress, JSON.stringify(args)))).subaddresses;
-      let subaddresses = [];
-      for (let subaddressJson of subaddressesJson) subaddresses.push(ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson)));
-      return subaddresses;
-    });
-  }
-  
-  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> {
-    if (this.getWalletProxy()) return this.getWalletProxy().createSubaddress(accountIdx, label);
-    if (label === undefined) label = "";
-    return this.module.queueTask(async () => {
-      this.assertNotClosed();
-      let subaddressStr = this.module.create_subaddress(this.cppAddress, accountIdx, label);
-      let subaddressJson = JSON.parse(GenUtils.stringifyBigInts(subaddressStr));
-      return ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson));
+      return parseBridgeAccounts(ZephyrWalletError.checkBridgeResult("other", this.module.get_accounts(this.cppAddress, includeSubaddresses, MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL)), includeSubaddresses);
     });
   }
 
-  async setSubaddressLabel(accountIdx: number, subaddressIdx: number, label: string): Promise<void> {
-    if (this.getWalletProxy()) return this.getWalletProxy().setSubaddressLabel(accountIdx, subaddressIdx, label);
-    if (label === undefined) label = "";
+  async getAccountChecked(accountIdx: number, includeSubaddresses: boolean): Promise<ZephyrAccount> {
+    if (!isAddressIndex(accountIdx)) throw new ZephyrWalletError("INVALID_CONFIG", "ADDRESS_INDEX_RANGE");
+    if (typeof includeSubaddresses !== "boolean") throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    if (this.getWalletProxy()) return this.getWalletProxy().getAccountChecked(accountIdx, includeSubaddresses);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      this.module.set_subaddress_label(this.cppAddress, accountIdx, subaddressIdx, label);
+      return parseBridgeAccount(ZephyrWalletError.checkBridgeResult("other", this.module.get_account(this.cppAddress, accountIdx, includeSubaddresses, MAX_SUBADDRESSES_PER_CALL)), accountIdx, includeSubaddresses);
+    });
+  }
+
+  async createAccountChecked(label: string): Promise<ZephyrAccount> {
+    checkLabel(label);
+    if (this.getWalletProxy()) return this.getWalletProxy().createAccountChecked(label);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return parseBridgeAccount(ZephyrWalletError.checkBridgeResult("other", this.module.create_account(this.cppAddress, label)), undefined, false);
+    });
+  }
+
+  async getSubaddressesChecked(accountIdx: number, subaddressIndices: readonly number[] | undefined): Promise<ReadonlyArray<ZephyrSubaddress>> {
+    if (!isAddressIndex(accountIdx)) throw new ZephyrWalletError("INVALID_CONFIG", "ADDRESS_INDEX_RANGE");
+    const indices = subaddressIndices === undefined ? undefined : checkSubaddressIndices(subaddressIndices);
+    if (this.getWalletProxy()) return this.getWalletProxy().getSubaddressesChecked(accountIdx, indices);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return parseBridgeSubaddresses(ZephyrWalletError.checkBridgeResult("other", this.module.get_subaddresses(this.cppAddress, accountIdx, indices === undefined ? "" : indices.join(","), MAX_SUBADDRESSES_PER_CALL)), accountIdx, indices);
+    });
+  }
+
+  async createSubaddressChecked(accountIdx: number, label: string): Promise<ZephyrSubaddress> {
+    if (!isAddressIndex(accountIdx)) throw new ZephyrWalletError("INVALID_CONFIG", "ADDRESS_INDEX_RANGE");
+    checkLabel(label);
+    if (this.getWalletProxy()) return this.getWalletProxy().createSubaddressChecked(accountIdx, label);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return parseBridgeSubaddress(ZephyrWalletError.checkBridgeResult("other", this.module.create_subaddress(this.cppAddress, accountIdx, label)), accountIdx);
+    });
+  }
+
+  async setSubaddressLabelChecked(accountIdx: number, subaddressIdx: number, label: string): Promise<void> {
+    if (!isAddressIndex(accountIdx) || !isAddressIndex(subaddressIdx)) throw new ZephyrWalletError("INVALID_CONFIG", "ADDRESS_INDEX_RANGE");
+    checkLabel(label);
+    if (this.getWalletProxy()) return this.getWalletProxy().setSubaddressLabelChecked(accountIdx, subaddressIdx, label);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      if (ZephyrWalletError.checkBridgeResult("other", this.module.set_subaddress_label(this.cppAddress, accountIdx, subaddressIdx, label)) !== "") throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
+    });
+  }
+
+  async getAddressIndexChecked(address: string): Promise<ZephyrAddressIndex> {
+    if (typeof address !== "string" || address.length === 0 || address.length > 256) throw new ZephyrWalletError("INVALID_ADDRESS", "ADDRESS_TYPE");
+    if (this.getWalletProxy()) return this.getWalletProxy().getAddressIndexChecked(address);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return parseBridgeAddressIndex(ZephyrWalletError.checkBridgeResult("address", this.module.get_address_index(this.cppAddress, address)));
     });
   }
   
@@ -2140,8 +2156,8 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     return this.invokeWorker("getNetworkType");
   }
   
-  async setSubaddressLabel(accountIdx, subaddressIdx, label) {
-    return this.invokeWorker("setSubaddressLabel", Array.from(arguments)) as Promise<void>;
+  async setSubaddressLabel(accountIdx: number, subaddressIdx: number, label: string): Promise<void> {
+    throw ZephyrWalletError.unsupported("NATIVE_EXPORT");
   }
   
   /** The worker re-validates the address from its normalized text */
@@ -2304,35 +2320,38 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     return BigInt(unlockedBalanceStr);
   }
   
-  async getAccounts(includeSubaddresses, tag) {
-    let accounts = [];
-    for (let accountJson of (await this.invokeWorker("getAccounts", Array.from(arguments)))) {
-      accounts.push(ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson)));
-    }
-    return accounts;
+  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async createAccount(label?: string): Promise<ZephyrAccountInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+
+  async getAccountsChecked(includeSubaddresses: boolean): Promise<ReadonlyArray<ZephyrAccount>> {
+    return fromAccountsDto(await this.invokeWorker("getAccounts", [includeSubaddresses]), includeSubaddresses, MAX_ACCOUNTS_PER_CALL);
   }
-  
-  async getAccount(accountIdx, includeSubaddresses) {
-    let accountJson = await this.invokeWorker("getAccount", Array.from(arguments));
-    return ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson));
+
+  async getAccountChecked(accountIdx: number, includeSubaddresses: boolean): Promise<ZephyrAccount> {
+    return fromAccountDto(await this.invokeWorker("getAccount", [accountIdx, includeSubaddresses]), accountIdx, includeSubaddresses);
   }
-  
-  async createAccount(label) {
-    let accountJson = await this.invokeWorker("createAccount", Array.from(arguments));
-    return ZephyrWalletFull.sanitizeAccount(new ZephyrAccountInherited(accountJson));
+
+  async createAccountChecked(label: string): Promise<ZephyrAccount> {
+    return fromAccountDto(await this.invokeWorker("createAccount", [label]), undefined, false);
   }
-  
-  async getSubaddresses(accountIdx, subaddressIndices) {
-    let subaddresses = [];
-    for (let subaddressJson of (await this.invokeWorker("getSubaddresses", Array.from(arguments)))) {
-      subaddresses.push(ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson)));
-    }
-    return subaddresses;
+
+  async getSubaddressesChecked(accountIdx: number, indices: readonly number[] | undefined): Promise<ReadonlyArray<ZephyrSubaddress>> {
+    return fromSubaddressesDto(await this.invokeWorker("getSubaddresses", indices === undefined ? [accountIdx] : [accountIdx, indices.slice()]), accountIdx, indices);
   }
-  
-  async createSubaddress(accountIdx, label) {
-    let subaddressJson = await this.invokeWorker("createSubaddress", Array.from(arguments));
-    return ZephyrWalletKeys.sanitizeSubaddress(new ZephyrSubaddressInherited(subaddressJson));
+
+  async createSubaddressChecked(accountIdx: number, label: string): Promise<ZephyrSubaddress> {
+    return fromSubaddressDto(await this.invokeWorker("createSubaddress", [accountIdx, label]), accountIdx);
+  }
+
+  async setSubaddressLabelChecked(accountIdx: number, subaddressIdx: number, label: string): Promise<void> {
+    if (await this.invokeWorker("setSubaddressLabel", [accountIdx, subaddressIdx, label]) !== undefined) throw new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE");
+  }
+
+  async getAddressIndexChecked(address: string): Promise<ZephyrAddressIndex> {
+    return fromAddressIndexDto(await this.invokeWorker("getAddressIndex", [address]));
   }
   
   async getTxs(query) {

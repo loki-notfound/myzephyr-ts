@@ -106,7 +106,15 @@ export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // forced stop of one proxied wallet: every pending and later call of a terminated wallet rejects
   // with WALLET_CLOSED/WALLET_TERMINATED; in direct mode terminate rejects with
   // UNSUPPORTED_CAPABILITY/TERMINATE (a call running in the caller's own context cannot be interrupted)
-  "WALLET_TERMINATED", "TERMINATE"
+  "WALLET_TERMINATED", "TERMINATE",
+  // accounts and subaddresses of full wallets: keys-only wallets reject with
+  // UNSUPPORTED_CAPABILITY/KEYS_ONLY_ACCOUNTS; an account or subaddress index the wallet does not have
+  // (also for the balance calls with an account or subaddress index), a label that is not a string, is
+  // longer than 255 UTF-8 bytes or has a control character or an unpaired surrogate, malformed explicit
+  // subaddress indices and a listing above the per-call bounds reject with INVALID_CONFIG; a foreign
+  // address with INVALID_ADDRESS/ADDRESS_NOT_IN_WALLET (a malformed one: CORE_INVALID_ADDRESS)
+  "KEYS_ONLY_ACCOUNTS", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LABEL_TYPE", "LABEL_LENGTH", "LABEL_CHARACTERS",
+  "SUBADDRESS_INDICES", "LISTING_LIMIT", "ADDRESS_NOT_IN_WALLET"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];
@@ -130,7 +138,10 @@ export const BRIDGE_ERROR_IDENTIFIERS = [
   "SEED_EMPTY", "SEED_LANGUAGE", "SEED_AND_KEYS", "KEYS_MISSING", "REGTEST", "LISTENER", "SAVE_ON_CLOSE",
   // Daemon, sync and balance bindings
   "DAEMON_ADDRESS", "DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED", "SYNC_FAILED",
-  "SYNC_START_HEIGHT", "ASSET_TYPE", "UNEXPECTED_ASSET_TYPE"
+  "SYNC_START_HEIGHT", "ASSET_TYPE", "UNEXPECTED_ASSET_TYPE",
+  // accounts and subaddresses (and the index checks of the account and asset balance bindings)
+  "KEYS_ONLY_ACCOUNTS", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS",
+  "SUBADDRESS_INDICES", "ADDRESS_NOT_IN_WALLET", "UNEXPECTED_RESULT"
 ] as const;
 
 export type ZephyrBridgeErrorIdentifier = typeof BRIDGE_ERROR_IDENTIFIERS[number];
@@ -142,12 +153,12 @@ const BRIDGE_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})"\}$/;
 const BRIDGE_PASSWORD_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})","passwordState":"(unchanged|changed|unknown)"\}$/;
 
 /** Bridge identifiers whose code does not depend on the call context. */
-const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "REGTEST", "LISTENER", "SAVE_ON_CLOSE"]);
+const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "REGTEST", "LISTENER", "SAVE_ON_CLOSE", "KEYS_ONLY_ACCOUNTS"]);
 const BRIDGE_INVALID_CONFIG: ReadonlySet<string> = new Set(["NETWORK_TYPE", "CREATE_MODE", "SEED_LANGUAGE", "SEED_AND_KEYS", "CORE_UNKNOWN_LANGUAGE", "CORE_LOOKAHEAD"]);
 const BRIDGE_INVALID_RECOVERY: ReadonlySet<string> = new Set(["SEED_EMPTY", "KEYS_MISSING"]);
 /** Daemon results keep DAEMON_ERROR and argument checks INVALID_CONFIG in every context */
 const BRIDGE_DAEMON: ReadonlySet<string> = new Set(["DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED"]);
-const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE"]);
+const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS", "SUBADDRESS_INDICES"]);
 
 function isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic {
   return typeof value === "string" && (ZEPHYR_WALLET_ERROR_DIAGNOSTICS as readonly string[]).includes(value);

@@ -13,6 +13,8 @@
 #include <map>
 #include <memory>
 #include "oracle/asset_types.h"
+#include "rapidjson/writer.h"
+#include "rapidjson/stringbuffer.h"
 
 using namespace std;
 using namespace zephyr_wasm_bridge;
@@ -205,6 +207,15 @@ namespace {
   };
   // END CORE MESSAGE TABLE
 
+  // BEGIN CORE MESSAGE TABLE (address index context)
+  // get_address_index of the wallet wrapper: a malformed address (or one of another network), and a
+  // well-formed address that none of the wallet's subaddresses has
+  const core_message_rule ADDRESS_INDEX_MESSAGE_RULES[] = {
+    {"Invalid address", "CORE_INVALID_ADDRESS"},
+    {"Address doesn't belong to the wallet", "ADDRESS_NOT_IN_WALLET"}
+  };
+  // END CORE MESSAGE TABLE
+
   template <size_t N>
   const char* match_core_message(const core_message_rule (&rules)[N], const char* text, const char* fallback) {
     if (text == nullptr) return fallback;
@@ -245,6 +256,7 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
     switch (context) {
       case ERROR_CONTEXT_CREATE: return match_core_message(CREATE_MESSAGE_RULES, e.what(), "CORE_UNCLASSIFIED");
       case ERROR_CONTEXT_ADDRESS: return match_core_message(ADDRESS_MESSAGE_RULES, e.what(), "CORE_UNCLASSIFIED");
+      case ERROR_CONTEXT_ADDRESS_INDEX: return match_core_message(ADDRESS_INDEX_MESSAGE_RULES, e.what(), "CORE_UNCLASSIFIED");
       case ERROR_CONTEXT_OPEN: return match_core_message(OPEN_MESSAGE_RULES, e.what(), "CORE_WALLET_DATA");
       case ERROR_CONTEXT_CLOSE: return "CORE_CLOSE_FAILED";
       case ERROR_CONTEXT_BUFFER: return "NATIVE_BUFFER_FAILED";
@@ -355,6 +367,139 @@ namespace {
       out += "\"" + entry.first + "\":\"" + decimal(entry.second) + "\"";
     }
     return out + "}";
+  }
+
+  // ---- accounts and subaddresses: existence, labels and fixed-format results ----
+
+  // The wrapper has no count of accounts or subaddresses; the core's own listings give them. Every
+  // account has its subaddress 0, so an account index the wallet does not have lists no subaddress.
+  void require_account(monero_wallet* wallet, uint32_t account_idx) {
+    if ((size_t) account_idx >= wallet->get_accounts(false, "").size()) throw bridge_failure("ACCOUNT_NOT_FOUND");
+  }
+
+  // every subaddress of an account, index-ordered (the core lists indices 0..n-1); none: no such account
+  std::vector<monero_subaddress> subaddresses_of(monero_wallet* wallet, uint32_t account_idx) {
+    std::vector<monero_subaddress> all = wallet->get_subaddresses(account_idx, std::vector<uint32_t>());
+    if (all.empty()) throw bridge_failure("ACCOUNT_NOT_FOUND");
+    for (size_t i = 0; i < all.size(); i++) if (!all[i].m_index || (size_t) *all[i].m_index != i) throw bridge_failure("UNEXPECTED_RESULT");
+    return all;
+  }
+
+  void require_subaddress(monero_wallet* wallet, uint32_t account_idx, uint32_t subaddress_idx) {
+    if ((size_t) subaddress_idx >= subaddresses_of(wallet, account_idx).size()) throw bridge_failure("SUBADDRESS_NOT_FOUND");
+  }
+
+  // full wallets only: a keys-only handle has no route (the SDK rejects keys-only wallets before this)
+  monero_wallet* accounts_wallet(int handle) {
+    if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_ACCOUNTS");
+    return (monero_wallet*) handle;
+  }
+
+  // Backstop of the SDK's label rules: well-formed UTF-8 of at most 255 bytes without C0 or C1
+  // control characters or DEL. The label itself never appears in a result other than its own field.
+  void check_label(const string& label) {
+    if (label.size() > 255) throw bridge_failure("LABEL_LENGTH");
+    const unsigned char* b = (const unsigned char*) label.data();
+    size_t n = label.size();
+    for (size_t i = 0; i < n;) {
+      unsigned char c = b[i];
+      if (c < 0x80) {
+        if (c < 0x20 || c == 0x7f) throw bridge_failure("LABEL_CHARACTERS");
+        i++;
+        continue;
+      }
+      size_t len = (c >= 0xc2 && c <= 0xdf) ? 2 : (c >= 0xe0 && c <= 0xef) ? 3 : (c >= 0xf0 && c <= 0xf4) ? 4 : 0;
+      if (len == 0 || i + len > n) throw bridge_failure("LABEL_CHARACTERS");
+      for (size_t k = 1; k < len; k++) if ((b[i + k] & 0xc0) != 0x80) throw bridge_failure("LABEL_CHARACTERS");
+      if (c == 0xc2 && b[i + 1] <= 0x9f) throw bridge_failure("LABEL_CHARACTERS");                 // C1 controls U+0080..U+009F
+      if (c == 0xe0 && b[i + 1] < 0xa0) throw bridge_failure("LABEL_CHARACTERS");                  // overlong
+      if (c == 0xed && b[i + 1] >= 0xa0) throw bridge_failure("LABEL_CHARACTERS");                 // UTF-16 surrogates
+      if (c == 0xf0 && b[i + 1] < 0x90) throw bridge_failure("LABEL_CHARACTERS");                  // overlong
+      if (c == 0xf4 && b[i + 1] >= 0x90) throw bridge_failure("LABEL_CHARACTERS");                 // above U+10FFFF
+      i += len;
+    }
+  }
+
+  // strict "i,j,k" list of distinct uint32 decimal indices (the SDK sends checked indices); "" means none
+  std::vector<uint32_t> parse_indices(const string& text, uint32_t max_count) {
+    std::vector<uint32_t> out;
+    if (text.empty()) return out;
+    size_t pos = 0;
+    while (true) {
+      size_t end = text.find(',', pos);
+      string item = text.substr(pos, end == string::npos ? string::npos : end - pos);
+      if (item.empty() || item.size() > 10 || (item.size() > 1 && item[0] == '0')) throw bridge_failure("SUBADDRESS_INDICES");
+      for (char c : item) if (c < '0' || c > '9') throw bridge_failure("SUBADDRESS_INDICES");
+      unsigned long long v = std::stoull(item);
+      if (v > 4294967295ULL) throw bridge_failure("SUBADDRESS_INDICES");
+      if (std::find(out.begin(), out.end(), (uint32_t) v) != out.end()) throw bridge_failure("SUBADDRESS_INDICES");
+      out.push_back((uint32_t) v);
+      if (out.size() > max_count) throw bridge_failure("LISTING_LIMIT");
+      if (end == string::npos) break;
+      pos = end + 1;
+    }
+    return out;
+  }
+
+  typedef rapidjson::Writer<rapidjson::StringBuffer> json_writer;
+
+  void write_string(json_writer& w, const string& value) {
+    w.String(value.data(), (rapidjson::SizeType) value.size());
+  }
+
+  void write_asset_map(json_writer& w, const std::map<std::string, uint64_t>& amounts) {
+    w.StartObject();
+    for (const auto& entry : amounts) {
+      if (!is_core_asset_type(entry.first)) throw bridge_failure("UNEXPECTED_ASSET_TYPE");
+      write_string(w, entry.first);
+      write_string(w, decimal(entry.second));
+    }
+    w.EndObject();
+  }
+
+  // {"accountIndex":a,"index":i,"address":"..","label":"..","balance":{..},"unlockedBalance":{..},"isUsed":b,"numUnspentOutputs":"n"}
+  void write_subaddress(json_writer& w, const monero_subaddress& s) {
+    if (!s.m_account_index || !s.m_index || !s.m_address || !s.m_label || !s.m_balance || !s.m_unlocked_balance || !s.m_is_used || !s.m_num_unspent_outputs) throw bridge_failure("UNEXPECTED_RESULT");
+    w.StartObject();
+    w.Key("accountIndex"); w.Uint(*s.m_account_index);
+    w.Key("index"); w.Uint(*s.m_index);
+    w.Key("address"); write_string(w, *s.m_address);
+    w.Key("label"); write_string(w, *s.m_label);
+    w.Key("balance"); write_asset_map(w, *s.m_balance);
+    w.Key("unlockedBalance"); write_asset_map(w, *s.m_unlocked_balance);
+    w.Key("isUsed"); w.Bool(*s.m_is_used);
+    w.Key("numUnspentOutputs"); write_string(w, decimal(*s.m_num_unspent_outputs));
+    w.EndObject();
+  }
+
+  // {"index":a,"primaryAddress":"..","label":"..","subaddressCount":n,"balance":{..},"unlockedBalance":{..}[,"subaddresses":[..]]}
+  // The account's label is the label of its subaddress 0 (wallet2 stores it there).
+  void write_account(json_writer& w, const monero_account& a, const std::vector<monero_subaddress>& subaddresses, bool include_subaddresses) {
+    if (!a.m_index || !a.m_primary_address || !a.m_balance || !a.m_unlocked_balance || subaddresses.empty() || !subaddresses[0].m_label) throw bridge_failure("UNEXPECTED_RESULT");
+    w.StartObject();
+    w.Key("index"); w.Uint(*a.m_index);
+    w.Key("primaryAddress"); write_string(w, *a.m_primary_address);
+    w.Key("label"); write_string(w, *subaddresses[0].m_label);
+    w.Key("subaddressCount"); w.Uint((unsigned) subaddresses.size());
+    w.Key("balance"); write_asset_map(w, *a.m_balance);
+    w.Key("unlockedBalance"); write_asset_map(w, *a.m_unlocked_balance);
+    if (include_subaddresses) {
+      w.Key("subaddresses");
+      w.StartArray();
+      for (const auto& s : subaddresses) write_subaddress(w, s);
+      w.EndArray();
+    }
+    w.EndObject();
+  }
+
+  string account_result(monero_wallet* wallet, uint32_t account_idx, bool include_subaddresses, uint32_t max_subaddresses) {
+    std::vector<monero_subaddress> subaddresses = subaddresses_of(wallet, account_idx);
+    if (include_subaddresses && subaddresses.size() > max_subaddresses) throw bridge_failure("LISTING_LIMIT");
+    monero_account account = wallet->get_account(account_idx, false);
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    write_account(w, account, subaddresses, include_subaddresses);
+    return string(buffer.GetString(), buffer.GetSize());
   }
 }
 
@@ -839,6 +984,7 @@ string zephyr_wasm_bridge::get_balance_account(int handle, const uint32_t accoun
     route_of(handle);
     ZEPHYR_TS_TEST_THROW("error.balance", "account");
     monero_wallet* wallet = (monero_wallet*) handle;
+    require_account(wallet, account_idx);
     return account_map_json(wallet->get_balance(account_idx));
   } catch (...) {
     return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
@@ -850,6 +996,7 @@ string zephyr_wasm_bridge::get_unlocked_balance_account(int handle, const uint32
     route_of(handle);
     ZEPHYR_TS_TEST_THROW("error.balance", "account unlocked");
     monero_wallet* wallet = (monero_wallet*) handle;
+    require_account(wallet, account_idx);
     return account_map_json(wallet->get_unlocked_balance(account_idx));
   } catch (...) {
     return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
@@ -863,6 +1010,7 @@ string zephyr_wasm_bridge::get_balance_asset(int handle, const string& asset_typ
     if (!is_core_asset_type(asset_type)) throw bridge_failure("ASSET_TYPE");
     ZEPHYR_TS_TEST_THROW("error.balance", asset_type);
     monero_wallet* wallet = (monero_wallet*) handle;
+    if (has_subaddress) require_subaddress(wallet, account_idx, subaddress_idx); else require_account(wallet, account_idx);
     return decimal(has_subaddress ? wallet->get_balance(asset_type, account_idx, subaddress_idx) : wallet->get_balance(asset_type, account_idx));
   } catch (...) {
     return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
@@ -875,6 +1023,7 @@ string zephyr_wasm_bridge::get_unlocked_balance_asset(int handle, const string& 
     if (!is_core_asset_type(asset_type)) throw bridge_failure("ASSET_TYPE");
     ZEPHYR_TS_TEST_THROW("error.balance", asset_type);
     monero_wallet* wallet = (monero_wallet*) handle;
+    if (has_subaddress) require_subaddress(wallet, account_idx, subaddress_idx); else require_account(wallet, account_idx);
     return decimal(has_subaddress ? wallet->get_unlocked_balance(asset_type, account_idx, subaddress_idx) : wallet->get_unlocked_balance(asset_type, account_idx));
   } catch (...) {
     return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
@@ -896,6 +1045,126 @@ void zephyr_wasm_bridge::is_daemon_synced(int handle, emscripten::val callback) 
     result = bridge_error(daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_DAEMON)));
   }
   callback(result);
+}
+
+// --------------------- ACCOUNTS AND SUBADDRESSES --------------------------
+
+// Accounts and subaddresses of full wallets, with the core's balance maps by asset. Every index is
+// checked against the wallet's own accounts and subaddresses before the core is asked about it: an
+// account or subaddress the wallet does not have rejects with ACCOUNT_NOT_FOUND or
+// SUBADDRESS_NOT_FOUND instead of the core's empty answer. Listings are bounded by the limits the SDK
+// passes (LISTING_LIMIT); creation is one account or subaddress per call. Results are fixed-format
+// JSON (see write_account and write_subaddress); a failure is {"error":"<IDENTIFIER>"}.
+
+// {"accounts":[<account>,...]}: every account, with its subaddresses if requested
+string zephyr_wasm_bridge::get_accounts(int handle, bool include_subaddresses, uint32_t max_accounts, uint32_t max_subaddresses) {
+  try {
+    monero_wallet* wallet = accounts_wallet(handle);
+    ZEPHYR_TS_TEST_THROW("error.accounts", "accounts");
+    std::vector<monero_account> accounts = wallet->get_accounts(true, "");
+    if (accounts.size() > max_accounts) throw bridge_failure("LISTING_LIMIT");
+    size_t total = 0;
+    for (size_t i = 0; i < accounts.size(); i++) {
+      if (!accounts[i].m_index || (size_t) *accounts[i].m_index != i) throw bridge_failure("UNEXPECTED_RESULT");
+      total += accounts[i].m_subaddresses.size();
+    }
+    if (include_subaddresses && total > max_subaddresses) throw bridge_failure("LISTING_LIMIT");
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    w.StartObject();
+    w.Key("accounts");
+    w.StartArray();
+    for (const auto& account : accounts) write_account(w, account, account.m_subaddresses, include_subaddresses);
+    w.EndArray();
+    w.EndObject();
+    return string(buffer.GetString(), buffer.GetSize());
+  } catch (...) {
+    return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
+  }
+}
+
+// <account>: one account of the wallet, with its subaddresses if requested
+string zephyr_wasm_bridge::get_account(int handle, uint32_t account_idx, bool include_subaddresses, uint32_t max_subaddresses) {
+  try {
+    monero_wallet* wallet = accounts_wallet(handle);
+    ZEPHYR_TS_TEST_THROW("error.accounts", "account");
+    return account_result(wallet, account_idx, include_subaddresses, max_subaddresses);
+  } catch (...) {
+    return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
+  }
+}
+
+// <account>: a new account with the given label (also the label of its subaddress 0)
+string zephyr_wasm_bridge::create_account(int handle, const string& label) {
+  try {
+    monero_wallet* wallet = accounts_wallet(handle);
+    check_label(label);
+    ZEPHYR_TS_TEST_THROW("error.accounts", label);
+    monero_account created = wallet->create_account(label);
+    if (!created.m_index) throw bridge_failure("UNEXPECTED_RESULT");
+    return account_result(wallet, *created.m_index, false, 0);
+  } catch (...) {
+    return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
+  }
+}
+
+// {"subaddresses":[<subaddress>,...]}: the account's subaddresses at the given indices, in the given
+// order ("i,j,..."), or every subaddress of the account ("")
+string zephyr_wasm_bridge::get_subaddresses(int handle, uint32_t account_idx, const string& subaddress_indices, uint32_t max_subaddresses) {
+  try {
+    monero_wallet* wallet = accounts_wallet(handle);
+    ZEPHYR_TS_TEST_THROW("error.accounts", "subaddresses");
+    std::vector<uint32_t> indices = parse_indices(subaddress_indices, max_subaddresses);
+    std::vector<monero_subaddress> all = subaddresses_of(wallet, account_idx);
+    if (indices.empty() && all.size() > max_subaddresses) throw bridge_failure("LISTING_LIMIT");
+    for (uint32_t i : indices) if ((size_t) i >= all.size()) throw bridge_failure("SUBADDRESS_NOT_FOUND");
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    w.StartObject();
+    w.Key("subaddresses");
+    w.StartArray();
+    if (indices.empty()) { for (const auto& sub : all) write_subaddress(w, sub); }
+    else { for (uint32_t i : indices) write_subaddress(w, all[i]); }
+    w.EndArray();
+    w.EndObject();
+    return string(buffer.GetString(), buffer.GetSize());
+  } catch (...) {
+    return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
+  }
+}
+
+// <subaddress>: a new subaddress of an account with the given label
+string zephyr_wasm_bridge::create_subaddress(int handle, const uint32_t account_idx, const string& label) {
+  try {
+    monero_wallet* wallet = accounts_wallet(handle);
+    check_label(label);
+    ZEPHYR_TS_TEST_THROW("error.accounts", label);
+    require_account(wallet, account_idx); // ACCOUNT_NOT_FOUND before the core is asked
+    monero_subaddress created = wallet->create_subaddress(account_idx, label);
+    if (!created.m_index) throw bridge_failure("UNEXPECTED_RESULT");
+    std::vector<monero_subaddress> listed = wallet->get_subaddresses(account_idx, std::vector<uint32_t>{*created.m_index});
+    if (listed.size() != 1 || !listed[0].m_index || *listed[0].m_index != *created.m_index) throw bridge_failure("UNEXPECTED_RESULT");
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    write_subaddress(w, listed[0]);
+    return string(buffer.GetString(), buffer.GetSize());
+  } catch (...) {
+    return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
+  }
+}
+
+// "" after the label of an existing subaddress (subaddress 0: the account's label) was set
+string zephyr_wasm_bridge::set_subaddress_label(int handle, const uint32_t account_idx, const uint32_t subaddress_idx, const string& label) {
+  try {
+    monero_wallet* wallet = accounts_wallet(handle);
+    check_label(label);
+    ZEPHYR_TS_TEST_THROW("error.accounts", label);
+    require_subaddress(wallet, account_idx, subaddress_idx);
+    wallet->set_subaddress_label(account_idx, subaddress_idx, label);
+    return "";
+  } catch (...) {
+    return bridge_error(classify_current_exception(ERROR_CONTEXT_GETTER));
+  }
 }
 
 string zephyr_wasm_bridge::get_version(int handle) {
@@ -978,14 +1247,18 @@ string zephyr_wasm_bridge::get_address(int handle, const uint32_t account_idx, c
   }
 }
 
+// {"accountIndex":a,"index":i}: the account and subaddress of an address of this full wallet. A
+// malformed address or one of another network: CORE_INVALID_ADDRESS; a well-formed address none of
+// the wallet's subaddresses has: ADDRESS_NOT_IN_WALLET.
 string zephyr_wasm_bridge::get_address_index(int handle, const string& address) {
-  monero_wallet* wallet = (monero_wallet*) handle;
   try {
+    monero_wallet* wallet = accounts_wallet(handle);
     ZEPHYR_TS_TEST_THROW("error.address", address);
     monero_subaddress subaddress = wallet->get_address_index(address);
-    return subaddress.serialize();
+    if (!subaddress.m_account_index || !subaddress.m_index) throw bridge_failure("UNEXPECTED_RESULT");
+    return string("{\"accountIndex\":") + std::to_string(*subaddress.m_account_index) + ",\"index\":" + std::to_string(*subaddress.m_index) + "}";
   } catch (...) {
-    return bridge_error(classify_current_exception(ERROR_CONTEXT_ADDRESS));
+    return bridge_error(classify_current_exception(ERROR_CONTEXT_ADDRESS_INDEX));
   }
 }
 
@@ -1148,69 +1421,6 @@ string zephyr_wasm_bridge::get_unlocked_balance_subaddress(int handle, const uin
   rapidjson::Value value;
   doc.AddMember("unlockedBalance", rapidjson::Value().SetUint64(wallet->get_unlocked_balance(account_idx, subaddress_idx)), doc.GetAllocator());
   return gen_utils::serialize(doc);
-}
-
-string zephyr_wasm_bridge::get_accounts(int handle, bool include_subaddresses, const string& tag) {
-
-  // get accounts
-  monero_wallet* wallet = (monero_wallet*) handle;
-  vector<monero_account> accounts = wallet->get_accounts(include_subaddresses, tag);
-
-  // wrap and serialize accounts
-  rapidjson::Document doc;
-  doc.SetObject();
-  doc.AddMember("accounts", monero_utils::to_rapidjson_val(doc.GetAllocator(), accounts), doc.GetAllocator());
-  return gen_utils::serialize(doc);
-}
-
-string zephyr_wasm_bridge::get_account(int handle, uint32_t account_idx, bool include_subaddresses) {
-  monero_wallet* wallet = (monero_wallet*) handle;
-  monero_account account = wallet->get_account(account_idx, include_subaddresses);
-  return account.serialize();
-}
-
-string zephyr_wasm_bridge::create_account(int handle, const string& label) {
-  monero_wallet* wallet = (monero_wallet*) handle;
-  monero_account account = wallet->create_account(label);
-  return account.serialize();
-}
-
-string zephyr_wasm_bridge::get_subaddresses(int handle, const string& args) {
-  monero_wallet* wallet = (monero_wallet*) handle;
-
-  // deserialize args to property tree
-  std::istringstream iss = std::istringstream(args);
-  boost::property_tree::ptree node;
-  boost::property_tree::read_json(iss, node);
-
-  // get account index argument
-  uint32_t account_idx = node.get_child("accountIdx").get_value<uint32_t>();
-
-  // get subaddresses indices argument
-  vector<uint32_t> subaddress_indices;
-  for (const auto& item : node.get_child("subaddressIndices")) {
-    subaddress_indices.push_back(item.second.get_value<uint32_t>());
-  }
-
-  // get subaddresses
-  vector<monero_subaddress> subaddresses = wallet->get_subaddresses(account_idx, subaddress_indices);
-
-  // wrap and serialize subaddresses
-  rapidjson::Document doc;
-  doc.SetObject();
-  doc.AddMember("subaddresses", monero_utils::to_rapidjson_val(doc.GetAllocator(), subaddresses), doc.GetAllocator());
-  return gen_utils::serialize(doc);
-}
-
-string zephyr_wasm_bridge::create_subaddress(int handle, const uint32_t account_idx, const string& label) {
-  monero_wallet* wallet = (monero_wallet*) handle;
-  monero_subaddress subaddress = wallet->create_subaddress(account_idx, label);
-  return subaddress.serialize();
-}
-
-void zephyr_wasm_bridge::set_subaddress_label(int handle, const uint32_t account_idx, const uint32_t subaddress_idx, const string& label) {
-  monero_wallet* wallet = (monero_wallet*) handle;
-  wallet->set_subaddress_label(account_idx, subaddress_idx, label);
 }
 
 void zephyr_wasm_bridge::get_txs(int handle, const string& tx_query_json, emscripten::val callback) {

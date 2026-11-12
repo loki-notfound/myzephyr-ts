@@ -53,6 +53,11 @@ function plainObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Bridge JSON object {"<asset>":"<decimal>",...} to an asset map (NATIVE_ERROR/UNEXPECTED_RESULT otherwise). */
+export function parseAssetMapObject(value: unknown): ZephyrAssetBalances {
+  return assetMapOf(value);
+}
+
 function assetMapOf(value: unknown): Map<string, bigint> {
   const fields = plainObject(value);
   const out = new Map<string, bigint>();
