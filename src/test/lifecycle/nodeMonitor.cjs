@@ -1,6 +1,10 @@
 /**
  * Test-only Node preload (node --require): records and blocks every outbound socket, DNS
- * lookup and fetch, and records host file writes, in the main thread and in worker threads.
+ * lookup and fetch, and records host file writes, in the main thread and in worker threads. The only
+ * connections let through are those to the loopback addresses named in
+ * $LIFECYCLE_MONITOR_ALLOW_CONNECT (host:port, comma-separated), recorded with the kind "loopback";
+ * with $LIFECYCLE_MONITOR_LOOPBACK_LISTEN=1 the local lookup of the literal 127.0.0.1 (which a server
+ * makes when it listens on that address) passes too.
  * Each thread appends a start line, then one JSON line per observation (no payloads), to
  * $LIFECYCLE_MONITOR_LOG as it happens (worker 'exit' events are not reliable on terminate).
  */
@@ -44,13 +48,19 @@ net.Socket.prototype.connect = function (...args) {
   const target = Array.isArray(a) ? a[0] : a;
   const desc = typeof target === "object" && target !== null ? (target.path ? "unix:" + target.path : (target.host || "localhost") + ":" + target.port) : String(target) + (args[1] !== undefined && typeof args[1] !== "function" ? ":" + args[1] : "");
   if (typeof desc === "string" && desc.startsWith("unix:")) return origConnect.apply(this, args);
+  // loopback servers a test started itself (read at every connect: the runner sets it after listening)
+  const allowed = (process.env.LIFECYCLE_MONITOR_ALLOW_CONNECT || "").split(",").filter(Boolean);
+  if (allowed.includes(desc)) { emit("loopback", desc); return origConnect.apply(this, args); }
   found.connects.push(desc);
   this.destroy(blocked("connect"));
   return this;
 };
 for (const name of ["lookup", "resolve", "resolve4", "resolve6"]) {
   const orig = dns[name];
-  dns[name] = function (host, ...rest) { found.dnsLookups.push(String(host)); const cb = rest[rest.length - 1]; if (typeof cb === "function") process.nextTick(cb, blocked("dns")); return undefined; };
+  dns[name] = function (host, ...rest) {
+    // the literal loopback address of servers a test starts itself (no query leaves the machine)
+    if (name === "lookup" && host === "127.0.0.1" && process.env.LIFECYCLE_MONITOR_LOOPBACK_LISTEN === "1") { emit("loopback", "lookup"); return orig.call(this, host, ...rest); }
+    found.dnsLookups.push(String(host)); const cb = rest[rest.length - 1]; if (typeof cb === "function") process.nextTick(cb, blocked("dns")); return undefined; };
   void orig;
 }
 if (typeof globalThis.fetch === "function") {

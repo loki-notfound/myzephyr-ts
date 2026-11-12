@@ -61,7 +61,9 @@ The package entry (`src/main/ts/index.ts`) exports:
   `sync(startHeight?)`, and the balances `getBalance()` (map by asset), `getBalance(accountIdx)`
   (map by subaddress index) and `getBalance(assetType, accountIdx, subaddressIdx?)`, with the same
   shapes for `getUnlockedBalance`; amounts are `bigint`; an account or subaddress index the wallet
-  does not have rejects with `ACCOUNT_NOT_FOUND` or `SUBADDRESS_NOT_FOUND`;
+  does not have rejects with `ACCOUNT_NOT_FOUND` or `SUBADDRESS_NOT_FOUND`; the daemon address must
+  be the final address: HTTP redirects are never followed, so a redirecting address or proxy fails
+  by design ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md));
 * accounts and subaddresses of full wallets: `getAccounts`, `getAccount`, `createAccount`,
   `getSubaddresses`, `getSubaddress`, `createSubaddress`, `setSubaddressLabel` and
   `getAddressIndex`; results are read-only plain objects with the balance maps by asset (see

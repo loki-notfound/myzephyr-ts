@@ -111,5 +111,8 @@ that wallet's worker.
   again by the transport. In Node.js and Electron it never uses a proxy, also not one named by the
   process environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`): a daemon request goes
   directly to the configured address. In a browser the browser's own proxy settings apply, which a
-  page cannot see or change. The shipped declarations need no Node.js types. The browser entry bundles
+  page cannot see or change. HTTP redirects are never followed (in a browser through `fetch` with
+  redirect mode `manual`): a daemon address that redirects fails, so the configured address must be
+  the final one (`DEPLOYMENT.md`). The browser transport therefore needs `fetch`; `XMLHttpRequest` is
+  not used. The shipped declarations need no Node.js types. The browser entry bundles
   what it needs and loads none of the runtime dependencies at run time.

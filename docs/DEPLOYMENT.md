@@ -70,12 +70,33 @@ credentials, query or fragment. Three deployment forms work, in Node.js and in t
 
 The library contains no default daemon and no deployment-specific host.
 
+### The daemon address must be the final address
+
+The library never follows an HTTP redirect, for any daemon request, in Node.js, Electron and the
+browser, in the page and in a wallet worker. Configure the address that answers the daemon's
+requests itself: if `http://` is redirected to `https://`, or a path or host forwards with a 3xx
+status, configure the target instead. A redirecting proxy fails by design: a redirect answer is a
+daemon failure (the connection check reports `false`, later calls `DAEMON_ERROR`/
+`DAEMON_NOT_CONNECTED`; a redirect during a sync rejects the sync with `DAEMON_ERROR`/
+`DAEMON_RESPONSE`), with no second request and no retry.
+
+Why: the library sends a request only to the configured address (an allowlist of the configured
+daemon routes, checked before each request). A redirect would let whoever answers for that address
+(the daemon, a proxy, a CDN or anything on an unencrypted path) move the wallet's traffic to
+another host that the allowlist never checked. In Node.js the 3xx answer is returned as it is and
+its `Location` is never read; in a browser the request uses `fetch` with redirect mode `manual`,
+so the browser stops at the redirect and gives the page an opaque answer without status, headers
+or body (`XMLHttpRequest`, which always follows redirects, is not used). A cross-origin redirect
+whose answer has no CORS headers that admit the page is reported by the browser as a failed
+request (`DAEMON_NOT_CONNECTED`), likewise without a second request.
+
 ## Proxies in front of a daemon
 
 This section is about a reverse proxy that you address as the daemon. The library itself never
 connects through a forward proxy: in Node.js and Electron it ignores the proxy variables of the
 process environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) and connects to the
-configured daemon address directly; in a browser the browser's own settings apply.
+configured daemon address directly; in a browser the browser's own settings apply. A reverse proxy
+must forward the wallet's requests itself; one that answers with a redirect fails (see above).
 
 * Forward these read-only paths: `/json_rpc`, `/getheight` (also `/get_height`), `/getinfo`
   (`/get_info`), `/getblocks.bin` (`/get_blocks.bin`), `/gethashes.bin` (`/get_hashes.bin`),

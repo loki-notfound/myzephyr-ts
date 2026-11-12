@@ -96,9 +96,15 @@ runs, with no network access:
   a file that is not WebAssembly, a module of another program or build, a changed byte and a
   runtime without Web Crypto reject with fixed diagnostics before any worker starts, and a failed
   load is not cached;
+* the redirect checks (`R00`-`R04`) in Node.js, in the main thread and in a wallet worker: two
+  loopback servers started by the runner (the only connections the monitor lets through), the
+  first answering 301, 302, 303, 307 and 308 to JSON requests with a body, to the same origin and
+  to the binary request of a running sync; the redirect target must receive nothing and the call
+  must fail with the fixed daemon diagnostic;
 * the same two suites and the module loading cases in headless Chromium, in a wallet worker,
   with every non-loopback request sent to a closed proxy port and under the page policy of
-  `docs/DEPLOYMENT.md`.
+  `docs/DEPLOYMENT.md`, and the redirect checks in the page and in a wallet worker (the policy then
+  also admits both loopback servers, so that a followed redirect would reach its target).
 
 Some checks do not apply in direct mode and are reported as `not-run` there. Results with codes,
 counts and timings only are written to `build/test-results/offline/`. Set `SKIP_BROWSER=1` to run

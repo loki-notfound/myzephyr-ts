@@ -62,4 +62,11 @@ const moduleLoading = Object.assign({}, configBase, {
   output: { path: out, filename: "consumer.module.js" }
 });
 
-module.exports = [release, instrumented, testWorker, measure, measureWorker, network, moduleLoading];
+// redirect checks of the transport (test only): page and wallet worker with the release worker bundle
+const redirect = Object.assign({}, configBase, {
+  name: "Redirect checks page",
+  entry: "./src/test/transport/browser/redirectConsumer.ts",
+  output: { path: out, filename: "consumer.redirect.js" }
+});
+
+module.exports = [release, instrumented, testWorker, measure, measureWorker, network, moduleLoading, redirect];

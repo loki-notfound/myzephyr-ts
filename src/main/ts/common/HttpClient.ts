@@ -286,6 +286,10 @@ export default class HttpClient {
       if (cancelToken) cancelToken.unsubscribe(onCancel);
     }
 
+    // a redirect is never followed (see axiosRequest): its answer reaches the core as a failed answer
+    // without headers or body, so its Location value (and anything else in it) is never read or copied
+    if (HttpClient.isRedirect(resp.status)) return { statusCode: resp.status, statusText: "", headers: {}, body: isBinary ? new Uint8Array(0) : "" };
+
     // normalize response
     let normalizedResponse: any = {};
     normalizedResponse.statusCode = resp.status;
@@ -296,12 +300,30 @@ export default class HttpClient {
     return normalizedResponse;
   }
 
+  /**
+   * Whether an answer is a redirect: a 3xx status (Node.js, Deno), or status 0, which fetch reports
+   * only for the opaque answer of a redirect it did not follow (redirect "manual"; a request in the
+   * default "cors" mode never yields another status-0 answer, a network failure rejects instead).
+   */
+  static isRedirect(status: unknown): boolean {
+    return status === 0 || (typeof status === "number" && status >= 300 && status <= 399);
+  }
+
   // one request, with the shared agents in Node.js (a browser has no agents); axios rejects a status
   // outside 2xx with the response attached, which requestAxios passes on as a response. proxy: false
   // switches off axios's proxy support in Node.js, including the proxy it would otherwise take from
   // the process environment (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY and their lower-case forms):
   // a request goes directly to the configured daemon or not at all. Browsers apply their own proxy
   // settings, which a page cannot see or change.
+  //
+  // Redirects are never followed, for any request: the daemon address must be the final address. In
+  // Node.js maxRedirects 0 makes axios use the plain http and https modules instead of its redirect
+  // follower, so a 3xx answer is returned as it is. In a browser (page or worker) the request goes
+  // through fetch with redirect "manual": the browser does not follow the redirect and returns an
+  // opaque answer with status 0 and no headers or body, so no second request leaves the page; the
+  // caller cannot see the status code or the Location. XMLHttpRequest always follows redirects and is
+  // therefore not used. A cross-origin redirect whose answer lacks CORS headers that admit the page is
+  // reported by the browser as a network failure instead, again without a second request.
   protected static async axiosRequest(method: string, url: string, body: any, rejectUnauthorized?: boolean, cancelToken?: any) {
     const nodeAgents = LibraryUtils.isNodeRuntime();
     return axios.request({
@@ -315,10 +337,12 @@ export default class HttpClient {
       httpsAgent: url.startsWith("https") && nodeAgents ? HttpClient.getHttpsAgent(rejectUnauthorized) : undefined,
       timeout: HttpClient.getNonAgentTimeout(),
       proxy: false,
+      maxRedirects: 0,
+      fetchOptions: { redirect: "manual" },
       cancelToken: cancelToken,
       data: body,
       transformResponse: res => res,
-      adapter: GenUtils.isDeno() ? ['fetch'] : ['http', 'xhr', 'fetch']
+      adapter: GenUtils.isDeno() ? ['fetch'] : ['http', 'fetch']
     });
   }
 }

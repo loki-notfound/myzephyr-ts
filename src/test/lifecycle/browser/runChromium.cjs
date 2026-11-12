@@ -20,6 +20,11 @@
  * --csp-page and --csp-worker replace the policy sent with the page and its scripts, and with the
  * worker scripts (*.worker.js), for the policy tests of the WebAssembly module. With --record the
  * runner exits 0 whenever it could run Chromium; the caller judges the recorded outcome.
+ *
+ * With --redirect the runner also starts the two loopback servers of the redirect checks
+ * (src/test/transport/redirectServers.cjs), adds both origins to connect-src (so that a followed
+ * redirect would reach its target rather than be stopped by the policy), serves their origin to the
+ * page at GET /redirect-targets.json and writes the servers' counts to the summary.
  */
 "use strict";
 const http = require("http");
@@ -37,6 +42,8 @@ const CONTAIN = true; // mandatory; there is no option to disable it
 const QUERY = arg("query", "");
 const MARKS = args.includes("--marks");
 const RECORD = args.includes("--record");
+const REDIRECT = args.includes("--redirect");
+let redirectServers;
 const marks = [];
 let chromiumPid;
 
@@ -80,8 +87,8 @@ const CSP = [
   "frame-ancestors 'none'",
   "report-uri /csp-report"
 ].join("; ");
-const CSP_PAGE = arg("csp-page", CSP);
-const CSP_WORKER = arg("csp-worker", CSP_PAGE);
+let CSP_PAGE = arg("csp-page", CSP);
+let CSP_WORKER = arg("csp-worker", CSP_PAGE);
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".map": "application/json", ".wasm": "application/wasm" }; // .wasm: the separately served module
 const SERVED = new Set(fs.readdirSync(ROOT).filter((f) => /^[A-Za-z0-9._-]+$/.test(f)).map((f) => "/" + f));
 
@@ -108,6 +115,9 @@ const server = http.createServer((req, res) => {
     } else if (MARKS && req.method === "GET" && url.pathname === "/mark") {
       marks.push({ label: String(url.searchParams.get("label")).substring(0, 40), at: new Date().toISOString(), processes: chromiumPid ? sampleProcesses(chromiumPid) : {} });
       res.writeHead(204, headers); res.end();
+    } else if (REDIRECT && req.method === "GET" && url.pathname === "/redirect-targets.json") {
+      headers["Content-Type"] = "application/json";
+      res.writeHead(200, headers); res.end(JSON.stringify({ first: redirectServers.first, second: redirectServers.second }));
     } else if (req.method === "POST" && url.pathname === "/csp-report") {
       try { cspReports.push(JSON.parse(body.toString("utf8"))); } catch (e) { cspReports.push({ unparseable: true }); }
       res.writeHead(204, headers); res.end();
@@ -138,7 +148,16 @@ function analyzeNetLog(file) {
   return { readable: true, bytes: text.length, distinctUrls: Array.from(urls.entries()).map(([u, n]) => u + " x" + n), hosts: Array.from(hosts) };
 }
 
-server.listen(0, "127.0.0.1", async () => {
+(REDIRECT ? require(path.join(__dirname, "../../transport/redirectServers.cjs")).startRedirectServers() : Promise.resolve(undefined)).then((rs) => {
+  redirectServers = rs;
+  if (rs !== undefined) {
+    const allow = (p) => p.replace("connect-src 'self'", "connect-src 'self' " + rs.first + " " + rs.second);
+    CSP_PAGE = allow(CSP_PAGE); CSP_WORKER = allow(CSP_WORKER);
+  }
+  server.listen(0, "127.0.0.1", () => run());
+});
+
+async function run() {
   const port = server.address().port;
   const userData = path.join(OUT, "chromium-profile");
   const netLog = path.join(OUT, "netlog.json");
@@ -166,12 +185,20 @@ server.listen(0, "127.0.0.1", async () => {
   await new Promise((r) => { if (chromiumExit !== undefined) r(); else child.on("exit", () => r()); setTimeout(r, 10000); });
   killGroup("SIGKILL"); // remaining helper processes of this test-owned group only
   server.close();
+  let redirectCounts;
+  if (redirectServers !== undefined) {
+    const st = redirectServers.snapshot();
+    const total = (b) => Object.values(b).reduce((n, v) => n + v.requests, 0);
+    redirectCounts = { redirectsSent: st.redirectsSent, firstRequests: total(st.first), secondRequests: total(st.second), landedRequests: total(st.landed), preflights: st.preflights };
+    await redirectServers.close();
+  }
   const version = await new Promise((r) => { const v = spawn(CHROMIUM, ["--version"]); let o = ""; v.stdout.on("data", (d) => { o += d; }); v.on("exit", () => r(o.trim())); });
   const summary = {
     chromium: version, started, finished: new Date().toISOString(), port, csp: CSP_PAGE, cspWorker: CSP_WORKER, networkContainment: CONTAIN, chromiumFlags: flags.map((f) => f.replace(OUT, "<out>")),
     resultReceived: result !== undefined, chromiumExit: chromiumExit || "terminated by runner",
     requestLog, cspReports: cspReports.map((r) => { const b = r["csp-report"] || r; return { directive: b["effective-directive"] || b["violated-directive"], blocked: String(b["blocked-uri"] || "").startsWith("data") ? "data" : b["blocked-uri"], source: b["source-file"] ? String(b["source-file"]).replace(/^https?:\/\/127\.0\.0\.1:\d+/, "") : undefined }; }),
     netLog: analyzeNetLog(netLog),
+    redirectServers: redirectCounts,
     chromiumStderrTail: stderr.split("\n").slice(-15).join("\n")
   };
   fs.writeFileSync(path.join(OUT, "report.json"), JSON.stringify(result === undefined ? { fatal: "no result within timeout" } : result, null, 2) + "\n");
@@ -184,4 +211,4 @@ server.listen(0, "127.0.0.1", async () => {
     ? !result || result.fatal !== undefined || result.result === undefined || cspReports.length > 0 // measurement run: a result, no fatal error, no CSP report
     : !result || checks.length === 0 || checks.some((c) => c.status === "fail") || cspReports.length > 0;
   process.exit(failed ? 1 : 0);
-});
+}

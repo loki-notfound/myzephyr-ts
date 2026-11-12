@@ -5,8 +5,11 @@
 #             records file writes
 #   Node      loading of the WebAssembly module: missing, invalid, foreign, changed and other-build
 #             files (integrity pin), a rejected compilation, recovery, a runtime without Web Crypto
+#   Node      redirect checks of the transport against two loopback servers started by the runner
+#             (the only connections the monitor lets through), in the main thread and in a worker
 #   Chromium  lifecycle and instrumented suites in a wallet worker under a same-origin
-#             Content-Security-Policy, and the module loading cases (headless, network contained)
+#             Content-Security-Policy, the module loading cases, and the redirect checks in the page
+#             and in a wallet worker (headless, network contained)
 # Each runner exits nonzero if a check fails; this script stops at the first failure.
 # Results (codes, counts and timings only) are written to build/test-results/offline/.
 #
@@ -75,6 +78,19 @@ console.log("module case " + c + " " + r.env + ": " + o.first + (o.second ? " th
 process.exit(pass ? 0 : 1);' "$1" "$2" || die "module case $2: unexpected outcome"
 }
 
+redirect_node() { # direct|worker
+  local run=$OUT/node-redirect-$1 rc=0
+  mkdir -p "$run"
+  log "Node redirect checks, $1"
+  ( cd "$run" && LIFECYCLE_MONITOR_LOG=$run/monitor.jsonl LIFECYCLE_MONITOR_ALLOW_WRITE=$run/report.json:$run/monitor.jsonl \
+      timeout 900 node "${MON[@]}" "$ROOT/dist/src/test/transport/runRedirectNode.js" --mode "$1" --out "$run/report.json" ) \
+      > "$run/stdout.txt" 2> "$run/stderr.txt" || rc=$?
+  grep -E '^checks:' "$run/stdout.txt" || true
+  [ "$rc" = 0 ] || { tail -n 8 "$run/stdout.txt"; tail -n 5 "$run/stderr.txt"; die "Node redirect checks ($1) failed"; }
+  ! grep -q '"kind":"\(connect\|dns\|fetch\|write\)"' "$run/monitor.jsonl" || die "Node redirect checks ($1): the monitor recorded a connection other than to the loopback servers, or an unexpected write"
+  grep -q '"kind":"loopback"' "$run/monitor.jsonl" || die "Node redirect checks ($1): no connection to the loopback servers was recorded"
+}
+
 browser_root() { # dir consumer-bundle worker-bundle [wasm...]
   local dir=$1; shift
   rm -rf "$dir"; mkdir -p "$dir"
@@ -110,17 +126,32 @@ module_cases_browser() {
   done
 }
 
+redirect_browser() {
+  local root=$OUT/browser-root-redirect run=$OUT/chromium-redirect rc=0
+  browser_root "$root" consumer.redirect.js "$ROOT/dist/zephyr.worker.js" "$ROOT/dist/zephyr.wasm"
+  log "Chromium redirect checks (page and wallet worker)"
+  timeout 900 node "$ROOT/src/test/lifecycle/browser/runChromium.cjs" --root "$root" --out "$run" --chromium "$CHROMIUM" --timeout-ms 600000 --redirect \
+    > "$run.stdout.txt" 2> "$run.stderr.txt" || rc=$?
+  grep -E '^checks:' "$run.stdout.txt" || true
+  [ "$rc" = 0 ] || { tail -n 5 "$run.stderr.txt"; die "Chromium redirect checks failed"; }
+  node -e 'const s = require(process.argv[1]); const r = s.redirectServers || {}; if (!(r.redirectsSent > 0) || r.secondRequests !== 0 || r.landedRequests !== 0) { console.log("redirect servers: " + JSON.stringify(r)); process.exit(1); }' "$run/browser-summary.json" \
+    || die "Chromium redirect checks: a redirect target received a request"
+}
+
 node_suite release direct
 node_suite release worker
 node_suite instrumented direct
 node_suite instrumented worker
 log "Node module loading cases"
 module_cases_node
+redirect_node direct
+redirect_node worker
 if [ "${SKIP_BROWSER:-0}" != 1 ]; then
   command -v "$CHROMIUM" >/dev/null || die "$CHROMIUM not found; set CHROMIUM or SKIP_BROWSER=1"
   browser_suite release
   browser_suite instrumented
   log "Chromium module loading cases"
   module_cases_browser
+  redirect_browser
 fi
 echo "offline suites passed"
