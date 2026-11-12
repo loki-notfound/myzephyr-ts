@@ -304,12 +304,12 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
   let seed: SeedWallet | undefined = opts.seed;
   const segmentStore = new Map<string, Map<string, ChainSegment | undefined>>(); // binary chain content per measured sync (memory only)
 
-  async function check(id: string, title: string, fn: (notes: string[]) => Promise<void>): Promise<void> {
+  async function check(id: string, title: string, fn: (notes: string[]) => Promise<void>, deadlineMs = deadline): Promise<void> {
     if (!opts.checks.includes(id)) return;
     const result: CheckResult = { id, title, status: "not-run", notes: [] };
     report.checks.push(result);
     try {
-      await withDeadline(fn(result.notes), deadline, id);
+      await withDeadline(fn(result.notes), deadlineMs, id);
       result.status = "pass";
     } catch (err) {
       if (err instanceof CheckNotRun) { // a check without its optional configuration is reported as not run, never as passed
@@ -861,7 +861,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     if (t.base === undefined) throw new CheckFailure("no target");
     const result = await fundedHistory(funded, notes);
     report.measurements.N20 = result;
-  });
+  }, 1800000); // two syncs and up to 20 minutes of waiting for the next block
 
   async function fundedHistory(funded: FundedInputs, notes: string[]): Promise<Record<string, unknown>> {
     const show = (v: unknown) => JSON.stringify(v, (k, x) => (typeof x === "bigint" ? x.toString() + "n" : x instanceof Map ? Object.fromEntries(Array.from((x as Map<unknown, unknown>).entries()).map(([a, b]) => [String(a), b])) : x));
@@ -940,7 +940,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       } finally { await p.close(); }
       // confirmations grow with the daemon height: wait (bounded) for a new block, sync again
       let dh = await w.getDaemonHeight();
-      const until = Date.now() + 480000;
+      const until = Date.now() + 1200000; // blocks come every two minutes on average, with long gaps now and then
       while (dh <= h1 && Date.now() < until) { await new Promise((res) => setTimeout(res, 20000)); dh = await w.getDaemonHeight(); }
       let grown: Record<string, unknown> = { waitedForBlock: dh > h1 };
       if (dh > h1) {
@@ -950,7 +950,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
         expect(h2 > h1 && later.length === txs.length && later.every((tx, i) => tx.hash === txs[i].hash && tx.confirmations === txs[i].confirmations + (h2 - h1)), "every transaction gained exactly the new blocks as confirmations");
         grown = { waitedForBlock: true, h1, h2, confirmationsBefore: txs.map((tx) => tx.confirmations), confirmationsAfter: later.map((tx) => tx.confirmations) };
       } else {
-        throw new CheckFailure("no new block within 8 minutes; confirmations not compared");
+        throw new CheckFailure("no new block within 20 minutes; confirmations not compared");
       }
       notes.push("funded copy: synced " + r1.numBlocksFetched + " blocks from " + h0 + " to " + h1 + "; " + txs.length + " transactions, " + transfers.length + " transfers; " + filters.length + " filters; direct and proxied equal");
       return { startHeight: h0, height: h1, daemonHeight: dh0, numBlocksFetched: r1.numBlocksFetched, transactions: txs.map((tx) => ({ hash: tx.hash, height: tx.height, timestamp: tx.timestamp, confirmations: tx.confirmations, isLocked: tx.isLocked, fee: tx.fee === undefined ? undefined : tx.fee.toString(), unlockTime: tx.unlockTime.toString(), incoming: tx.incomingTransfers.length })),

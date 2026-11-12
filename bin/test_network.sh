@@ -26,7 +26,7 @@
 # Node direct run and only with FUNDED_WALLET_IN (a directory with a copy of the wallet: keys.bin,
 # cache.bin, password.txt) and FUNDED_EXPECT (its expected history, JSON), both from outside this tree;
 # without them N20 is reported as not run. N20 makes two more syncs of that copy (one after the next
-# block) and never writes the copy; FUNDED_WALLET_OUT=<new directory> receives the synced bytes.
+# block, waiting up to 20 minutes for it) and never writes the copy; FUNDED_WALLET_OUT=<new directory> receives the synced bytes.
 #
 # Environment (optional): CHROMIUM=<browser binary> (default: chromium); DIRECT_CHECKS, WORKER_CHECKS
 # and BROWSER_CHECKS select a subset of the checks per run (checks after N02 that reopen the measured

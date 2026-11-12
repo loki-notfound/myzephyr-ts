@@ -159,7 +159,7 @@ in the Node.js direct run with inputs you keep outside this repository:
 It syncs the copy (never the input), compares every transfer with the expectations, the incoming
 sums per asset with the balances of the wallet, its accounts and subaddresses, applies every query
 filter, compares direct and worker results field by field, and syncs again after the next block to
-see the confirmations grow (two more syncs; up to eight minutes of waiting).
+see the confirmations grow (two more syncs; up to twenty minutes of waiting).
 `FUNDED_WALLET_OUT=<new directory>` receives the synced bytes. Without the two variables `N20` is
 reported as not run.
 
