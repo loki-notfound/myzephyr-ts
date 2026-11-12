@@ -502,13 +502,15 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     const r = await sync(checkId, w, label, "real", undefined, dh - h0);
     const h1 = await w.getHeight();
     expect(h1 >= h0 && (await w.getDaemonHeight()) - h1 <= 1, label + ": synced to the daemon height");
+    const daemonSynced = await w.isDaemonSynced();
+    expect(typeof daemonSynced === "boolean", label + ": isDaemonSynced answers a boolean");
     if (proxy) {
       const ok = await readGuardInto(channelOf(w), { reports: 0, unreported: 0, blockedRequests: 0, allowedRequests: 0, blockedSummary: {}, allowedSummary: {} });
       expect(ok, label + ": the wallet worker reports its guard counts");
     }
     const keys = await balanceShapes(w, notes);
-    report.measurements[checkId] = { target: label, startHeight: h0, endHeight: h1, numBlocksFetched: r.numBlocksFetched, assetKeys: keys };
-    notes.push(label + ": " + r.numBlocksFetched + " blocks from height " + h0);
+    report.measurements[checkId] = { target: label, startHeight: h0, endHeight: h1, numBlocksFetched: r.numBlocksFetched, assetKeys: keys, daemonSynced };
+    notes.push(label + ": " + r.numBlocksFetched + " blocks from height " + h0 + "; isDaemonSynced " + daemonSynced);
     await w.close();
   }
   await check("N04", "Form 2: base path through the forwarder (/rpc/json_rpc, /rpc/getblocks.bin)", async (notes) => {
@@ -534,10 +536,12 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     expect(c.settled && c.value === false, label + ": isConnectedToDaemon false (" + c.ms + " ms)");
     const h = await bounded(w.getDaemonHeight(), boundMs);
     expect(h.settled && h.error instanceof F.ZephyrWalletError && codeOf(h.error) + diagnosticOf(h.error) === expected, label + ": getDaemonHeight -> " + (h.settled ? codeOf(h.error) + diagnosticOf(h.error) : "pending") + " (" + h.ms + " ms)");
+    const ds = await bounded(w.isDaemonSynced(), boundMs);
+    expect(ds.settled && ds.error instanceof F.ZephyrWalletError && codeOf(ds.error) + diagnosticOf(ds.error) === expected, label + ": isDaemonSynced -> " + (ds.settled ? codeOf(ds.error) + diagnosticOf(ds.error) : "pending") + " (" + ds.ms + " ms)");
     const t0 = Date.now();
     const s = await bounded(sync(checkId, w, label, kind), boundMs);
     expect(s.settled && s.error instanceof F.ZephyrWalletError && codeOf(s.error) + diagnosticOf(s.error) === expected, label + ": sync -> " + (s.settled ? codeOf(s.error) + diagnosticOf(s.error) : "pending") + " (" + (Date.now() - t0) + " ms)");
-    notes.push(label + ": set " + set.ms + " ms, connected false in " + c.ms + " ms, height and sync " + expected + " in " + h.ms + " / " + s.ms + " ms");
+    notes.push(label + ": set " + set.ms + " ms, connected false in " + c.ms + " ms, height, daemon sync state and sync " + expected + " in " + h.ms + " / " + ds.ms + " / " + s.ms + " ms");
     report.measurements[checkId] = { target: label, setMs: set.ms, connectedMs: c.ms, heightMs: h.ms, syncMs: s.ms, diagnostic: expected };
     await w.close();
   }
@@ -592,6 +596,10 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       try { await w.getDaemonHeight(); } catch (e) { err = e; }
       if (err === undefined) throw new CheckFailure(label + ": getDaemonHeight resolved against a failing fake daemon");
       inspect(label + " getDaemonHeight", err);
+      let syncedErr: unknown = undefined;
+      try { await w.isDaemonSynced(); } catch (e) { syncedErr = e; }
+      if (syncedErr === undefined) throw new CheckFailure(label + ": isDaemonSynced resolved against a failing fake daemon");
+      inspect(label + " isDaemonSynced", syncedErr);
       await w.close();
     }
     expect(scanned > 0, "errors were produced and scanned");
@@ -651,6 +659,49 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
   }
   await check("N12", "Context shutdown during a sync settles every pending call exactly once", async (notes) => { await endDuringSync("N12", "shutdown", notes); });
   await check("N13", "Worker death during a sync settles every pending call exactly once; close resolves", async (notes) => { await endDuringSync("N13", "death", notes); });
+
+  // ------------------------------------------------------------------ N18: forced stop during a stalled sync
+  await check("N18", "terminate during a sync stalled by a slow daemon returns at once: the running sync and the queued call reject WALLET_CLOSED/WALLET_TERMINATED exactly once, later calls too, close resolves; another live wallet keeps working (direct: TERMINATE)", async (notes) => {
+    const TERMINATED = "WALLET_CLOSED/WALLET_TERMINATED";
+    if (!proxy) {
+      const d = await openSeed(undefined);
+      await expectCode(d.terminate(), "UNSUPPORTED_CAPABILITY", "terminate in direct mode", notes, "TERMINATE");
+      await d.close();
+      return;
+    }
+    if (t.slow === undefined) throw new CheckFailure("no target");
+    const other = await openSeed(undefined);
+    const otherHeight = await other.getHeight();
+    const before = LibraryUtils.getWorkerAccounting();
+    const w = await openSeed(t.slow);
+    const channel = channelOf(w);
+    const settled: Record<string, number> = { sync: 0, height: 0 };
+    const outcome: Record<string, string> = {};
+    const track = (name: string, p: Promise<unknown>) => p.then(() => { settled[name]++; outcome[name] = "resolved"; }, (err) => { settled[name]++; outcome[name] = codeOf(err) + diagnosticOf(err); });
+    const pending = [track("sync", sync("N18", w, "slow forwarder mount", "real")), track("height", w.getHeight())];
+    await sleep(400);
+    expect(await readGuardInto(channel), "the wallet's worker reports its guard counts during the stalled sync"); // its requests so far, for the run's guard totals
+    expect(settled.sync === 0 && settled.height === 0, "the sync is running and the height call queued when terminate is called");
+    const t0 = Date.now();
+    await w.terminate();
+    const terminateMs = Date.now() - t0;
+    const all = await bounded(Promise.all(pending), 5000);
+    await sleep(100);
+    expect(all.settled && settled.sync === 1 && settled.height === 1, "both pending calls settled exactly once: " + JSON.stringify(settled));
+    expect(outcome.sync === TERMINATED && outcome.height === TERMINATED, "the running sync and the queued call rejected " + TERMINATED + ": " + JSON.stringify(outcome));
+    expect(terminateMs < 1000, "terminate returned in " + terminateMs + " ms while each binary answer is delayed by the slow daemon");
+    expect(!channel.isOpen(), "the wallet's worker ended");
+    const later = await bounded(w.isDaemonSynced(), 2000);
+    expect(later.settled && codeOf(later.error) + diagnosticOf(later.error) === TERMINATED, "a later call rejects " + TERMINATED);
+    const c = await bounded(w.close(), 2000);
+    expect(c.settled && c.error === undefined && w.isClosed(), "close resolves at once (" + c.ms + " ms)");
+    const after = LibraryUtils.getWorkerAccounting();
+    expect(after.walletWorkers === before.walletWorkers && after.pendingRequests === before.pendingRequests && after.registeredCallbacks === before.registeredCallbacks && after.activeConstructions === 0, "no worker, request, callback or slot of the stopped wallet remains");
+    expect((await other.getHeight()) === otherHeight && channelOf(other).isOpen(), "another live wallet keeps working");
+    report.measurements.N18 = { terminateMs, closeAfterTerminateMs: c.ms };
+    notes.push("terminate " + terminateMs + " ms after a 400 ms head start of the sync; sync and queued getHeight -> " + outcome.sync + "; close afterwards " + c.ms + " ms; the other wallet answered");
+    await other.close();
+  });
 
   // ------------------------------------------------------------------ N14: connection changes on a live wallet
   await check("N14", "setDaemonConnection on a live wallet: change, report, clear (JSON requests only)", async (notes) => {

@@ -596,7 +596,7 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     await expectCode(k.getRestoreHeight(), "UNSUPPORTED_CAPABILITY", "keys-only getRestoreHeight", notes);
     // Network calls are full-wallet only and reject before any native or worker call
     for (const [label, fn] of [["setDaemonConnection", () => k.setDaemonConnection("http://127.0.0.1:1")], ["isConnectedToDaemon", () => k.isConnectedToDaemon()],
-      ["getDaemonHeight", () => k.getDaemonHeight()], ["getHeight", () => k.getHeight()], ["sync", () => k.sync()], ["getBalance", () => k.getBalance()]] as const) {
+      ["getDaemonHeight", () => k.getDaemonHeight()], ["isDaemonSynced", () => k.isDaemonSynced()], ["getHeight", () => k.getHeight()], ["sync", () => k.sync()], ["getBalance", () => k.getBalance()]] as const) {
       await expectCode(fn(), "UNSUPPORTED_CAPABILITY", "keys-only " + label, notes, "KEYS_ONLY_DAEMON");
     }
     await k.close();
@@ -1245,6 +1245,78 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
   }
   if (base) await base.close();
   if (proxy) await F.validateAddress(address, "mainnet", true); // a utility call: the utility worker runs the module
+  await check("C26", "Forced stop of one wallet: terminate ends a proxied wallet's worker at once; pending and later calls reject WALLET_CLOSED/WALLET_TERMINATED exactly once; close resolves; other wallets unaffected; direct mode rejects TERMINATE", async (notes) => {
+    const TERMINATED = "WALLET_CLOSED/WALLET_TERMINATED";
+    const outcome = (p: Promise<unknown>): Promise<string> => p.then(() => "fulfilled", (err) => codeOf(err) + diagnosticOf(err));
+    const openSaved = () => F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    const other = await openSaved();
+    const otherAddress = await other.getPrimaryAddress();
+    const w = await openSaved();
+    if (!proxy) {
+      await expectCode(w.terminate(), "UNSUPPORTED_CAPABILITY", "terminate of a direct full wallet", notes, "TERMINATE");
+      expect(!w.isClosed() && (await w.getPrimaryAddress()) === address, "the direct wallet stays open and usable");
+      const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: false });
+      await expectCode(k.terminate(), "UNSUPPORTED_CAPABILITY", "terminate of a direct keys-only wallet", notes, "TERMINATE");
+      expect((await k.getPrimaryAddress()) === address, "the direct keys-only wallet stays usable");
+      await k.close(); await w.close(); await other.close();
+      return;
+    }
+    const before = LibraryUtils.getWorkerAccounting();
+    const channel = channelOf(w);
+    // queued password changes and other work, none awaited: all of it is pending in the worker when terminate is called
+    const p2 = randomPassword(); const p3 = randomPassword();
+    let settled = 0;
+    const track = (p: Promise<unknown>) => p.then(() => { settled++; return "fulfilled"; }, (err) => { settled++; return codeOf(err) + diagnosticOf(err); });
+    const pending = [track(w.changePassword(pw, p2)), track(w.changePassword(p2, p3)), track(w.getData()), track(w.getPrimaryAddress()), track(w.getRestoreHeight())];
+    expect(channel.pendingCount() === 5, "five calls pending in the wallet's worker, got " + channel.pendingCount());
+    const t0 = Date.now();
+    await w.terminate();
+    const terminateMs = Date.now() - t0;
+    expect(!channel.isOpen() && channel.state === "terminated", "the wallet's worker ended at once");
+    const outcomes = await Promise.all(pending);
+    await new Promise((r) => setTimeout(r, 50));
+    notes.push("terminate with two queued password changes, getData, getPrimaryAddress and getRestoreHeight pending: resolved in " + terminateMs + " ms; pending -> " + Array.from(new Set(outcomes)).join(","));
+    expect(settled === 5 && outcomes.every((o) => o === TERMINATED), "each pending call rejected " + TERMINATED + " exactly once");
+    const later = await Promise.all([outcome(w.getPrimaryAddress()), outcome(w.getData()), outcome(w.changePassword(pw, p2)), outcome(w.getBalance()),
+      outcome(w.sync()), outcome(w.setDaemonConnection("http://127.0.0.1:1")), outcome(w.isDaemonSynced()), outcome(w.getAddress(0, 1))]);
+    expect(later.every((o) => o === TERMINATED), "later calls reject " + TERMINATED + ": " + JSON.stringify(later));
+    expect(w.isClosed(), "isClosed after terminate");
+    const closes = await Promise.all([outcome(w.close()), outcome(w.close()), outcome(w.terminate())]);
+    expect(closes.every((o) => o === "fulfilled"), "close resolves and terminate is idempotent: " + JSON.stringify(closes));
+    const after = LibraryUtils.getWorkerAccounting();
+    notes.push("accounting before/after: wallet workers " + before.walletWorkers + "/" + after.walletWorkers + ", pending " + before.pendingRequests + "/" + after.pendingRequests + ", callbacks " + before.registeredCallbacks + "/" + after.registeredCallbacks + ", terminated " + before.workersTerminated + "/" + after.workersTerminated);
+    expect(after.walletWorkers === before.walletWorkers - 1 && after.pendingRequests === before.pendingRequests && after.registeredCallbacks === before.registeredCallbacks
+      && after.registeredObjects === before.registeredObjects && after.workersTerminated === before.workersTerminated + 1 && after.activeConstructions === 0 && after.queuedConstructions === 0, "no worker, request, callback or slot of the wallet remains");
+    // unsaved state is lost: the bytes saved before still open with the old password only
+    const opened = await openingPasswords({ keys: savedKeys, cache: savedCache }, [pw, p2, p3], proxy);
+    expect(opened.join(",") === "0", "saved bytes open with their own password only");
+    // the other live wallet is unaffected
+    const pX = randomPassword();
+    await other.changePassword(pw, pX);
+    expect((await other.getPrimaryAddress()) === otherAddress && (await openingPasswords(await other.getData(), [pw, pX], proxy)).join(",") === "1", "another live wallet keeps working");
+    // a keys-only proxied wallet
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: true });
+    const kp = [outcome(k.getSeed()), outcome(k.getPrivateViewKey())];
+    await k.terminate();
+    const kOutcomes = await Promise.all(kp);
+    expect(kOutcomes.every((o) => o === TERMINATED) && (await outcome(k.getPublicSpendKey())) === TERMINATED && k.isClosed() && (await outcome(k.close())) === "fulfilled", "keys-only: pending and later calls rejected, close resolves");
+    // terminate while a close is in progress: the close resolves
+    const c = await openSaved();
+    skipGuardRead(c); // its close must reach the worker at once, not a guard read first
+    const closing = outcome(c.close());
+    await c.terminate();
+    expect((await closing) === "fulfilled" && c.isClosed(), "a close in progress resolves after terminate");
+    notes.push("keys-only wallet and a wallet closing: pending calls rejected, close resolved; another live wallet kept working");
+    await other.close();
+  });
+
+  await check("C27", "isDaemonSynced: without a connected daemon DAEMON_ERROR/DAEMON_NOT_CONNECTED (no request); after close WALLET_CLOSED", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    await expectCode(w.isDaemonSynced(), "DAEMON_ERROR", "isDaemonSynced without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await w.close();
+    await expectCode(w.isDaemonSynced(), "WALLET_CLOSED", "isDaemonSynced after close", notes);
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   if (proxy) {
     const proof = await postRawWorkerMessage([newMessageId(), "getNetworkGuardReport", newMessageId()], 10000);

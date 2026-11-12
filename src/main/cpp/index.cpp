@@ -62,6 +62,7 @@ EMSCRIPTEN_BINDINGS(module)
   emscripten::function("get_unlocked_balance_account", &zephyr_wasm_bridge::get_unlocked_balance_account);
   emscripten::function("get_balance_asset", &zephyr_wasm_bridge::get_balance_asset);
   emscripten::function("get_unlocked_balance_asset", &zephyr_wasm_bridge::get_unlocked_balance_asset);
+  emscripten::function("is_daemon_synced", &zephyr_wasm_bridge::is_daemon_synced);
   emscripten::function("close", &zephyr_wasm_bridge::close);
 
 #if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)

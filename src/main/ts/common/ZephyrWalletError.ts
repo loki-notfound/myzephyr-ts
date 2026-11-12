@@ -102,7 +102,11 @@ export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // a Content-Security-Policy without 'wasm-unsafe-eval', or a module the glue cannot use); the
   // bytes are not the zephyr.wasm whose SHA-256 the build embedded; the runtime offers no Web Crypto
   // digest (a browser page outside a secure context), so the bytes cannot be checked
-  "WASM_MODULE_UNAVAILABLE", "WASM_MODULE_REJECTED", "WASM_MODULE_MISMATCH", "WASM_MODULE_UNVERIFIED"
+  "WASM_MODULE_UNAVAILABLE", "WASM_MODULE_REJECTED", "WASM_MODULE_MISMATCH", "WASM_MODULE_UNVERIFIED",
+  // forced stop of one proxied wallet: every pending and later call of a terminated wallet rejects
+  // with WALLET_CLOSED/WALLET_TERMINATED; in direct mode terminate rejects with
+  // UNSUPPORTED_CAPABILITY/TERMINATE (a call running in the caller's own context cannot be interrupted)
+  "WALLET_TERMINATED", "TERMINATE"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];

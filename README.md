@@ -54,9 +54,10 @@ The package entry (`src/main/ts/index.ts`) exports:
   cache bytes; no file paths;
 * on a wallet (`ZephyrWallet`): primary address and subaddresses, seed and seed language, private and public keys,
   view-only state; for full wallets also the network type, restore height, `getData` (keys and
-  cache bytes) and `changePassword`; `close` (idempotent, retried after a failed close);
+  cache bytes) and `changePassword`; `close` (idempotent, retried after a failed close) and, for a
+  wallet in its own worker, `terminate` (a forced stop that does not wait; unsaved state is lost);
 * read-only daemon access for full wallets: a daemon address at construction (`server`) or with
-  `setDaemonConnection`, `isConnectedToDaemon`, `getDaemonHeight`, `getHeight`, one blocking
+  `setDaemonConnection`, `isConnectedToDaemon`, `getDaemonHeight`, `isDaemonSynced`, `getHeight`, one blocking
   `sync(startHeight?)`, and the balances `getBalance()` (map by asset), `getBalance(accountIdx)`
   (map by subaddress index) and `getBalance(assetType, accountIdx, subaddressIdx?)`, with the same
   shapes for `getUnlockedBalance`; amounts are `bigint`;

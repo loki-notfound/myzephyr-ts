@@ -58,8 +58,15 @@ not the wallet's creation height. Restores from a seed or keys use the `restoreH
 The core has no cancellation. A wallet's calls run one at a time; `close` waits for a running
 request. Each request is bounded: JSON requests by at most 30 s, binary requests by at most 120 s
 (the core's shorter limit where it has one), and the core retries a failed block download up to
-four times. `terminateWorker()` stops every wallet worker of the runtime at once and loses
-unsaved state; a forced stop of a single live wallet is not available yet.
+four times.
+
+A wallet that runs in its own worker (the default) can be stopped at once with `terminate()`: its
+worker is ended without a native close and without waiting, also during a sync stalled on a slow
+daemon. Wallet state that was not persisted before is lost, for example a password change or
+synchronized blocks since the last `getData()`; every pending and later call rejects with
+`WALLET_CLOSED`/`WALLET_TERMINATED`, and `close()` resolves. Other wallets are not affected. In direct mode (`proxyToWorker: false`) a running call
+cannot be interrupted, and `terminate()` rejects with `UNSUPPORTED_CAPABILITY`/`TERMINATE`.
+`terminateWorker()` stops every wallet worker of the runtime at once.
 
 ## Worker isolation is not process isolation
 

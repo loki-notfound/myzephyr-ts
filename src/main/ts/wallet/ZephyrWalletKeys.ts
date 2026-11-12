@@ -376,6 +376,18 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.passwordStateUnknown) throw new ZephyrWalletError("NATIVE_ERROR", "PASSWORD_STATE_UNKNOWN");
   }
 
+  /**
+   * @internal Forced stop of a proxied wallet (ZephyrWallet.terminate): its own worker is terminated
+   * at once, without a native close and without waiting for a running or queued request; every
+   * pending request of the wallet rejects with WALLET_CLOSED/WALLET_TERMINATED. A direct wallet
+   * cannot be stopped this way (UNSUPPORTED_CAPABILITY/TERMINATE).
+   */
+  terminateProxiedWorker(): void {
+    if (!this.walletProxy) throw ZephyrWalletError.unsupported("TERMINATE");
+    this._isClosed = true;
+    this.walletProxy.terminateWorker();
+  }
+
   /** Stop ordinary admission after an unknown or unverifiable native password state. */
   protected stopAdmissionForUnknownPasswordState(): ZephyrWalletError {
     this.passwordStateUnknown = true;
@@ -504,6 +516,15 @@ export class ZephyrWalletKeysProxy extends ZephyrWalletBase {
   /** @internal the wallet's own worker channel */
   getWorkerChannel(): ZephyrWorkerChannel {
     return this.channel;
+  }
+
+  /**
+   * @internal Terminate the wallet's own worker at once (forced stop): no native close, no further
+   * message. Pending requests reject with WALLET_CLOSED/WALLET_TERMINATED; callbacks and the
+   * registry entry go with the worker. Idempotent.
+   */
+  terminateWorker(): void {
+    this.channel.terminate(() => new ZephyrWalletError("WALLET_CLOSED", "WALLET_TERMINATED"));
   }
 
   protected async invokeWorker(fnName: string, args?: any): Promise<any> {

@@ -856,6 +856,66 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     if (proxy) expect(after2.walletWorkers === before.walletWorkers && after2.constructionWorkers === 0, "no worker left after the second case");
   });
 
+  await check("T17", "Forced stop during a password change suspended in native code and on a wallet in the unknown password state: pending and later calls reject WALLET_CLOSED/WALLET_TERMINATED exactly once, no native close; another wallet and its allocator unaffected (direct: TERMINATE)", async (notes) => {
+    const TERMINATED = "WALLET_CLOSED/WALLET_TERMINATED";
+    const outcome = (p: Promise<unknown>): Promise<string> => p.then(() => "fulfilled", (err) => codeOf(err) + diagnosticOf(err));
+    if (!proxy) {
+      const d = await open();
+      await expectCode(d.terminate(), "UNSUPPORTED_CAPABILITY", "terminate in direct mode", notes, "TERMINATE");
+      expect(!d.isClosed() && (await d.getPrimaryAddress()) === address, "the direct wallet stays open and usable");
+      await d.close();
+      return;
+    }
+    const other = await open();
+    await hooks.target(other);
+    const heapBefore = (await hooks.state()).heapInUse;
+    const before = acc();
+    // 1. a password change suspended inside native code (barrier) and work queued behind it
+    const w = await open();
+    await hooks.target(w);
+    await hooks.resetCounters();
+    await hooks.arm({ barrier: "change_password" });
+    const pB = randomPassword();
+    let settled = 0;
+    const track = (p: Promise<unknown>) => p.then(() => { settled++; return "fulfilled"; }, (err) => { settled++; return codeOf(err) + diagnosticOf(err); });
+    const pending = [track(w.changePassword(pw, pB))];
+    expect(await hooks.waitBarrierEntered(30000), "the change is suspended in native code");
+    pending.push(track(w.getData()), track(w.changePassword(pB, pw)), track(w.getSeed()));
+    const st = await hooks.state(false);
+    expect(nativeCalls(st, "close") === 0, "no native close before the stop");
+    const t0 = Date.now();
+    await w.terminate();
+    const ms = Date.now() - t0;
+    const outcomes = await Promise.all(pending);
+    await new Promise((r) => setTimeout(r, 50));
+    notes.push("terminate with a change suspended in native code and three calls queued: " + ms + " ms; pending -> " + Array.from(new Set(outcomes)).join(","));
+    expect(!channelOf(w).isOpen() && settled === 4 && outcomes.every((o) => o === TERMINATED), "the worker ended and every pending call rejected " + TERMINATED + " exactly once");
+    expect((await outcome(w.getPrimaryAddress())) === TERMINATED && (await outcome(w.changePassword(pw, pB))) === TERMINATED && w.isClosed() && (await outcome(w.close())) === "fulfilled", "later calls rejected; close resolves");
+    // 2. a wallet whose native password state became unknown
+    const u = await open();
+    await hooks.target(u);
+    await hooks.arm({ fail: { "change_password.after": 1, "password_probe": 1 } });
+    await expectCode(u.changePassword(pw, randomPassword()), "NATIVE_ERROR", "change with an unknown native state", notes, "PASSWORD_STATE_UNKNOWN");
+    await expectCode(u.getData(), "NATIVE_ERROR", "getData in the unknown state", notes, "PASSWORD_STATE_UNKNOWN");
+    const uPending = [outcome(u.getData()), outcome(u.getSeed())];
+    await u.terminate();
+    const uOutcomes = await Promise.all(uPending);
+    expect(uOutcomes.every((o) => o === TERMINATED) && (await outcome(u.getData())) === TERMINATED && u.isClosed() && (await outcome(u.close())) === "fulfilled", "unknown state: pending and later calls rejected " + TERMINATED + ", close resolves: " + JSON.stringify(uOutcomes));
+    notes.push("unknown password state: pending -> " + Array.from(new Set(uOutcomes)).join(",") + "; close resolved");
+    // 3. the other wallet, its worker and its allocator are unaffected
+    await hooks.target(other);
+    const heapAfter = (await hooks.state()).heapInUse;
+    const pX = randomPassword();
+    await other.changePassword(pw, pX);
+    expect((await other.getPrimaryAddress()) === address && (await openingPasswords(await other.getData(), [pw, pX], proxy)).join(",") === "1" && channelOf(other).isOpen(), "the other wallet keeps working");
+    expect(heapAfter === heapBefore, "the other wallet's allocator is unchanged (" + heapBefore + " -> " + heapAfter + " bytes)");
+    const after = acc();
+    expect(after.walletWorkers === before.walletWorkers && after.pendingRequests === before.pendingRequests && after.registeredCallbacks === before.registeredCallbacks
+      && after.workersTerminated - before.workersTerminated === after.workersStarted - before.workersStarted && after.workersFailed === before.workersFailed, "no worker, request or callback of the stopped wallets remains: every worker started since then ended by termination");
+    notes.push("other wallet: allocator " + heapBefore + " -> " + heapAfter + " bytes, changePassword and getData work; two workers terminated");
+    await other.close();
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

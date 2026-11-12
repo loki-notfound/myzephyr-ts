@@ -89,8 +89,8 @@ host.
 
 runs, with no network access:
 
-* the lifecycle suite (checks `C01`-`C25`) with the release module and the instrumented suite
-  (`T00`-`T16`) with the test module, in Node.js directly and through wallet workers, under a
+* the lifecycle suite (checks `C01`-`C27`) with the release module and the instrumented suite
+  (`T00`-`T17`) with the test module, in Node.js directly and through wallet workers, under a
   preloaded monitor that blocks every connection and records unexpected file writes;
 * the module loading cases in Node.js, directly and through workers: a missing `zephyr.wasm`,
   a file that is not WebAssembly, a module of another program or build, a changed byte and a
@@ -130,9 +130,10 @@ failed.
 It runs Node.js directly, Node.js through workers and Chromium (through a loopback forwarder that
 relays an allowlist of read-only requests to the daemon, `ZEPHYR_TS_TEST_FORWARD_UPSTREAM`, by
 default the first address). It covers the three daemon address forms, unreachable, silent and
-misbehaving daemons, daemon text that must not reach errors, close during a sync, and the restore
-height of a new wallet. Load: at most two concurrent upstream connections, every sync starts at most
-2,000 blocks below the daemon height, about 13 syncs. Only three of them download the block hashes
+misbehaving daemons, daemon text that must not reach errors, close and a forced stop during a sync,
+the daemon's synchronization state and the restore height of a new wallet. Load: at most two
+concurrent upstream connections, every sync starts at most 2,000 blocks below the daemon height,
+about 15 syncs (two of them stopped after 400 ms). Only three of them download the block hashes
 (about 29 MB each near height 900,000), all in the Node.js direct run: the fresh restore of `N02`,
 the HTTPS restore of `N03` and the new wallet of `N17`; every other sync reopens the wallet bytes
 saved by `N02`. Set `DIRECT_CHECKS` without `N17` (and without `ZEPHYR_TS_TEST_DAEMON_HTTPS`) to

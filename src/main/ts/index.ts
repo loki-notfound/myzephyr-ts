@@ -3,7 +3,8 @@
  * its CommonJS build; browser bundlers load index.browser.ts, which exports the same names.
  *
  * Wallet lifecycle: random, seed and keys creation, open from keys and cache bytes, address and key
- * getters, byte serialization, pathless password change and close. Every other capability is
+ * getters, byte serialization, pathless password change, close and (proxied wallets) a forced stop
+ * of one wallet with terminate. Every other capability is
  * rejected with UNSUPPORTED_CAPABILITY before any native symbol or worker function is used.
  * SDK-owned identifiers carry Zephyr names; core, wire-format and upstream provenance names are
  * unchanged. Test-only hooks and raw worker messaging are not part of this entry.
@@ -27,8 +28,8 @@
  * into that context.
  *
  * Read-only network access, full wallets only: a daemon address at construction (config field
- * server) or through setDaemonConnection; isConnectedToDaemon, getDaemonHeight, getHeight, one
- * blocking sync and the asset balance maps. Construction itself is offline; the daemon is set right
+ * server) or through setDaemonConnection; isConnectedToDaemon, getDaemonHeight, isDaemonSynced,
+ * getHeight, one blocking sync and the asset balance maps. Construction itself is offline; the daemon is set right
  * after it, and if that step fails the wallet is closed and its worker retired before the
  * construction rejects. A new random wallet whose daemon answers the connection check starts at the
  * daemon height; without a daemon it keeps the core's date-based estimate. The address contract is
@@ -38,7 +39,8 @@
  * allowlist in HttpClient, per context and worker). Daemon failures reject with DAEMON_ERROR and a
  * fixed diagnostic; text supplied by a node never reaches an error. Each request is bounded (JSON
  * at most 30 s, binary at most 120 s, the core's shorter bound where it has one); there is no
- * native cancellation, and a wallet's other calls, close included, wait for a running request.
+ * native cancellation, and a wallet's other calls, close included, wait for a running request;
+ * terminate ends a proxied wallet's worker without waiting.
  * Not supported: listeners, background sync, history, outputs, transactions, key images, rescans
  * and any relay.
  */

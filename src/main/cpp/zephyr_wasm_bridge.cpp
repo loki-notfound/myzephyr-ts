@@ -881,6 +881,23 @@ string zephyr_wasm_bridge::get_unlocked_balance_asset(int handle, const string& 
   }
 }
 
+// ------------------------- DAEMON STATE ----------------------------
+
+// whether the connected daemon reports itself synchronized with the network: the core's answer
+// (daemon height at least its peers' highest height and above 1), "true" or "false"
+void zephyr_wasm_bridge::is_daemon_synced(int handle, emscripten::val callback) {
+  string result;
+  try {
+    route_of(handle);
+    ZEPHYR_TS_TEST_THROW("error.daemon", "daemon synced");
+    monero_wallet* wallet = (monero_wallet*) handle;
+    result = wallet->is_daemon_synced() ? "true" : "false";
+  } catch (...) {
+    result = bridge_error(daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_DAEMON)));
+  }
+  callback(result);
+}
+
 string zephyr_wasm_bridge::get_version(int handle) {
   monero_wallet* wallet = (monero_wallet*) handle;
   try {
@@ -999,15 +1016,6 @@ void zephyr_wasm_bridge::get_height_by_date(int handle, uint16_t year, uint8_t m
   monero_wallet* wallet = (monero_wallet*) handle;
   try {
     callback((long) wallet->get_height_by_date(year, month, day));
-  } catch (exception& e) {
-    callback(string(e.what()));
-  }
-}
-
-void zephyr_wasm_bridge::is_daemon_synced(int handle, emscripten::val callback) {
-  monero_wallet* wallet = (monero_wallet*) handle;
-  try {
-    callback(wallet->is_daemon_synced());
   } catch (exception& e) {
     callback(string(e.what()));
   }

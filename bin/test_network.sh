@@ -18,7 +18,7 @@
 # starts at most 2,000 blocks below the daemon height; the block hashes (about 29 MB) are downloaded
 # only by the first syncs of new wallets in the Node direct run: the fresh restore of N02, the HTTPS
 # restore of N03 and the new wallet of N17; every other sync reopens the saved wallet bytes; about
-# 13 syncs in total. A disposable wallet
+# 15 syncs in total (two of them, N18 in the worker runs, are stopped after 400 ms). A disposable wallet
 # without funds is kept in build/test-wallets/ between the runs. Results (codes, counts, heights and
 # timings only) go to build/test-results/network/.
 #
@@ -36,9 +36,9 @@ CHROMIUM=${CHROMIUM:-chromium}
 OUT=$ROOT/build/test-results/network; SEED=$ROOT/build/test-wallets/network-seed
 rm -rf "$OUT" "$SEED"; mkdir -p "$OUT" "$(dirname "$SEED")"; chmod 700 "$OUT" "$(dirname "$SEED")"
 MARKER=MARKERnodetext
-DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17}
-WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N15,N16}
-BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N14,N15,N16}
+DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18}
+WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16}
+BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16}
 UPSTREAM=$(node -e 'console.log(require(process.argv[1]).requireTestEndpoints().upstream.url)' "$ROOT/src/test/network/testEndpoints.cjs")
 
 NOT_RUN=$OUT/not-run.txt; : > "$NOT_RUN"

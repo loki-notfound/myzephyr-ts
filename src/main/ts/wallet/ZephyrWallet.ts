@@ -111,6 +111,7 @@ export class ZephyrWallet {
   readonly proxied: boolean;
   private closed = false;
   private closeSettled = false;
+  private terminated = false;
   private daemon: ZephyrDaemonRoute | undefined = undefined;
   private closePromise: Promise<void> | undefined = undefined;
 
@@ -127,12 +128,18 @@ export class ZephyrWallet {
     return wallet;
   }
 
+  /** WALLET_CLOSED, with the diagnostic WALLET_TERMINATED after a forced stop. */
+  private closedError(): ZephyrWalletError {
+    return this.terminated ? new ZephyrWalletError("WALLET_CLOSED", "WALLET_TERMINATED") : ZephyrWalletError.walletClosed();
+  }
+
   private async call<T>(context: ZephyrNativeErrorContext, fn: () => Promise<T>): Promise<T> {
-    if (this.closed) throw ZephyrWalletError.walletClosed();
+    if (this.closed) throw this.closedError();
     try {
       return await fn();
     } catch (err) {
-      throw toWalletError(context, err);
+      const error = toWalletError(context, err);
+      throw this.terminated && error.code === "WALLET_CLOSED" ? this.closedError() : error;
     }
   }
 
@@ -222,6 +229,7 @@ export class ZephyrWallet {
         await this.inner.close(false);
         this.closeSettled = true;
       } catch (err) {
+        if (this.terminated) return; // a forced stop ended the close: no native handle remains
         throw toWalletError("close", err);
       } finally {
         this.closePromise = undefined;
@@ -229,6 +237,31 @@ export class ZephyrWallet {
     })();
     this.closePromise = attempt;
     return attempt;
+  }
+
+  /**
+   * Forced stop of this wallet, proxied wallets (full or keys-only) only. Its own worker is terminated
+   * at once: no native close, no waiting for a running or queued call (a sync stalled on a slow
+   * daemon included). Unsaved state is lost; persist getData() first if you need it. Every pending
+   * call of this wallet and every later call rejects with WALLET_CLOSED and the diagnostic
+   * WALLET_TERMINATED, exactly once each; isClosed() is then true, and close() (also one already
+   * in progress) resolves. No other wallet, worker or construction is affected, and no worker,
+   * callback, daemon route or construction slot of this wallet remains. Idempotent; after a
+   * completed close it does nothing.
+   *
+   * Direct mode (proxyToWorker: false) rejects with UNSUPPORTED_CAPABILITY/TERMINATE: a call that
+   * runs in the caller's own context cannot be interrupted.
+   */
+  async terminate(): Promise<void> {
+    if (!this.proxied) throw ZephyrWalletError.unsupported("TERMINATE");
+    if (this.terminated || this.closeSettled) return;
+    this.terminated = true;
+    this.closed = true;
+    try {
+      this.inner.terminateProxiedWorker();
+    } finally {
+      this.closeSettled = true;
+    }
   }
 
   // ------------------------- read-only network access -------------------------
@@ -240,7 +273,7 @@ export class ZephyrWallet {
    */
   async setDaemonConnection(address?: string | { uri: string; trusted?: boolean }): Promise<void> {
     const wallet = this.full("KEYS_ONLY_DAEMON");
-    if (this.closed) throw ZephyrWalletError.walletClosed();
+    if (this.closed) throw this.closedError();
     const route = address === undefined ? undefined : parseDaemonAddress(address);
     await this.call("daemon", () => wallet.setDaemonConnection(route === undefined ? undefined : route.uri));
     this.daemon = route;
@@ -261,6 +294,18 @@ export class ZephyrWallet {
   async getDaemonHeight(): Promise<number> {
     const wallet = this.full("KEYS_ONLY_DAEMON");
     return this.call("daemon", () => wallet.getDaemonHeight());
+  }
+
+  /**
+   * Whether the connected daemon reports itself synchronized with the network: the core's answer
+   * (its height is at least the highest height of its peers, and above 1). A request to the daemon;
+   * failures reject with DAEMON_ERROR and the same diagnostics as getDaemonHeight
+   * (DAEMON_NOT_CONNECTED without a connected daemon). A daemon that is not synchronized makes a
+   * sync fetch nothing.
+   */
+  async isDaemonSynced(): Promise<boolean> {
+    const wallet = this.full("KEYS_ONLY_DAEMON");
+    return this.call("daemon", () => wallet.isDaemonSynced());
   }
 
   /** Height of the wallet (no network access). */

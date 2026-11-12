@@ -99,7 +99,7 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   // read-only daemon access
   "set_daemon_connection", "is_connected_to_daemon", "get_daemon_height", "set_restore_height_from_daemon", "get_height", "sync",
   "get_balance_wallet", "get_unlocked_balance_wallet", "get_balance_account", "get_unlocked_balance_account",
-  "get_balance_asset", "get_unlocked_balance_asset"
+  "get_balance_asset", "get_unlocked_balance_asset", "is_daemon_synced"
 ];
 
 /**
@@ -116,7 +116,7 @@ export const SDK_ADDED_NATIVE_EXPORTS: readonly string[] = ["get_balance_asset",
  */
 export const UNBUILT_BRIDGE_EXPORTS: readonly string[] = ["get_exception_message", "malloc_binary_from_json", "binary_to_json", "binary_blocks_to_json",
   "get_daemon_connection", "is_daemon_trusted", "get_daemon_max_peer_height",
-  "get_height_by_date", "is_daemon_synced", "is_synced", "set_restore_height", "set_listener",
+  "get_height_by_date", "is_synced", "set_restore_height", "set_listener",
   "stop_syncing", "scan_txs", "rescan_spent", "rescan_blockchain",
   "get_balance_subaddress", "get_unlocked_balance_subaddress",
   "get_accounts", "get_account", "create_account", "get_subaddresses", "create_subaddress", "set_subaddress_label", "get_txs",
@@ -187,6 +187,7 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   isConnectedToDaemon: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["is_connected_to_daemon"], errorContext: "daemon" },
   getDaemonHeight: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_daemon_height"], errorContext: "daemon" },
   setRestoreHeightFromDaemon: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["set_restore_height_from_daemon"], errorContext: "daemon" },
+  isDaemonSynced: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["is_daemon_synced"], errorContext: "daemon" },
   getHeight: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_height"], errorContext: "other" },
   sync: { scope: "wallet", kinds: FULL, args: [{ kind: "height", optional: true }], nativeExports: ["sync"], errorContext: "sync" },
   getBalances: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }], nativeExports: ["get_balance_wallet", "get_unlocked_balance_wallet"], errorContext: "other" },

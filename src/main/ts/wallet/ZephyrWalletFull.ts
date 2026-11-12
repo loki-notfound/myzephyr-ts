@@ -400,20 +400,19 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   }
   
   /**
-   * Indicates if the wallet's daemon is synced with the network.
-   * 
-   * @return {Promise<boolean>} true if the daemon is synced with the network, false otherwise
+   * Whether the connected daemon reports itself synchronized with the network: the core's answer
+   * (the daemon height is at least the highest height of its peers, and above 1). A request to the
+   * daemon; failures reject with the daemon diagnostics of the other network calls.
    */
   async isDaemonSynced(): Promise<boolean> {
     if (this.getWalletProxy()) return this.getWalletProxy().isDaemonSynced();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return new Promise((resolve, reject) => {
-      
-        // call wasm which invokes callback when done
-        this.module.is_daemon_synced(this.cppAddress, (resp) => {
-          if (typeof resp === "string") reject(new ZephyrError(resp));
-          else resolve(resp);
+      return new Promise<boolean>((resolve, reject) => {
+        this.module.is_daemon_synced(this.cppAddress, (result: unknown) => {
+          if (result === "true") resolve(true);
+          else if (result === "false") resolve(false);
+          else reject(ZephyrWalletError.fromBridgeResult("daemon", result));
         });
       });
     });
@@ -2201,8 +2200,10 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     return this.invokeWorker("getHeightByDate", [year, month, day]);
   }
   
-  async isDaemonSynced() {
-    return this.invokeWorker("isDaemonSynced");
+  async isDaemonSynced(): Promise<boolean> {
+    const synced = await this.invokeWorker("isDaemonSynced");
+    if (typeof synced !== "boolean") throw new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE");
+    return synced;
   }
   
   async getHeight(): Promise<number> {
@@ -2608,6 +2609,13 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
 
   async isClosed() {
     return this._isClosed || super.isClosed();
+  }
+
+  /** @internal forced stop (see ZephyrWalletKeysProxy.terminateWorker); listener wrappers are dropped */
+  terminateWorker(): void {
+    this._isClosed = true;
+    this.wrappedListeners.length = 0;
+    super.terminateWorker();
   }
 
   async close(save) {

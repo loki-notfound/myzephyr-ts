@@ -58,7 +58,7 @@ namespace zephyr_wasm_bridge
   void get_daemon_max_peer_height(int handle, emscripten::val callback);
 #endif // ZEPHYR_WASM_BRIDGE_UNPORTED
   // read-only daemon access: daemon connection with an optional base path, heights, one
-  // blocking sync and the asset balance maps (decimal strings); full wallets only
+  // blocking sync, the asset balance maps (decimal strings) and the daemon's sync state; full wallets only
   void set_daemon_connection(int handle, const string& uri, const string& base_path, emscripten::val callback);
   void is_connected_to_daemon(int handle, emscripten::val callback);
   void get_daemon_height(int handle, emscripten::val callback);
@@ -71,6 +71,7 @@ namespace zephyr_wasm_bridge
   string get_unlocked_balance_account(int handle, const uint32_t account_idx);
   string get_balance_asset(int handle, const string& asset_type, const uint32_t account_idx, bool has_subaddress, const uint32_t subaddress_idx);
   string get_unlocked_balance_asset(int handle, const string& asset_type, const uint32_t account_idx, bool has_subaddress, const uint32_t subaddress_idx);
+  void is_daemon_synced(int handle, emscripten::val callback);
   string get_version(int handle);
   string get_seed(int handle);
   string get_seed_language(int handle);
@@ -84,7 +85,6 @@ namespace zephyr_wasm_bridge
   string decode_integrated_address(int handle, const string& integrated_address);
 #if defined(ZEPHYR_WASM_BRIDGE_UNPORTED) // not part of the supported surface; targets monero-cpp APIs the fixed core lacks or is not yet adapted
   void get_height_by_date(int handle, uint16_t year, uint8_t month, uint8_t day, emscripten::val callback);
-  void is_daemon_synced(int handle, emscripten::val callback);
   void is_synced(int handle, emscripten::val callback);
 #endif // ZEPHYR_WASM_BRIDGE_UNPORTED
   int get_network_type(int handle); // 0, 1, 2, or -1 on failure
