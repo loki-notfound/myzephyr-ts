@@ -2,7 +2,8 @@
  * Node runner of the redirect checks (test only): starts the two loopback servers of
  * redirectServers.cjs in this process and runs RedirectChecks.ts with a wallet in the main thread
  * (--mode direct) or in its own worker (--mode worker), with the release module; then the history
- * check of HistoryRequestCheck.ts (no request during getTxs, getTransfers and getTx).
+ * check of HistoryRequestCheck.ts (no request during getTxs, getTransfers and getTx) and the pool refresh
+ * check of PoolRefreshCheck.ts (P01, the constructed pool daemons).
  *
  *   node --require nodeMonitor.cjs runRedirectNode.js --mode direct|worker --out report.json
  *
@@ -14,6 +15,7 @@ import fs from "fs";
 import path from "path";
 import { runRedirectChecks } from "./RedirectChecks";
 import { runHistoryRequestCheck } from "./HistoryRequestCheck";
+import { runPoolRefreshCheck } from "./PoolRefreshCheck";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf("--" + name);
@@ -28,17 +30,20 @@ async function main(): Promise<number> {
     return 2;
   }
   // the servers module is plain CommonJS beside this file's source
-  const { startRedirectServers } = require(path.resolve(__dirname, "../../../../src/test/transport/redirectServers.cjs"));
+  const { startRedirectServers, POOL_MARKER } = require(path.resolve(__dirname, "../../../../src/test/transport/redirectServers.cjs"));
   process.env.LIFECYCLE_MONITOR_LOOPBACK_LISTEN = "1";
   const servers = await startRedirectServers();
   process.env.LIFECYCLE_MONITOR_ALLOW_CONNECT = "127.0.0.1:" + servers.ports.first + ",127.0.0.1:" + servers.ports.second;
   let report;
   let history;
+  let pool;
   try {
     const targets = { first: servers.first, stats: async () => servers.snapshot() };
     report = await runRedirectChecks("node-" + mode, mode, targets);
     history = await runHistoryRequestCheck(mode, targets);
-    report = Object.assign({}, report, { checks: report.checks.concat([history.check]), history: { requestsBeforeHistory: history.requestsBeforeHistory, requestsDuringHistory: history.requestsDuringHistory, historyCalls: history.historyCalls } });
+    pool = await runPoolRefreshCheck(mode, Object.assign({ marker: POOL_MARKER as string }, targets));
+    report = Object.assign({}, report, { checks: report.checks.concat([history.check, pool.check]), history: { requestsBeforeHistory: history.requestsBeforeHistory, requestsDuringHistory: history.requestsDuringHistory, historyCalls: history.historyCalls },
+      pool: { steps: pool.steps, poolTxRequests: pool.poolTxRequests } });
   } finally {
     await servers.close();
   }

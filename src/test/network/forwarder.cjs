@@ -54,9 +54,10 @@ const FAKE_HEIGHT = Number(arg("fake-height", "1000"));
 const CHECKS = arg("checks", "").split(",").filter((c) => /^N[0-9]{2}$/.test(c));
 const MAX_UPSTREAM = 2;
 
-// read-only daemon surface used by wallet refresh; everything else is refused locally
+// read-only daemon surface used by wallet refresh and the explicit pool refresh (/gettransactions: the pool
+// transactions the wallet has not scanned yet); everything else is refused locally
 const ALLOWED_PATHS = new Set(["/json_rpc", "/getheight", "/get_height", "/getinfo", "/get_info", "/getblocks.bin", "/get_blocks.bin",
-  "/gethashes.bin", "/get_hashes.bin", "/get_transaction_pool_hashes.bin", "/get_o_indexes.bin"]);
+  "/gethashes.bin", "/get_hashes.bin", "/get_transaction_pool_hashes.bin", "/get_o_indexes.bin", "/gettransactions"]);
 const ALLOWED_METHODS = new Set(["get_version", "get_info", "getinfo", "get_block_count", "getblockcount", "hard_fork_info", "get_fee_estimate",
   "get_last_block_header", "getlastblockheader", "get_block_header_by_height", "getblockheaderbyheight"]);
 const MOUNTS = ["/fake/nodestatus", "/fake/malformed", "/fake/status", "/rpc", "/slow"]; // longest first; "" is the root

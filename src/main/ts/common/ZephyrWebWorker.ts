@@ -192,6 +192,8 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   // read-only history: the selection was validated by the table; the reply is a strict DTO (common/ZephyrHistory.ts)
   getHistory: async (walletId: string, status: string, minHeight: number | undefined, maxHeight: number | undefined, hashes: string[] | undefined) =>
     (await walletOf(walletId).getHistoryChecked(checkSelection(status, minHeight, maxHeight, hashes))).map(toTxDto),
+  // explicit pool refresh: a daemon request; the reply is the count of incoming pool transactions
+  refreshPool: async (walletId: string) => await walletOf(walletId).refreshPoolChecked(),
   isClosed: async (walletId: string) => walletOf(walletId).isClosed(),
   prepareClose: async (walletId: string) => walletOf(walletId).prepareClose(),
   close: async (walletId: string) => {

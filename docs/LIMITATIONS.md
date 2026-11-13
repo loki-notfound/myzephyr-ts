@@ -87,11 +87,26 @@ that wallet's worker.
 
 ## History
 
-* The history reads what the wallet stored at its last sync; no call sends a request. Incoming
-  transfers that are still in the pool are not listed until they are confirmed: the core lists them
-  only after fetching the pool from the daemon, which the library does not let a listing do. Own
-  outgoing transactions in the pool and failed ones are listed (`status` `"pool"` and `"failed"`);
-  `getTx` of an incoming transaction still in the pool rejects with `TX_NOT_FOUND`.
+* The history reads what the wallet stored at its last sync and its last `refreshPool`; no listing
+  sends a request. Incoming transfers that are still in the pool are listed only after
+  `refreshPool`, an explicit daemon request: the core finds them only by fetching the pool. The
+  listing keeps what that refresh saw: a pool transaction that later leaves the pool without being
+  confirmed stays listed until the next `refreshPool`, and one the wallet holds as confirmed after a
+  sync is listed as confirmed. The incoming part of an own pending transaction to another account
+  of the same wallet is not listed from the pool (the outgoing transaction is). Own outgoing
+  transactions in the pool and failed ones are listed (`status` `"pool"` and `"failed"`); `getTx`
+  of an incoming transaction still in the pool rejects with `TX_NOT_FOUND` unless the last
+  `refreshPool` saw it.
+* `refreshPool` sends the node the hashes of the pool transactions the wallet has not scanned
+  before (`/gettransactions`) after asking for the pool's hashes; it leaves out the transactions the
+  wallet sent itself or already recorded as received, which the node can relate to the wallet. It
+  sends no key image and no address. The core trusts every daemon (see above); a pool transaction
+  that does not parse is skipped. Not proven on real data: an incoming transfer in the pool (that
+  needs a transaction sent to a test wallet); the request set and the empty case are proven against
+  the permitted daemon, the listing with constructed records in the test module. The asset of an
+  incoming pool transfer is what the core recorded (the core's listener reports none for pool
+  outputs; the history record carries one when the core stored it); when it is missing the field
+  is absent.
 * Proven on real data: incoming transfers in ZPH, ZSD, ZRS and ZYS at two accounts, their heights,
   confirmations, amounts and the sums per asset against the balances, read the same by
   zephyr-javascript. Not proven on real data, because no test wallet has sent anything: outgoing
@@ -114,7 +129,8 @@ that wallet's worker.
   selection. A wallet with a long history therefore pays for its whole history on every call.
 * Memory: each listing call of the core keeps 944 bytes it never frees (plus about 104 bytes per
   requested hash): the core copies the query into two objects that refer to each other. `getTxs()`,
-  `getTx` and listings without `status` make two such calls, the others one. A wallet in its own worker
+  `getTx` and listings without `status` make two such calls, the others one; a `"pool"` listing makes
+  one more while the last `refreshPool` holds entries, and `refreshPool` itself makes one. A wallet in its own worker
   returns this memory when it is closed or stopped; with `proxyToWorker: false` it stays until the
   page or process ends. Avoid listing in a tight loop.
 

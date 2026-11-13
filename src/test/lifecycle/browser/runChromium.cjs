@@ -24,7 +24,8 @@
  * With --redirect the runner also starts the two loopback servers of the redirect checks
  * (src/test/transport/redirectServers.cjs), adds both origins to connect-src (so that a followed
  * redirect would reach its target rather than be stopped by the policy), serves their origin to the
- * page at GET /redirect-targets.json and writes the servers' counts to the summary.
+ * page at GET /redirect-targets.json (with the marker text of the pool daemons) and writes the servers'
+ * counts to the summary.
  */
 "use strict";
 const http = require("http");
@@ -117,7 +118,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(204, headers); res.end();
     } else if (REDIRECT && req.method === "GET" && url.pathname === "/redirect-targets.json") {
       headers["Content-Type"] = "application/json";
-      res.writeHead(200, headers); res.end(JSON.stringify({ first: redirectServers.first, second: redirectServers.second }));
+      res.writeHead(200, headers); res.end(JSON.stringify({ first: redirectServers.first, second: redirectServers.second, marker: require(path.join(__dirname, "../../transport/redirectServers.cjs")).POOL_MARKER }));
     } else if (req.method === "POST" && url.pathname === "/csp-report") {
       try { cspReports.push(JSON.parse(body.toString("utf8"))); } catch (e) { cspReports.push({ unparseable: true }); }
       res.writeHead(204, headers); res.end();

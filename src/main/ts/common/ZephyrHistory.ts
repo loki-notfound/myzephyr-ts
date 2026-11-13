@@ -4,8 +4,11 @@ import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalances";
 
 /**
  * Read-only history of full wallets: the wallet's transactions and transfers per asset, as the wallet
- * stored them at its last sync. Nothing here talks to the daemon: a listing reads the wallet's own
- * records (getTxs, getTransfers and getTx send no request).
+ * stored them at its last sync and its last pool refresh. Nothing here talks to the daemon: a listing
+ * reads the wallet's own records (getTxs, getTransfers and getTx send no request). Incoming transfers
+ * that are still in the pool appear only after an explicit refreshPool, which is a daemon request the
+ * caller chooses; the listing then holds what that refresh saw until the next refresh or until the
+ * wallet holds the transaction as confirmed.
  *
  * Results are read-only plain data: frozen objects and arrays with numbers, strings, booleans and
  * bigint amounts in atomic units. No inherited model class appears in a result. A value the core
@@ -13,8 +16,9 @@ import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalances";
  * string (historical names such as ZEPH pass through unchanged).
  *
  * Known gaps of the fixed core, documented in LIMITATIONS.md:
- * - incoming transfers that are still in the pool are not listed until they are confirmed: the core
- *   would first fetch the pool from the daemon to list them;
+ * - incoming transfers that are still in the pool are listed only from the last refreshPool: the core
+ *   fetches the pool from the daemon to find them; an incoming pool transfer carries the asset the core
+ *   recorded for it, and no asset when the core recorded none (absent stays absent);
  * - the core reports no fee asset; feeAsset is the asset of the outgoing transfer (fees are paid in
  *   the source asset) and absent for a transaction without an outgoing transfer;
  * - outgoing amounts, fees and conversion amounts are the core's own computation and are not proven
@@ -29,7 +33,7 @@ import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalances";
 /** Direction of a transfer. */
 export type ZephyrTransferDirection = "incoming" | "outgoing";
 
-/** State of a transaction: confirmed, own outgoing transaction in the pool, or failed. */
+/** State of a transaction: confirmed, in the pool (own outgoing, or incoming as of the last refreshPool), or failed. */
 export type ZephyrHistoryStatus = "confirmed" | "pool" | "failed";
 
 /** One destination of an outgoing transfer as the wallet stored it when it sent the transaction. */
@@ -85,7 +89,7 @@ export interface ZephyrWalletTx {
   /** confirmations at the wallet's height (0 while unconfirmed) */
   readonly confirmations: number;
   readonly isConfirmed: boolean;
-  /** an own outgoing transaction that is in the pool */
+  /** in the pool: an own outgoing transaction, or an incoming one as of the last refreshPool */
   readonly inPool: boolean;
   readonly isFailed: boolean;
   /** whether the core considers the transaction locked at the wallet's height */
@@ -112,6 +116,10 @@ export interface ZephyrWalletTx {
  *   it spent from that subaddress.
  * - status, minHeight, maxHeight (inclusive; confirmed transactions only), hashes: the selection of
  *   transactions. A hash the selection does not contain rejects with INVALID_CONFIG/TX_NOT_FOUND.
+ * A transfer filter on an account or subaddress the wallet does not have matches nothing and gives an
+ * empty listing (a filter, not a lookup; the balance calls reject such an index with ACCOUNT_NOT_FOUND).
+ * The query must be a plain object (or one without prototype) of own data properties: a property with a
+ * getter or setter, or a symbol key, rejects with INVALID_CONFIG/CONFIG_TYPE before any property is read.
  */
 export interface ZephyrHistoryQuery {
   readonly asset?: string;
@@ -177,6 +185,10 @@ export function checkHistoryQuery(query: unknown): ZephyrHistoryQuery {
   if (query === null || typeof query !== "object" || Array.isArray(query)) invalid("CONFIG_TYPE");
   const proto = Object.getPrototypeOf(query);
   if (proto !== Object.prototype && proto !== null) invalid("CONFIG_TYPE");
+  // own data properties only: no getter or setter is ever invoked, no symbol key is accepted
+  if (Object.getOwnPropertySymbols(query as object).length > 0) invalid("CONFIG_TYPE");
+  const descriptors = Object.getOwnPropertyDescriptors(query as object);
+  for (const key of Object.keys(descriptors)) if (!("value" in descriptors[key])) invalid("CONFIG_TYPE");
   const q = query as Record<string, unknown>;
   for (const key of Object.keys(q)) if (!QUERY_KEYS.includes(key)) invalid("UNKNOWN_FIELD");
   const out: { -readonly [K in keyof ZephyrHistoryQuery]: ZephyrHistoryQuery[K] } = {};
@@ -428,6 +440,25 @@ export function parseBridgeTxs(json: unknown, selection: ZephyrHistorySelection)
   if (!Array.isArray(f.txs)) unexpected();
   if ((f.txs as unknown[]).length > MAX_TXS_PER_CALL) unexpected();
   return checkListing((f.txs as unknown[]).map((t) => txFromFields(t, unexpected)), selection, unexpected);
+}
+
+// ------------------------------------------------------------------ pool refresh
+
+/** Bridge {"poolTxs":n} of refresh_pool: the count of incoming pool transactions the wallet holds now. */
+export function parsePoolRefresh(json: unknown): number {
+  if (typeof json !== "string" || json.charAt(0) !== "{") unexpected();
+  let parsed: unknown;
+  try { parsed = JSON.parse(json as string); } catch (err) { unexpected(); }
+  const f = plainObject(parsed, unexpected);
+  exactKeys(f, ["poolTxs"], [], unexpected);
+  if (!Number.isSafeInteger(f.poolTxs) || (f.poolTxs as number) < 0 || (f.poolTxs as number) > MAX_TXS_PER_CALL) unexpected();
+  return f.poolTxs as number;
+}
+
+/** Strict worker reply of refreshPool. */
+export function fromPoolRefreshDto(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > MAX_TXS_PER_CALL) malformed();
+  return value as number;
 }
 
 // ------------------------------------------------------------------ worker DTOs

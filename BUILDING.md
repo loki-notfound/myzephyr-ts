@@ -101,7 +101,11 @@ runs, with no network access:
   first answering 301, 302, 303, 307 and 308 to JSON requests with a body, to the same origin and
   to the binary request of a running sync; the redirect target must receive nothing and the call
   must fail with the fixed daemon diagnostic; then `H01`: with a wallet connected to the first
-  server, the history calls `getTxs`, `getTransfers` and `getTx` send no request;
+  server, the history calls `getTxs`, `getTransfers` and `getTx` send no request; and `P01`: the
+  first server's constructed pool daemons (an empty pool, two pool transactions that do not parse,
+  a node status with a marker text), against which `refreshPool` must send exactly the pool hashes
+  request and then the transactions request, skip what does not parse, keep the node's text out of
+  its error and leave the history empty;
 * the same two suites and the module loading cases in headless Chromium, in a wallet worker,
   with every non-loopback request sent to a closed proxy port and under the page policy of
   `docs/DEPLOYMENT.md`, and the redirect checks in the page and in a wallet worker (the policy then
@@ -150,7 +154,9 @@ is removed afterwards; set `ZEPHYR_TS_TEST_KEEP_WALLET` to a new directory to ke
 packaging tests.
 
 `N19` (every run) counts the requests at the forwarder and in the request allowlist while the
-history calls run: there must be none. `N20` reads the history of a funded test wallet and runs only
+history calls run: there must be none. `N21` (every run) calls `refreshPool` twice through the
+forwarder: only the pool hashes and pool transactions may be requested, nothing refused, and the
+history of the disposable wallet stays empty. `N20` reads the history of a funded test wallet and runs only
 in the Node.js direct run with inputs you keep outside this repository:
 
     export FUNDED_WALLET_IN=<directory with a copy of the wallet: keys.bin, cache.bin, password.txt>

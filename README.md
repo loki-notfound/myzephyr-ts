@@ -15,7 +15,7 @@ The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not
 ## Status
 
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
-and the read-only history of transactions and transfers (below). Creating or sending transactions,
+the read-only history of transactions and transfers and an explicit pool refresh (below). Creating or sending transactions,
 conversions and listeners are not supported yet. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 
@@ -66,7 +66,9 @@ The package entry (`src/main/ts/index.ts`) exports:
   be the final address: HTTP redirects are never followed, so a redirecting address or proxy fails
   by design ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md));
 * read-only history of full wallets: `getTxs`, `getTransfers` and `getTx`, transactions and
-  transfers per asset from what the last sync stored (no daemon request), with the types
+  transfers per asset from what the last sync and the last `refreshPool` stored (no daemon request),
+  and `refreshPool`, an explicit daemon request for the incoming transfers still in the pool, with
+  the types
   `ZephyrWalletTx`, `ZephyrWalletTransfer`, `ZephyrTransferDestination`, `ZephyrTxConversion`,
   `ZephyrHistoryQuery`, `ZephyrTransferDirection` and `ZephyrHistoryStatus`;
 * accounts and subaddresses of full wallets: `getAccounts`, `getAccount`, `createAccount`,
@@ -138,8 +140,9 @@ and two accounts); see [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what is no
 ### History
 
 `getTxs(query?)`, `getTransfers(query?)` and `getTx(hash)` return the wallet's transactions and
-transfers per asset as the wallet stored them at its last sync. They send no request to the daemon;
-sync first to see new transactions. Full wallets only; keys-only wallets reject with
+transfers per asset as the wallet stored them at its last sync and its last pool refresh. They send
+no request to the daemon; sync first to see new transactions, and call `refreshPool()` to see
+incoming transfers that are still in the pool. Full wallets only; keys-only wallets reject with
 `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_HISTORY`.
 
 A transaction (`ZephyrWalletTx`) carries its `hash`, `height` and `timestamp` (absent while
@@ -156,24 +159,43 @@ report is absent, never zero or a default asset. Results are frozen plain object
 
 * The query (`ZephyrHistoryQuery`) has optional fields only: `asset`, `accountIndex`,
   `subaddressIndex` (with `accountIndex`), `direction` (`"incoming"` or `"outgoing"`), `status`
-  (`"confirmed"`, `"pool"` for own outgoing transactions in the pool, `"failed"`), `minHeight` and
-  `maxHeight` (inclusive, confirmed transactions only) and `hashes`. Unknown fields and bad values
-  reject with `INVALID_CONFIG` before any native call (`UNKNOWN_FIELD`, `FIELD_TYPE`, `ASSET_TYPE`,
-  `ADDRESS_INDEX_RANGE`, `QUERY_ACCOUNT_REQUIRED`, `HEIGHT_RANGE`, `TX_HASHES`, `TX_HASH`).
+  (`"confirmed"`, `"pool"` for own outgoing transactions in the pool and the incoming ones the last
+  `refreshPool` saw, `"failed"`), `minHeight` and `maxHeight` (inclusive, confirmed transactions only)
+  and `hashes`. Unknown fields and bad values reject with `INVALID_CONFIG` before any native call
+  (`UNKNOWN_FIELD`, `FIELD_TYPE`, `ASSET_TYPE`, `ADDRESS_INDEX_RANGE`, `QUERY_ACCOUNT_REQUIRED`,
+  `HEIGHT_RANGE`, `TX_HASHES`, `TX_HASH`); the query must be a plain object of own data properties
+  (a getter, a setter or a symbol key rejects with `CONFIG_TYPE` before anything is read).
   `getTxs` returns the transactions with at least one matching transfer, each with all of its
-  transfers; `getTransfers` returns the matching transfers.
+  transfers; `getTransfers` returns the matching transfers. A filter on an account or subaddress
+  the wallet does not have matches nothing and returns an empty list (the balance calls, which look
+  an index up, reject it with `ACCOUNT_NOT_FOUND`).
 * A hash is 64 lowercase hexadecimal characters (`INVALID_CONFIG`/`TX_HASH`); a requested hash the
   wallet has no transaction for rejects with `INVALID_CONFIG`/`TX_NOT_FOUND`.
 * One call selects at most 1,000 transactions with at most 2,000 transfers; a larger selection
   rejects with `INVALID_CONFIG`/`LISTING_LIMIT`. The core has no cursor: page by height range.
-* Incoming transfers that are still in the pool are not listed until they are confirmed: the core
-  would fetch the pool from the daemon first.
+* Incoming transfers that are still in the pool are listed only after `refreshPool()`, a daemon
+  request you choose (below); until then they appear once they are confirmed.
+
+`refreshPool()` asks the daemon for its transaction pool and updates the wallet's view of its
+incoming unconfirmed transfers, then resolves with the number of incoming pool transactions the
+wallet holds. Afterwards the history lists them as transactions with `inPool: true`, no height and
+zero confirmations (status `"pool"`, direction incoming) until the next `refreshPool` or until the
+wallet holds the transaction as confirmed after a sync; a failed refresh leaves none listed. The
+core sends two kinds of request: the hashes in the pool (`/get_transaction_pool_hashes.bin`) and
+then the pool transactions it has not scanned before (`/gettransactions`, pruned, up to 100 hashes
+per request). No key image and no address is sent, but the node can see which pool transactions the
+wallet does not ask for: those it sent itself or already recorded. The asset of an incoming pool
+transfer is the one the core recorded; when it recorded none the field is absent. Failures reject
+like the other daemon calls (`DAEMON_ERROR`); keys-only wallets reject with
+`UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON`.
 
 ```typescript
 await wallet.sync();
 const received = await wallet.getTransfers({ direction: "incoming", asset: "ZSD" });
 const page = await wallet.getTxs({ minHeight: 905000, maxHeight: 905999 });
 const tx = await wallet.getTx(received[0].txHash);                     // { hash, height, incomingTransfers, ... }
+await wallet.refreshPool();                                            // a daemon request
+const pending = await wallet.getTransfers({ status: "pool", direction: "incoming" });
 ```
 
 Labels, destination addresses and any other text that comes from wallet bytes or the chain are

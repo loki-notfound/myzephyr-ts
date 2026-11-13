@@ -81,8 +81,11 @@ namespace zephyr_wasm_bridge
   string create_subaddress(int handle, const uint32_t account_idx, const string& label);
   string set_subaddress_label(int handle, const uint32_t account_idx, const uint32_t subaddress_idx, const string& label);
   // read-only history of full wallets: transactions with their transfers from what the last sync
-  // stored (no daemon request), fixed-format JSON, bounded by the given limits
+  // stored and the last pool refresh kept (no daemon request), fixed-format JSON, bounded by the given limits
   string get_txs(int handle, const string& status, const string& min_height, const string& max_height, const string& hashes, uint32_t max_txs, uint32_t max_transfers);
+  // explicit pool refresh of full wallets: one daemon request set (pool hashes, then the pool transactions not
+  // scanned before), keeps the wallet's incoming pool transfers for get_txs; at most max_txs of them
+  void refresh_pool(int handle, uint32_t max_txs, emscripten::val callback);
   string get_version(int handle);
   string get_seed(int handle);
   string get_seed_language(int handle);

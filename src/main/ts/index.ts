@@ -43,8 +43,8 @@
  * native cancellation, and a wallet's other calls, close included, wait for a running request;
  * terminate ends a proxied wallet's worker without waiting.
  * Read-only history of full wallets: getTxs, getTransfers and getTx list the wallet's transactions
- * and transfers per asset as the last sync stored them (no daemon request; incoming transfers still in
- * the pool appear once confirmed).
+ * and transfers per asset as the last sync stored them (no daemon request). Incoming transfers still in
+ * the pool appear after refreshPool, an explicit daemon request, until the next refresh.
  * Not supported: listeners, background sync, outputs, creating or sending transactions, key images,
  * rescans and any relay.
  */

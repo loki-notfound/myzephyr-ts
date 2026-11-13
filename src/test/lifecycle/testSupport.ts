@@ -272,6 +272,8 @@ export interface InstrumentationArm {
   readonly passwordResult?: { readonly value: unknown };
   /** The next change_wallet_password throws synchronously instead of reporting a result */
   readonly passwordThrow?: boolean;
+  /** synthetic incoming pool records for refresh_pool of the test module (with fail["pool.core"] the core's selection is skipped) */
+  readonly poolRecords?: ReadonlyArray<TestPoolRecord>;
 }
 
 /** Instrumentation driver; direct (same context) or worker (test worker messages). */
@@ -309,6 +311,16 @@ interface Hooks {
   kind: Record<string, number>;
   barrier?: { point: string; entered?: boolean; released?: boolean };
   buffers?: { allocated: number; bytes: number; live: Record<string, number> };
+  poolRecords?: ReadonlyArray<TestPoolRecord>;
+}
+
+/** A synthetic incoming pool record that refresh_pool of the test module adds to the core's selection. */
+export interface TestPoolRecord {
+  readonly hash: string;
+  readonly amount: string;
+  readonly asset?: string;
+  readonly accountIndex: number;
+  readonly subaddressIndex: number;
 }
 
 /** Shared implementation over a loaded test module (used in the page, Node and test workers). */
@@ -399,6 +411,7 @@ export class ModuleInstrumentation {
     if (arm.copyFailure) this.copyFailureSkip = arm.copyFailure === "first" ? 0 : 2; // each buffer reads HEAPU8 for the copy and the clearing
     if (arm.passwordResult !== undefined) this.passwordResult = { value: arm.passwordResult.value };
     if (arm.passwordThrow === true) this.passwordThrow = true;
+    if (arm.poolRecords !== undefined) hooks.poolRecords = arm.poolRecords.map((r) => Object.assign({}, r));
   }
 
   release(): void {
@@ -420,6 +433,7 @@ export class ModuleInstrumentation {
     this.copyFailureSkip = -1;
     this.passwordResult = undefined;
     this.passwordThrow = false;
+    hooks.poolRecords = undefined;
     this.calls = {};
     this.freed = 0;
     this.doubleFrees = 0;

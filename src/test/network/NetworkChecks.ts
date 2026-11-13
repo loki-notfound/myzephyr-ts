@@ -854,6 +854,50 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     await w.close();
   });
 
+  // ------------------------------------------------------------------ N21: explicit pool refresh
+  /** Forwarder route counts by endpoint and JSON-RPC method (all listeners), and the refused requests. */
+  async function forwarderRoutes(): Promise<{ routes: Record<string, number>; denied: number }> {
+    const root = t.root as string;
+    type Stats = { routes: Record<string, { count: number }>; denied: Record<string, number> };
+    const st: Stats = typeof window !== "undefined" || typeof (globalThis as { importScripts?: unknown }).importScripts === "function"
+      ? await (await fetch(root + "/__stats", { cache: "no-store" })).json() as Stats
+      : await new Promise<Stats>((resolve, reject) => {
+        http.get(root + "/__stats", (res) => { const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c)); res.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Stats); } catch (e) { reject(e); } }); }).on("error", reject);
+      });
+    const routes: Record<string, number> = {};
+    for (const [k, v] of Object.entries(st.routes)) { const parts = k.split(" "); const key = parts.slice(2).join(" "); routes[key] = (routes[key] ?? 0) + v.count; }
+    return { routes, denied: Object.values(st.denied).reduce((n, c) => n + c, 0) };
+  }
+
+  await check("N21", "Explicit pool refresh through the forwarder: only the pool hashes and the pool transactions not scanned before are requested (no key image), nothing is refused; the history of the wallet without funds stays empty and the history calls after it send no request", async (notes) => {
+    if (t.base === undefined || t.root === undefined) throw new CheckFailure("no target");
+    const w = await openSeed(t.base);
+    try {
+      expect((await w.isConnectedToDaemon()) === true, "connected through the forwarder");
+      const listing = async () => JSON.stringify([(await w.getTxs()).length, (await w.getTransfers()).length, (await w.getTxs({ status: "pool" })).length]);
+      const before = await listing();
+      const r0 = await forwarderRoutes();
+      const n1 = await w.refreshPool();
+      const r1 = await forwarderRoutes();
+      const n2 = await w.refreshPool();
+      const r2 = await forwarderRoutes();
+      const diff = (a: Record<string, number>, b: Record<string, number>) => { const out: Record<string, number> = {}; for (const k of Object.keys(b)) if (b[k] !== (a[k] ?? 0)) out[k] = b[k] - (a[k] ?? 0); return out; };
+      const first = diff(r0.routes, r1.routes), second = diff(r1.routes, r2.routes);
+      const allowed = (d: Record<string, number>) => Object.keys(d).every((k) => k === "/get_transaction_pool_hashes.bin -" || k === "/gettransactions -");
+      expect(first["/get_transaction_pool_hashes.bin -"] === 1 && second["/get_transaction_pool_hashes.bin -"] === 1 && allowed(first) && allowed(second), "each refresh asks for the pool hashes once and otherwise only for pool transactions: " + JSON.stringify(first) + " " + JSON.stringify(second));
+      expect(r2.denied === r0.denied, "no request refused by the forwarder");
+      expect(n1 === 0 && n2 === 0, "the wallet without funds has no incoming pool transaction (" + n1 + ", " + n2 + ")");
+      const after = await listing();
+      const r3 = await forwarderRoutes();
+      expect(before === after && before === "[0,0,0]", "the history stays empty (" + before + " / " + after + ")");
+      expect(JSON.stringify(diff(r2.routes, r3.routes)) === "{}", "no request during the history calls after the refresh");
+      report.measurements.N21 = { first, second, poolTxs: [n1, n2] };
+      notes.push("refresh 1: " + JSON.stringify(first) + "; refresh 2: " + JSON.stringify(second) + "; incoming pool transactions " + n1 + ", " + n2);
+    } finally {
+      await w.close();
+    }
+  });
+
   // ------------------------------------------------------------------ N20: funded history (inputs from outside the public tree)
   await check("N20", "Funded history: transactions and transfers per asset and account equal the expectations; incoming sums equal the balances of wallet, accounts and subaddresses; every query filter; direct and proxied equal; confirmations grow with the daemon height", async (notes) => {
     const funded = opts.funded;

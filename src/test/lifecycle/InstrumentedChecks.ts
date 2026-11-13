@@ -1001,6 +1001,61 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await w.close();
   });
 
+  await check("T20", "Pool refresh snapshot (synthetic records of the test module, the core's selection skipped): incoming pool transactions in every selection and filter, absent asset stays absent, getTx finds them; replaced by the next refresh and cleared by a failed one; LISTING_LIMIT; replacing the snapshot frees it; an injected failure carries no input", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    const heap = async () => (await hooks.state()).heapInUse;
+    const hi = "e1".repeat(32), lo = "0a".repeat(32);
+    const records = [{ hash: hi, amount: "5000000000000", asset: "ZPH", accountIndex: 0, subaddressIndex: 0 }, { hash: lo, amount: "7", accountIndex: 0, subaddressIndex: 3 }];
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "pool.core": 1000 }, poolRecords: records });
+    expect((await w.refreshPool()) === 2, "refreshPool counts the two records");
+    const txs = await w.getTxs();
+    expect(txs.length === 2 && txs[0].hash === lo && txs[1].hash === hi, "both listed, unconfirmed ones by hash");
+    expect(txs.every((t) => t.inPool && !t.isConfirmed && !t.isFailed && t.isLocked && !t.isMinerTx && t.confirmations === 0 && t.height === undefined && t.timestamp === undefined
+      && t.fee === undefined && t.feeAsset === undefined && t.outgoingTransfer === undefined && t.conversion === undefined && t.unlockTime === BigInt(0) && t.incomingTransfers.length === 1), "incoming pool transactions with absent values absent");
+    expect(txs[0].incomingTransfers[0].asset === undefined && txs[0].incomingTransfers[0].amount === BigInt(7) && txs[0].incomingTransfers[0].subaddressIndex === 3, "a record without asset keeps it absent");
+    expect(txs[1].incomingTransfers[0].asset === "ZPH" && txs[1].incomingTransfers[0].amount === BigInt("5000000000000") && txs[1].incomingTransfers[0].direction === "incoming", "a record with asset");
+    const counts: Array<[string, F.ZephyrHistoryQuery, number]> = [["pool", { status: "pool" }, 2], ["confirmed", { status: "confirmed" }, 0], ["failed", { status: "failed" }, 0], ["height range", { minHeight: 0 }, 0],
+      ["asset ZPH", { asset: "ZPH" }, 1], ["outgoing", { direction: "outgoing" }, 0], ["incoming", { direction: "incoming" }, 2], ["subaddress 0/3", { accountIndex: 0, subaddressIndex: 3 }, 1], ["hashes", { hashes: [hi] }, 1],
+      ["pool and hashes", { status: "pool", hashes: [lo] }, 1]];
+    for (const [label, q, n] of counts) expect((await w.getTransfers(q)).length === n, "filter " + label + " lists " + n);
+    const show = (v: unknown) => JSON.stringify(v, (k, x) => (typeof x === "bigint" ? x.toString() + "n" : x));
+    expect(show(await w.getTx(hi)) === show(txs[1]), "getTx finds a pool transaction");
+    await expectCode(w.getTx("ab".repeat(32)), "INVALID_CONFIG", "getTx of a hash in neither", notes, "TX_NOT_FOUND");
+    await expectCode(w.getTxs({ status: "confirmed", hashes: [hi] }), "INVALID_CONFIG", "a pool hash in the confirmed selection", notes, "TX_NOT_FOUND");
+    // the next refresh replaces the snapshot
+    await hooks.arm({ poolRecords: [] });
+    expect((await w.refreshPool()) === 0 && (await w.getTxs()).length === 0, "an empty refresh clears the listing");
+    // a failed refresh leaves no snapshot; the injected text never reaches the error
+    await hooks.arm({ poolRecords: records });
+    expect((await w.refreshPool()) === 2, "records again");
+    await hooks.arm({ fail: { "error.pool": 1 } });
+    const err = await expectCode(w.refreshPool(), "DAEMON_ERROR", "injected failure in refresh_pool", notes, "DAEMON_RESPONSE");
+    expect(!scanText(err).includes("injected"), "the injected text is not in the error");
+    expect((await w.getTxs()).length === 0, "a failed refresh leaves no pool entries");
+    // more than 1,000 incoming pool transactions: LISTING_LIMIT, no snapshot
+    const many = Array.from({ length: 1001 }, (_, i) => ({ hash: i.toString(16).padStart(64, "0"), amount: "1", asset: "ZSD", accountIndex: 0, subaddressIndex: 0 }));
+    await hooks.arm({ poolRecords: many });
+    await expectCode(w.refreshPool(), "INVALID_CONFIG", "1,001 pool records", notes, "LISTING_LIMIT");
+    expect((await w.getTxs()).length === 0, "no snapshot after LISTING_LIMIT");
+    // allocation: a snapshot replaced by an empty one leaves the allocator where it was
+    await hooks.arm({ poolRecords: records }); await w.refreshPool(); await hooks.arm({ poolRecords: [] }); await w.refreshPool(); // warm-up
+    const deltas: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const h0 = await heap();
+      await hooks.arm({ poolRecords: records }); await w.refreshPool();
+      await hooks.arm({ poolRecords: [] }); await w.refreshPool();
+      deltas.push((await heap()) - h0);
+    }
+    notes.push("allocator growth of 5 refresh pairs (two records, then none): " + deltas.join(","));
+    expect(deltas.every((d) => d === 0), "a replaced snapshot is freed");
+    const st = await hooks.state();
+    expect(st.events.includes("injected:error.pool") && st.events.some((e) => e.startsWith("pool-records:")), "the hooks fired");
+    await hooks.resetCounters();
+    await w.close();
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

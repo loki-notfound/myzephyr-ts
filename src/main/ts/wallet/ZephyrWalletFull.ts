@@ -40,7 +40,7 @@ import { MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL, checkLabel, checkSuba
 import HttpClient from "../common/HttpClient";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
 import { ZephyrAccountBalances, ZephyrAssetBalances, fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalances";
-import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, ZephyrWalletTx, checkSelection, fromTxsDto, parseBridgeTxs } from "../common/ZephyrHistory";
+import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, ZephyrWalletTx, checkSelection, fromPoolRefreshDto, fromTxsDto, parseBridgeTxs, parsePoolRefresh } from "../common/ZephyrHistory";
 import { ZephyrAccount, ZephyrAddressIndex, ZephyrSubaddress, fromAccountDto, fromAccountsDto, fromAddressIndexDto, fromSubaddressDto, fromSubaddressesDto, parseBridgeAccount, parseBridgeAccounts, parseBridgeAddressIndex, parseBridgeSubaddress, parseBridgeSubaddresses } from "../common/ZephyrAccounts";
 import { configFields, toCoreConfigJson, validateCreateConfig, validateOpenConfig } from "./model/ZephyrWalletCoreConfig";
 import { ZephyrWalletKeys, ZephyrWalletKeysProxy } from "./ZephyrWalletKeys";
@@ -949,6 +949,23 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return parseBridgeTxs(ZephyrWalletError.checkBridgeResult("other", this.module.get_txs(this.cppAddress, s.status, s.minHeight === undefined ? "" : String(s.minHeight),
         s.maxHeight === undefined ? "" : String(s.maxHeight), s.hashes === undefined ? "" : s.hashes.join(","), MAX_TXS_PER_CALL, MAX_TRANSFERS_PER_CALL)), s);
+    });
+  }
+
+  /**
+   * Explicit pool refresh: asks the daemon for its pool and keeps the wallet's incoming pool transfers for
+   * the history (a daemon request; bridge refresh_pool). Resolves with the number of incoming pool
+   * transactions the wallet holds now.
+   */
+  async refreshPoolChecked(): Promise<number> {
+    if (this.getWalletProxy()) return this.getWalletProxy().refreshPoolChecked();
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<number>((resolve, reject) => {
+        this.module.refresh_pool(this.cppAddress, MAX_TXS_PER_CALL, (result: unknown) => {
+          try { resolve(parsePoolRefresh(ZephyrWalletError.checkBridgeResult("daemon", result))); } catch (err) { reject(err); }
+        });
+      });
     });
   }
 
@@ -2345,6 +2362,10 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     const args: unknown[] = [selection.status, selection.minHeight, selection.maxHeight];
     if (selection.hashes !== undefined) args.push(selection.hashes.slice());
     return fromTxsDto(await this.invokeWorker("getHistory", args), selection);
+  }
+
+  async refreshPoolChecked(): Promise<number> {
+    return fromPoolRefreshDto(await this.invokeWorker("refreshPool"));
   }
 
   async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }

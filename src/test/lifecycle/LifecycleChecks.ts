@@ -1587,6 +1587,43 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     notes.push(cases.length + " deviations rejected by the bridge parser and by the worker DTO parser; 5 malformed bridge texts rejected");
   });
 
+  await check("C33", "Pool refresh without a daemon: a fixed daemon rejection, the history stays empty; argument, kind and closed rejections before any native call. History queries: accessor properties and symbol keys reject before any property is read; a filter on an account the wallet does not have lists nothing", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    // no daemon configured: the core's pool request cannot be sent
+    await expectCode(w.refreshPool(), "DAEMON_ERROR", "refreshPool without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    expect((await w.getTxs()).length === 0 && (await w.getTxs({ status: "pool" })).length === 0, "the history stays empty after the failed refresh");
+    const native = await countNativeCalls(async () => {
+      await expectCode((w.refreshPool as (...a: unknown[]) => Promise<number>)(true), "INVALID_CONFIG", "refreshPool with an argument", notes, "FIELD_TYPE");
+      // accessor properties and symbol keys: rejected before any getter runs
+      let read = 0;
+      const getter = {} as Record<string, unknown>;
+      Object.defineProperty(getter, "asset", { enumerable: true, get: () => { read++; return "ZPH"; } });
+      const setterOnly = {} as Record<string, unknown>;
+      Object.defineProperty(setterOnly, "status", { enumerable: true, set: () => { read++; } });
+      const hidden = {} as Record<string, unknown>;
+      Object.defineProperty(hidden, "direction", { enumerable: false, get: () => { read++; return "incoming"; } });
+      const symbol = { [Symbol("asset")]: "ZPH" } as unknown as Record<string, unknown>;
+      for (const [label, q] of [["getter", getter], ["setter", setterOnly], ["non-enumerable getter", hidden], ["symbol key", symbol]] as Array<[string, Record<string, unknown>]>) {
+        await expectCode(w.getTxs(q as F.ZephyrHistoryQuery), "INVALID_CONFIG", "getTxs with a " + label, notes, "CONFIG_TYPE");
+        await expectCode(w.getTransfers(q as F.ZephyrHistoryQuery), "INVALID_CONFIG", "getTransfers with a " + label, notes, "CONFIG_TYPE");
+      }
+      expect(read === 0, "no accessor was invoked (" + read + ")");
+    });
+    if (!proxy) expect(native === 0, "no native export called by the rejections, got " + native);
+    // a plain object without prototype is accepted; an account or subaddress the wallet does not have is a filter that matches nothing
+    const bare = Object.create(null) as Record<string, unknown>;
+    bare.status = "confirmed";
+    expect((await w.getTxs(bare as F.ZephyrHistoryQuery)).length === 0, "a query object without prototype is accepted");
+    const accounts = (await w.getAccounts()).length;
+    expect((await w.getTransfers({ accountIndex: accounts + 5 })).length === 0 && (await w.getTxs({ accountIndex: 0, subaddressIndex: 4000000000 })).length === 0, "filters on an account or subaddress the wallet does not have list nothing");
+    await expectCode(w.getBalance(accounts + 5), "INVALID_CONFIG", "the balance call with that account index", notes, "ACCOUNT_NOT_FOUND");
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy });
+    await expectCode(k.refreshPool(), "UNSUPPORTED_CAPABILITY", "keys-only refreshPool", notes, "KEYS_ONLY_DAEMON");
+    await k.close();
+    await w.close();
+    await expectCode(w.refreshPool(), "WALLET_CLOSED", "refreshPool after close", notes);
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   if (proxy) {
     const proof = await postRawWorkerMessage([newMessageId(), "getNetworkGuardReport", newMessageId()], 10000);

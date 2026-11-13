@@ -457,11 +457,30 @@ export class ZephyrWallet {
   // --------------------------------- read-only history ---------------------------------
   //
   // Full wallets, direct and proxied; keys-only wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_HISTORY.
-  // The wallet's transactions and transfers per asset as the last sync stored them: none of these calls
-  // sends a request to the daemon. Results are read-only plain data with bigint amounts
-  // (common/ZephyrHistory.ts). The query is validated before any native or worker call. A selection holds
-  // at most 1,000 transactions with at most 2,000 transfers (else INVALID_CONFIG/LISTING_LIMIT); page by
-  // height range. Incoming transfers still in the pool are not listed until they are confirmed.
+  // The wallet's transactions and transfers per asset as the last sync and the last refreshPool stored
+  // them: none of these calls sends a request to the daemon. Results are read-only plain data with bigint
+  // amounts (common/ZephyrHistory.ts). The query is validated before any native or worker call. A
+  // selection holds at most 1,000 transactions with at most 2,000 transfers (else
+  // INVALID_CONFIG/LISTING_LIMIT); page by height range. Incoming transfers still in the pool are listed
+  // only after refreshPool (status "pool", direction incoming).
+
+  /**
+   * Explicit pool refresh: asks the daemon for its transaction pool and updates the wallet's view of its
+   * incoming unconfirmed transfers; afterwards getTxs, getTransfers and getTx list them (status "pool",
+   * direction incoming) without a request, until the next refreshPool or until the wallet holds the
+   * transaction as confirmed. A daemon request the caller chooses: the core asks for the hashes in the
+   * pool (/get_transaction_pool_hashes.bin) and then for the pool transactions the wallet has not scanned
+   * before (/gettransactions, pruned); it sends no key image and no address, but leaves out the
+   * transactions this wallet sent itself or already recorded as received. Resolves with the number of
+   * incoming pool transactions the wallet holds now (at most 1,000, else INVALID_CONFIG/LISTING_LIMIT).
+   * Failures reject like the other daemon calls (DAEMON_ERROR); a failed refresh leaves no pool entries
+   * in the listing. Keys-only wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON.
+   */
+  async refreshPool(): Promise<number> {
+    const wallet = this.full("KEYS_ONLY_DAEMON");
+    if (arguments.length > 0) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("daemon", () => wallet.refreshPoolChecked());
+  }
 
   /**
    * The wallet's transactions, confirmed by height then hash, unconfirmed (own pending and failed) after
@@ -488,7 +507,8 @@ export class ZephyrWallet {
   /**
    * One transaction of the wallet by its hash (64 lowercase hexadecimal characters, else
    * INVALID_CONFIG/TX_HASH before any native call). A hash the wallet has no transaction for rejects
-   * with INVALID_CONFIG/TX_NOT_FOUND (also an incoming transaction that is still in the pool).
+   * with INVALID_CONFIG/TX_NOT_FOUND (also an incoming transaction that is still in the pool, unless the
+   * last refreshPool saw it).
    */
   async getTx(hash: string): Promise<ZephyrWalletTx> {
     const wallet = this.full("KEYS_ONLY_HISTORY");

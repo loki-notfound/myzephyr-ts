@@ -22,7 +22,8 @@
 # without funds is kept in build/test-wallets/ between the runs. Results (codes, counts, heights and
 # timings only) go to build/test-results/network/.
 #
-# N19 (history sends no request) runs in every run; N20 (the history of a funded test wallet) only in the
+# N19 (history sends no request) and N21 (the explicit pool refresh: only the pool request set, nothing
+# refused, the history stays empty) run in every run; N20 (the history of a funded test wallet) only in the
 # Node direct run and only with FUNDED_WALLET_IN (a directory with a copy of the wallet: keys.bin,
 # cache.bin, password.txt) and FUNDED_EXPECT (its expected history, JSON), both from outside this tree;
 # without them N20 is reported as not run. N20 makes two more syncs of that copy (one after the next
@@ -42,9 +43,9 @@ CHROMIUM=${CHROMIUM:-chromium}
 OUT=$ROOT/build/test-results/network; SEED=$ROOT/build/test-wallets/network-seed
 rm -rf "$OUT" "$SEED"; mkdir -p "$OUT" "$(dirname "$SEED")"; chmod 700 "$OUT" "$(dirname "$SEED")"
 MARKER=MARKERnodetext
-DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N20}
-WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16,N19}
-BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16,N19}
+DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20}
+WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16,N19,N21}
+BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16,N19,N21}
 FUNDED_ARGS=()
 if [ -n "${FUNDED_WALLET_IN:-}" ] || [ -n "${FUNDED_EXPECT:-}" ]; then
   [ -s "${FUNDED_WALLET_IN:-}/keys.bin" ] && [ -s "${FUNDED_EXPECT:-}" ] || die "FUNDED_WALLET_IN and FUNDED_EXPECT go together"

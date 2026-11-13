@@ -164,8 +164,8 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   "get_balance_asset", "get_unlocked_balance_asset", "is_daemon_synced",
   // accounts and subaddresses
   "get_accounts", "get_account", "create_account", "get_subaddresses", "create_subaddress", "set_subaddress_label",
-  // read-only history
-  "get_txs"
+  // read-only history and the explicit pool refresh
+  "get_txs", "refresh_pool"
 ];
 
 /**
@@ -173,7 +173,7 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
  * balances and the restore height of a new wallet from its daemon). Every other release export is an
  * inherited binding adapted to the fixed core.
  */
-export const SDK_ADDED_NATIVE_EXPORTS: readonly string[] = ["get_balance_asset", "get_unlocked_balance_asset", "set_restore_height_from_daemon"];
+export const SDK_ADDED_NATIVE_EXPORTS: readonly string[] = ["get_balance_asset", "get_unlocked_balance_asset", "set_restore_height_from_daemon", "refresh_pool"];
 
 /**
  * Inherited monero-ts bridge exports at the base commit that the SDK does not build. If an
@@ -267,6 +267,8 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   setSubaddressLabel: { scope: "wallet", kinds: FULL, args: [{ kind: "uint32" }, { kind: "uint32" }, { kind: "label" }], nativeExports: ["set_subaddress_label"], errorContext: "other" },
   // read-only history of full wallets: one selection (status, height range, hashes); the reply is a strict DTO (common/ZephyrHistory.ts)
   getHistory: { scope: "wallet", kinds: FULL, args: [{ kind: "historyStatus" }, { kind: "historyHeight", optional: true }, { kind: "historyHeight", optional: true }, { kind: "txHashes", optional: true }], nativeExports: ["get_txs"], errorContext: "other" },
+  // explicit pool refresh of full wallets (a daemon request); the reply is a count
+  refreshPool: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["refresh_pool"], errorContext: "daemon" },
   isClosed: { scope: "wallet", kinds: BOTH, args: [], nativeExports: [], errorContext: "other" },
   prepareClose: { scope: "wallet", kinds: FULL, args: [], nativeExports: [], errorContext: "close" },
   close: { scope: "wallet", kinds: BOTH, args: [{ kind: "falseFlag", optional: true }], nativeExports: ["close"], errorContext: "close" }
