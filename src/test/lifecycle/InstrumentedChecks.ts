@@ -1098,12 +1098,14 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
       [32, "INVALID_CONFIG", "CONVERSION_PAIR"], [33, "INVALID_CONFIG", "CONVERSION_PAIR"],
       [11, "TX_NOT_POSSIBLE", "NOT_ENOUGH_UNLOCKED"], [12, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"], [13, "TX_NOT_POSSIBLE", "NOT_ENOUGH_FOR_FEE"], [14, "TX_NOT_POSSIBLE", "NOT_ENOUGH_OUTS_TO_MIX"],
       [15, "TX_NOT_POSSIBLE", "TX_TOO_LARGE"], [16, "DAEMON_ERROR", "DAEMON_RESPONSE"], [17, "DAEMON_ERROR", "DAEMON_RESPONSE"], [18, "DAEMON_ERROR", "DAEMON_RESPONSE"], [19, "NATIVE_ERROR", "TX_BUILD_FAILED"]];
+    // the injected reserve ratio messages carry the ratios 1.612345678901, 1.598765432109 and 1.587654321098 (a stack in a
+    // browser carries the page's loopback address, so the check looks for these digits, not for any decimal number)
     for (const [kind, code, diag] of pairs) {
       await hooks.resetCounters();
       await hooks.arm({ fail: { "conversion.core": 1 }, kind: { "conversion.core": kind } });
       const err = await expectCode(w.buildConversion(cfg), code, "injected conversion failure kind " + kind, notes, diag);
       const text = scanText(err) + scanText(err.toEnvelope());
-      expect(!text.includes(own.toLowerCase()) && !text.includes("123400000000") && !text.includes("injected") && !/[0-9]\.[0-9]/.test(text) && !text.includes("satisfied") && !text.includes("pricing record"), "kind " + kind + ": no destination, ratio or core text in the error");
+      expect(!text.includes(own.toLowerCase()) && !text.includes("123400000000") && !text.includes("injected") && !/612345|598765|587654|minimum 4\.0/.test(text) && !text.includes("satisfied") && !text.includes("pricing record"), "kind " + kind + ": no destination, ratio or core text in the error");
       expect((await hooks.state()).events.includes("injected:conversion.core"), "kind " + kind + " fired");
     }
     await hooks.resetCounters();
