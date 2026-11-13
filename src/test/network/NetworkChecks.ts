@@ -1098,9 +1098,10 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       expect(state1 === state0, "balances, unlocked balances, accounts, history and height equal those before the builds");
       const keysEqual = bytesEqual(data0.keys, data1.keys), cacheEqual = bytesEqual(data0.cache, data1.cache);
       expect(!deterministic || (keysEqual && cacheEqual), "the wallet bytes equal those before the builds (getData is deterministic here)");
-      // getData encrypts afresh on every call (two calls without any change differ), so the bytes are compared by
-      // length and by what they open to: both reopen offline to the same state
-      expect(data0.keys.length === data1.keys.length && data0.cache.length === data1.cache.length, "the wallet bytes have the same lengths before and after the builds");
+      // getData encrypts afresh on every call (two calls without any change differ in their bytes, and the keys
+      // part also in its length), so the bytes are compared by the cache's length and by what they open to: both
+      // reopen offline to the same state
+      expect(data0.cache.length === data1.cache.length, "the cache bytes have the same length before and after the builds");
       const reopened: string[] = [];
       for (const d of [data0, data1]) {
         const o = await F.openWalletData({ networkType: 0, password: funded.wallet.password, keysData: new Uint8Array(d.keys), cacheData: new Uint8Array(d.cache), proxyToWorker: false });
@@ -1121,7 +1122,8 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       if (opts.saveBuildSynced !== undefined) await opts.saveBuildSynced({ keys: data1.keys, cache: data1.cache, password: funded.wallet.password });
       const relayAfter = (HttpClient as unknown as { REFUSED_RELAY_REQUESTS: number }).REFUSED_RELAY_REQUESTS;
       expect(relayAfter === relayBefore, "no relay request was attempted in this context");
-      report.measurements.N22 = { builds: results, deterministicGetData: deterministic, keysEqual, cacheEqual, reopenedEqual: reopened[0] === state0 && reopened[1] === state0, keysBytes: data0.keys.length, cacheBytes: data0.cache.length, proxiedEqual: proxied, relayRefused: relayAfter - relayBefore };
+      report.measurements.N22 = { builds: results, deterministicGetData: deterministic, keysEqual, cacheEqual, reopenedEqual: reopened[0] === state0 && reopened[1] === state0,
+        keysBytes: [data0.keys.length, data0b.keys.length, data1.keys.length], cacheBytes: [data0.cache.length, data0b.cache.length, data1.cache.length], proxiedEqual: proxied, relayRefused: relayAfter - relayBefore };
       notes.push(plans.length + " builds; fees " + Object.entries(results).map(([k, v]) => k.split(" ")[0] + " " + (v as { fee: string }).fee).join(", ") + "; getData deterministic " + deterministic + ", keys equal " + keysEqual + ", cache equal " + cacheEqual);
     } finally {
       await w.close();

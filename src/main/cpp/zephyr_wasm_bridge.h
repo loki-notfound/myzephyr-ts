@@ -24,10 +24,9 @@ namespace zephyr_wasm_bridge
 
   // Retained bindings report failures with the fixed error protocol of zephyr_wasm_bridge.cpp
   // ({"error":"<IDENTIFIER>"} or -1); no native exception text reaches JavaScript.
-  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC, ERROR_CONTEXT_ADDRESS_INDEX };
+  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC, ERROR_CONTEXT_ADDRESS_INDEX, ERROR_CONTEXT_BUILD };
   const char* classify_current_exception(int context); // only inside a catch handler
   const char* probe_password_state(int handle, const string& old_password, const string& new_password);
-  const char* classify_build_exception(int handle); // only inside a catch handler of build_txs
 
   string set_log_level(int level);
   string get_integrated_address_util(int network_type, const string& standard_address, const string& payment_id);

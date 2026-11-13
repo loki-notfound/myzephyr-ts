@@ -209,6 +209,17 @@ namespace {
   };
   // END CORE MESSAGE TABLE
 
+  // BEGIN CORE MESSAGE TABLE (daemon context of builds)
+  // fixed messages of the pinned core's build path for failed daemon requests (wallet2::use_fork_rules);
+  // any other text of a build failure is never compared beyond these entries (TX_BUILD_FAILED)
+  const core_message_rule BUILD_DAEMON_MESSAGE_RULES[] = {
+    {"Failed to get height", "DAEMON_RESPONSE"},
+    {"Failed to get earliest fork height", "DAEMON_RESPONSE"},
+    {"Wallet is not connected to daemon", "DAEMON_NOT_CONNECTED"},
+    {"Failed to connect to daemon", "DAEMON_UNREACHABLE"}
+  };
+  // END CORE MESSAGE TABLE
+
   // BEGIN CORE MESSAGE TABLE (address context)
   const core_message_rule ADDRESS_MESSAGE_RULES[] = {
     {"Invalid address", "CORE_INVALID_ADDRESS"},
@@ -263,13 +274,31 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
     return context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : context == ERROR_CONTEXT_BUFFER ? "NATIVE_BUFFER_FAILED" : "CORE_INVALID_PASSWORD";
   } catch (const tools::error::no_connection_to_daemon&) {
     // the core received no usable answer; refined by the transport's failure kind (daemon_failure)
-    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC ? "DAEMON_UNREACHABLE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || context == ERROR_CONTEXT_BUILD ? "DAEMON_UNREACHABLE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::wallet_rpc_error&) {
     // busy, payment or other daemon status, including node-supplied text that is not read
-    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || context == ERROR_CONTEXT_BUILD ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::refresh_error&) {
     // failed daemon request or unusable daemon data during refresh (blocks, hashes, pool, indices)
-    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || context == ERROR_CONTEXT_BUILD ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
+  } catch (const tools::error::not_enough_unlocked_money&) {
+    // the transfer errors of the core's transaction build (build_txs); no other binding builds
+    return context == ERROR_CONTEXT_BUILD ? "NOT_ENOUGH_UNLOCKED" : "CORE_UNCLASSIFIED";
+  } catch (const tools::error::not_enough_money&) {
+    return context == ERROR_CONTEXT_BUILD ? "NOT_ENOUGH_MONEY" : "CORE_UNCLASSIFIED";
+  } catch (const tools::error::tx_not_possible&) {
+    return context == ERROR_CONTEXT_BUILD ? "NOT_ENOUGH_FOR_FEE" : "CORE_UNCLASSIFIED";
+  } catch (const tools::error::not_enough_outs_to_mix&) {
+    return context == ERROR_CONTEXT_BUILD ? "NOT_ENOUGH_OUTS_TO_MIX" : "CORE_UNCLASSIFIED";
+  } catch (const tools::error::tx_too_big&) {
+    return context == ERROR_CONTEXT_BUILD ? "TX_TOO_LARGE" : "CORE_UNCLASSIFIED";
+  } catch (const tools::error::zero_amount&) {
+    return context == ERROR_CONTEXT_BUILD ? "AMOUNT_ZERO" : "CORE_UNCLASSIFIED";
+  } catch (const tools::error::tx_sum_overflow&) {
+    return context == ERROR_CONTEXT_BUILD ? "AMOUNT_RANGE" : "CORE_UNCLASSIFIED";
+  } catch (const tools::error::get_outs_error&) {
+    // the ring member request failed at the daemon
+    return context == ERROR_CONTEXT_BUILD ? "DAEMON_RESPONSE" : "CORE_UNCLASSIFIED";
   } catch (const std::exception& e) {
     switch (context) {
       case ERROR_CONTEXT_CREATE: return match_core_message(CREATE_MESSAGE_RULES, e.what(), "CORE_UNCLASSIFIED");
@@ -280,10 +309,11 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
       case ERROR_CONTEXT_BUFFER: return "NATIVE_BUFFER_FAILED";
       case ERROR_CONTEXT_DAEMON: return match_core_message(DAEMON_MESSAGE_RULES, e.what(), "DAEMON_RESPONSE");
       case ERROR_CONTEXT_SYNC: return match_core_message(DAEMON_MESSAGE_RULES, e.what(), "SYNC_FAILED");
+      case ERROR_CONTEXT_BUILD: return match_core_message(BUILD_DAEMON_MESSAGE_RULES, e.what(), "TX_BUILD_FAILED");
       default: return "CORE_UNCLASSIFIED";
     }
   } catch (...) {
-    return context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : context == ERROR_CONTEXT_BUFFER ? "NATIVE_BUFFER_FAILED" : context == ERROR_CONTEXT_SYNC ? "SYNC_FAILED" : context == ERROR_CONTEXT_DAEMON ? "DAEMON_RESPONSE" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : context == ERROR_CONTEXT_BUFFER ? "NATIVE_BUFFER_FAILED" : context == ERROR_CONTEXT_SYNC ? "SYNC_FAILED" : context == ERROR_CONTEXT_DAEMON ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_BUILD ? "TX_BUILD_FAILED" : "CORE_UNCLASSIFIED";
   }
 }
 
@@ -1768,16 +1798,6 @@ namespace {
     return d;
   }
 
-  // BEGIN CORE MESSAGE TABLE (build context)
-  // fixed messages of the pinned core's build path for failed daemon requests (wallet2::use_fork_rules,
-  // the fee estimate); any other text of a build failure is never compared beyond these entries
-  const core_message_rule BUILD_MESSAGE_RULES[] = {
-    {"Failed to get height", "DAEMON_RESPONSE"},
-    {"Failed to get earliest fork height", "DAEMON_RESPONSE"},
-    {"Wallet is not connected to daemon", "DAEMON_NOT_CONNECTED"},
-    {"Failed to connect to daemon", "DAEMON_UNREACHABLE"}
-  };
-  // END CORE MESSAGE TABLE
 
 #if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)
   // test-only: a typed failure of the core's build path at the armed point (h.kind[name]): 11 not enough
@@ -1802,42 +1822,6 @@ namespace {
 #else
   inline void test_throw_build(const char*, const std::string&) {}
 #endif
-}
-
-// Classify a failure of build_txs (call only inside a catch handler); the exception text never leaves this
-// function. A function of the bridge namespace, so that the exception whitelist lets it catch the rethrow.
-const char* zephyr_wasm_bridge::classify_build_exception(int handle) {
-  try {
-    throw;
-  } catch (const bridge_failure& e) {
-    return e.m_identifier;
-  } catch (const tools::error::not_enough_unlocked_money&) {
-    return "NOT_ENOUGH_UNLOCKED";
-  } catch (const tools::error::not_enough_money&) {
-    return "NOT_ENOUGH_MONEY";
-  } catch (const tools::error::tx_not_possible&) {
-    return "NOT_ENOUGH_FOR_FEE";
-  } catch (const tools::error::not_enough_outs_to_mix&) {
-    return "NOT_ENOUGH_OUTS_TO_MIX";
-  } catch (const tools::error::tx_too_big&) {
-    return "TX_TOO_LARGE";
-  } catch (const tools::error::zero_amount&) {
-    return "AMOUNT_ZERO";
-  } catch (const tools::error::tx_sum_overflow&) {
-    return "AMOUNT_RANGE";
-  } catch (const tools::error::no_connection_to_daemon&) {
-    return daemon_failure(handle, "DAEMON_UNREACHABLE");
-  } catch (const tools::error::wallet_rpc_error&) {
-    return "DAEMON_RESPONSE"; // busy, payment or another daemon status, including node text that is not read
-  } catch (const tools::error::get_outs_error&) {
-    return "DAEMON_RESPONSE"; // the ring member request failed at the daemon
-  } catch (const tools::error::refresh_error&) {
-    return "DAEMON_RESPONSE";
-  } catch (const std::exception& e) {
-    return daemon_failure(handle, match_core_message(BUILD_MESSAGE_RULES, e.what(), "TX_BUILD_FAILED"));
-  } catch (...) {
-    return "TX_BUILD_FAILED";
-  }
 }
 
 // {"txs":[{"hash","sourceAsset","destinationAsset","amount","fee","feeAsset","totalDebited","change","ringSize",
@@ -1944,7 +1928,7 @@ void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string
     config.m_destinations.clear();
     result = string(buffer.GetString(), buffer.GetSize());
   } catch (...) {
-    const char* identifier = classify_build_exception(handle);
+    const char* identifier = daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_BUILD));
     release_built(txs);
     config.m_destinations.clear();
     result = bridge_error(identifier);
