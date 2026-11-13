@@ -1056,6 +1056,37 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await w.close();
   });
 
+  await check("T21", "Build failures of the core map to fixed pairs (typed failures injected in the test module): not enough unlocked balance, balance and fee, too few outputs, too large, daemon failures; an untyped failure and a node status never carry the destinations; rejected builds leave the allocator unchanged", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    const own = await w.getPrimaryAddress();
+    const cfg = { asset: "ZRS", destinations: [{ address: own, amount: BigInt(123456789) }], accountIndex: 0 };
+    const pairs: Array<[number, string, string]> = [[11, "TX_NOT_POSSIBLE", "NOT_ENOUGH_UNLOCKED"], [12, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"], [13, "TX_NOT_POSSIBLE", "NOT_ENOUGH_FOR_FEE"],
+      [14, "TX_NOT_POSSIBLE", "NOT_ENOUGH_OUTS_TO_MIX"], [15, "TX_NOT_POSSIBLE", "TX_TOO_LARGE"], [16, "DAEMON_ERROR", "DAEMON_RESPONSE"], [17, "DAEMON_ERROR", "DAEMON_RESPONSE"],
+      [18, "DAEMON_ERROR", "DAEMON_RESPONSE"], [19, "NATIVE_ERROR", "TX_BUILD_FAILED"], [1, "NATIVE_ERROR", "TX_BUILD_FAILED"], [2, "NATIVE_ERROR", "TX_BUILD_FAILED"], [3, "NATIVE_ERROR", "TX_BUILD_FAILED"]];
+    for (const [kind, code, diag] of pairs) {
+      await hooks.resetCounters();
+      await hooks.arm({ fail: { "build.core": 1 }, kind: { "build.core": kind } });
+      const err = await expectCode(w.buildTransfer(cfg), code, "injected build failure kind " + kind, notes, diag);
+      const text = scanText(err) + scanText(err.toEnvelope());
+      expect(!text.includes(own.toLowerCase()) && !text.includes("123456789") && !text.includes("injected"), "kind " + kind + ": no destination or injected text in the error");
+      expect((await hooks.state()).events.includes("injected:build.core"), "kind " + kind + " fired");
+    }
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "error.build": 1 } });
+    await expectCode(w.buildTransfer(cfg), "NATIVE_ERROR", "injected failure carrying the inputs", notes, "TX_BUILD_FAILED");
+    await hooks.resetCounters();
+    // a wallet without funds: the bridge's balance check rejects before the core; nothing is retained
+    const heap = async () => (await hooks.state()).heapInUse;
+    for (let i = 0; i < 2; i++) await expectCode(w.buildTransfer(cfg), "TX_NOT_POSSIBLE", "warm-up", [], "NOT_ENOUGH_MONEY");
+    const deltas: number[] = [];
+    for (let i = 0; i < 5; i++) { const h0 = await heap(); try { await w.buildTransfer(cfg); } catch (err) { /* NOT_ENOUGH_MONEY */ } deltas.push((await heap()) - h0); }
+    notes.push("allocator growth of 5 rejected builds: " + deltas.join(","));
+    expect(deltas.every((d) => d === 0), "rejected builds retain nothing");
+    expect((await w.getTxs()).length === 0, "nothing recorded");
+    await w.close();
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

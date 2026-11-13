@@ -165,7 +165,9 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   // accounts and subaddresses
   "get_accounts", "get_account", "create_account", "get_subaddresses", "create_subaddress", "set_subaddress_label",
   // read-only history and the explicit pool refresh
-  "get_txs", "refresh_pool"
+  "get_txs", "refresh_pool",
+  // building transactions without relay (no relay binding exists)
+  "build_txs"
 ];
 
 /**
@@ -173,7 +175,7 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
  * balances and the restore height of a new wallet from its daemon). Every other release export is an
  * inherited binding adapted to the fixed core.
  */
-export const SDK_ADDED_NATIVE_EXPORTS: readonly string[] = ["get_balance_asset", "get_unlocked_balance_asset", "set_restore_height_from_daemon", "refresh_pool"];
+export const SDK_ADDED_NATIVE_EXPORTS: readonly string[] = ["get_balance_asset", "get_unlocked_balance_asset", "set_restore_height_from_daemon", "refresh_pool", "build_txs"];
 
 /**
  * Inherited monero-ts bridge exports at the base commit that the SDK does not build. If an
@@ -204,7 +206,8 @@ export const UNBUILT_KEEPALIVE_EXPORTS: readonly string[] = ["_request_wallet_sh
 export interface LifecycleArgSpec {
   readonly kind: "uint32" | "networkType" | "logLevel" | "string" | "optionalString" | "address" | "password"
     | "keysBytes" | "optionalBytes" | "emptyPath" | "absent" | "falseFlag" | "createConfig" | "keysConfig"
-    | "boolean" | "daemonUri" | "height" | "assetType" | "label" | "subaddressIndices" | "historyStatus" | "historyHeight" | "txHashes";
+    | "boolean" | "daemonUri" | "height" | "assetType" | "label" | "subaddressIndices" | "historyStatus" | "historyHeight" | "txHashes"
+    | "txAddresses" | "txAmounts" | "txSubaddressIndices" | "txPriority";
   readonly optional?: boolean;
 }
 
@@ -269,6 +272,9 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   getHistory: { scope: "wallet", kinds: FULL, args: [{ kind: "historyStatus" }, { kind: "historyHeight", optional: true }, { kind: "historyHeight", optional: true }, { kind: "txHashes", optional: true }], nativeExports: ["get_txs"], errorContext: "other" },
   // explicit pool refresh of full wallets (a daemon request); the reply is a count
   refreshPool: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["refresh_pool"], errorContext: "daemon" },
+  // build, describe and discard the transactions of a same-asset transfer (common/ZephyrTransfer.ts): asset,
+  // destination addresses, amounts (decimal text), account index, subaddress indices (possibly empty), priority 0..3
+  buildTransfer: { scope: "wallet", kinds: FULL, args: [{ kind: "assetType" }, { kind: "txAddresses" }, { kind: "txAmounts" }, { kind: "uint32" }, { kind: "txSubaddressIndices" }, { kind: "txPriority" }], nativeExports: ["build_txs"], errorContext: "build" },
   isClosed: { scope: "wallet", kinds: BOTH, args: [], nativeExports: [], errorContext: "other" },
   prepareClose: { scope: "wallet", kinds: FULL, args: [], nativeExports: [], errorContext: "close" },
   close: { scope: "wallet", kinds: BOTH, args: [{ kind: "falseFlag", optional: true }], nativeExports: ["close"], errorContext: "close" }
@@ -323,6 +329,10 @@ export function validateWorkerArgs(method: LifecycleWorkerMethod, args: readonly
       case "historyStatus": if (value !== "all" && value !== "confirmed" && value !== "pool" && value !== "failed") fail("INVALID_CONFIG", "FIELD_TYPE"); break;
       case "historyHeight": if (!isRestoreHeight(value)) fail("INVALID_CONFIG", "HEIGHT_RANGE"); break;
       case "txHashes": checkTxHashes(value); break;
+      case "txAddresses": if (!Array.isArray(value) || value.length === 0 || value.length > 15 || value.some((a) => typeof a !== "string" || !/^[1-9A-HJ-NP-Za-km-z]{90,140}$/.test(a))) fail("INVALID_CONFIG", "DESTINATIONS"); break;
+      case "txAmounts": if (!Array.isArray(value) || value.length === 0 || value.length > 15 || value.some((a) => typeof a !== "string" || !/^[1-9][0-9]{0,19}$/.test(a))) fail("INVALID_CONFIG", "AMOUNT_RANGE"); break;
+      case "txSubaddressIndices": if (!Array.isArray(value) || (value.length > 0 && checkSubaddressIndices(value).length !== value.length)) fail("INVALID_CONFIG", "SUBADDRESS_INDICES"); break;
+      case "txPriority": if (value !== 0 && value !== 1 && value !== 2 && value !== 3) fail("INVALID_CONFIG", "TX_PRIORITY"); break;
       case "createConfig":
       case "keysConfig": if (value === null || typeof value !== "object" || Array.isArray(value)) fail("INVALID_CONFIG", "CONFIG_TYPE"); break;
     }

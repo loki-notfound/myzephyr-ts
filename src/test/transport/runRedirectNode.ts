@@ -3,7 +3,8 @@
  * redirectServers.cjs in this process and runs RedirectChecks.ts with a wallet in the main thread
  * (--mode direct) or in its own worker (--mode worker), with the release module; then the history
  * check of HistoryRequestCheck.ts (no request during getTxs, getTransfers and getTx) and the pool refresh
- * check of PoolRefreshCheck.ts (P01, the constructed pool daemons).
+ * check of PoolRefreshCheck.ts (P01, the constructed pool daemons); in the main thread also the relay
+ * refusal check of RelayRefusalCheck.ts (S01).
  *
  *   node --require nodeMonitor.cjs runRedirectNode.js --mode direct|worker --out report.json
  *
@@ -16,6 +17,7 @@ import path from "path";
 import { runRedirectChecks } from "./RedirectChecks";
 import { runHistoryRequestCheck } from "./HistoryRequestCheck";
 import { runPoolRefreshCheck } from "./PoolRefreshCheck";
+import { runRelayRefusalCheck } from "./RelayRefusalCheck";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf("--" + name);
@@ -42,7 +44,9 @@ async function main(): Promise<number> {
     report = await runRedirectChecks("node-" + mode, mode, targets);
     history = await runHistoryRequestCheck(mode, targets);
     pool = await runPoolRefreshCheck(mode, Object.assign({ marker: POOL_MARKER as string }, targets));
-    report = Object.assign({}, report, { checks: report.checks.concat([history.check, pool.check]), history: { requestsBeforeHistory: history.requestsBeforeHistory, requestsDuringHistory: history.requestsDuringHistory, historyCalls: history.historyCalls },
+    const relay = mode === "direct" ? await runRelayRefusalCheck(targets) : undefined;
+    report = Object.assign({}, report, { checks: report.checks.concat([history.check, pool.check], relay === undefined ? [] : [relay.check]),
+      relay: relay === undefined ? undefined : { refused: relay.refused, attempts: relay.attempts, daemonRequestsDuringAttempts: relay.daemonRequestsDuringAttempts, controlRequests: relay.controlRequests }, history: { requestsBeforeHistory: history.requestsBeforeHistory, requestsDuringHistory: history.requestsDuringHistory, historyCalls: history.historyCalls },
       pool: { steps: pool.steps, poolTxRequests: pool.poolTxRequests } });
   } finally {
     await servers.close();

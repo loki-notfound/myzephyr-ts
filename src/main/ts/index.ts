@@ -45,8 +45,11 @@
  * Read-only history of full wallets: getTxs, getTransfers and getTx list the wallet's transactions
  * and transfers per asset as the last sync stored them (no daemon request). Incoming transfers still in
  * the pool appear after refreshPool, an explicit daemon request, until the next refresh.
- * Not supported: listeners, background sync, outputs, creating or sending transactions, key images,
- * rescans and any relay.
+ * Building transactions without relay: buildTransfer builds the transactions of a same-asset transfer,
+ * describes them (hash, assets, amounts, fee and fee asset, change, ring size, inputs, outputs, weight)
+ * and discards them inside the module.
+ * Not supported: listeners, background sync, outputs, sending (relaying) transactions, conversions,
+ * key images, rescans.
  */
 export {
   ZephyrWallet,
@@ -69,6 +72,7 @@ export type {
 } from "./wallet/ZephyrWallet";
 export type { ZephyrAssetBalances, ZephyrAccountBalances } from "./common/ZephyrBalances";
 export type { ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions } from "./common/ZephyrAccounts";
+export type { ZephyrTransferConfig, ZephyrTransferDestinationInput, ZephyrTransferBuild, ZephyrBuiltTx, ZephyrTxPriority } from "./common/ZephyrTransfer";
 export type { ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination, ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "./common/ZephyrHistory";
 export { default as ZephyrWalletError } from "./common/ZephyrWalletError";
 export type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./common/ZephyrWalletError";

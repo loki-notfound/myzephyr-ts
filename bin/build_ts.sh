@@ -8,6 +8,9 @@
 #   dist/zephyr.worker.js, dist/zephyr-ts.browser.mjs  the browser wallet worker and the browser
 #                entry, an ES module (webpack.browser.js)
 #   dist/lifecycle-consumer/ browser test pages and the browser test worker (webpack.lifecycle-consumer.js)
+#   no-relay check  the built bridge assigns m_relay only to false and calls no submit, relay, sweep or
+#                sign function; no release binding or module name can submit or relay; the shipped
+#                transport carries the refusal of relay requests
 #
 # Environment (optional): OFFLINE=1 installs from the npm cache only (npm ci --offline).
 set -euo pipefail
@@ -70,6 +73,41 @@ for f in dist/zephyr.js dist/zephyr.worker.js dist/zephyr-ts.browser.mjs dist/sr
     ! grep -q "$token" "$f" || die "$f contains test-only $token"
   done
 done
+log "no-relay check: no submit or relay binding, relay fixed to false, the transport refuses relay requests"
+node - src/main/cpp/zephyr_wasm_bridge.cpp src/main/cpp/index.cpp dist/zephyr.wasm dist/zephyr.worker.js dist/zephyr-ts.browser.mjs dist/src/main/ts/common/HttpClient.js <<'JS' || die "no-relay check failed"
+const fs = require("fs");
+const [bridgeFile, indexFile, wasmFile, ...shipped] = process.argv.slice(2);
+const bad = [];
+// the bridge as compiled: without the blocks of inherited code that is not built
+const bridge = fs.readFileSync(bridgeFile, "utf8").replace(/#if defined\(ZEPHYR_WASM_BRIDGE_UNPORTED\)[\s\S]*?#endif/g, "");
+const relayAssignments = bridge.match(/\bm_relay\s*=[^=][^;]*;/g) || [];
+if (relayAssignments.length !== 1 || !/^m_relay\s*=\s*false;$/.test(relayAssignments[0])) bad.push("m_relay is not assigned exactly once, to false: " + JSON.stringify(relayAssignments));
+for (const call of ["relay_txs(", "relay_tx(", "commit_tx(", "submit_txs(", "sweep_unlocked(", "sweep_output(", "sweep_dust(", "sign_txs(", "submit_multisig_tx_hex(", "start_mining("]) {
+  if (bridge.includes(call)) bad.push("the built bridge calls " + call);
+}
+// the release bindings: none can submit, relay, sweep or sign
+const FORBIDDEN = /relay|submit|sweep|commit|send_raw|sign_txs|create_txs|mining/;
+const bindings = (fs.readFileSync(indexFile, "utf8").replace(/#if defined\(ZEPHYR_TS_TEST_INSTRUMENTATION\)[\s\S]*?#endif/g, "").match(/^[ \t]*emscripten::function\("([A-Za-z0-9_]+)"/gm) || []).map((l) => l.replace(/^.*\("/, "").replace(/"$/, ""));
+for (const b of bindings) if (FORBIDDEN.test(b)) bad.push("release binding " + b);
+if (!bindings.includes("build_txs")) bad.push("the binding check is not effective (build_txs not found)");
+// the module's registered names (NUL-terminated strings): none of the inherited submit or relay bindings
+const wasm = fs.readFileSync(wasmFile);
+const names = new Set();
+let start = -1;
+for (let i = 0; i < wasm.length; i++) {
+  const c = wasm[i];
+  if (c >= 0x21 && c <= 0x7e) { if (start < 0) start = i; } else { if (start >= 0 && c === 0 && i - start >= 6) names.add(wasm.toString("latin1", start, i)); start = -1; }
+}
+for (const n of ["relay_txs", "relay_tx", "submit_txs", "create_txs", "sweep_unlocked", "sweep_output", "sweep_dust", "sign_txs", "submit_multisig_tx_hex", "start_mining"]) if (names.has(n)) bad.push("the module registers " + n);
+if (!names.has("build_txs") || !names.has("validate_address")) bad.push("the module name check is not effective");
+// the shipped transport carries the refusal of relay requests
+for (const f of shipped) {
+  const t = fs.readFileSync(f, "utf8");
+  if (!t.includes("/sendrawtransaction") || !t.includes("RELAY_REQUEST") || !t.includes("submit_block")) bad.push(f + " lacks the transport's relay refusal");
+}
+if (bad.length) { console.log(bad.join("\n")); process.exit(1); }
+console.log("no relay: " + bindings.length + " release bindings, relay fixed to false, transport refusal in " + shipped.length + " shipped files");
+JS
 log "embedded digest check"
 H=$(sha256sum dist/zephyr.wasm | cut -d' ' -f1)
 grep -qF "\"$H\"" dist/zephyr.digest.js || die "dist/zephyr.digest.js does not carry the SHA-256 of dist/zephyr.wasm"

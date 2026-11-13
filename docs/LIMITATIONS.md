@@ -134,6 +134,41 @@ that wallet's worker.
   returns this memory when it is closed or stopped; with `proxyToWorker: false` it stays until the
   page or process ends. Avoid listing in a tight loop.
 
+## Building transactions without relay
+
+* `buildTransfer` builds and signs inside the module and discards the result; it cannot relay. The
+  bridge fixes the core's relay flag to `false`, no binding can submit or relay, and the transport
+  refuses the daemon's submit and relay requests (`/sendrawtransaction`, `/send_raw_transaction`,
+  JSON-RPC `relay_tx`, `submit_block`) before sending, also if the core itself tried. The core's commit
+  code is still linked into the module (it is part of the wrapper's build function); it is not
+  reachable from any binding of this version. The public build and the tests check all of this.
+* Same-asset transfers in the four V2 assets only. Conversions, sweeps, integrated addresses and
+  payment identifiers, an unlock time, "subtract the fee from a destination" (the core's wrapper does
+  not pass it) and relaying are not supported.
+* The fee is the core's, in the source asset: for a same-asset transfer the core computes the same
+  per-byte fee in every asset (no conversion). Observed on mainnet on 2026-11-13 with one input and
+  two outputs at the default priority: about 0.000307 to 0.000309 in each of ZPH, ZSD, ZRS and ZYS
+  (200 atomic units per byte of weight), 0.000427 with two destinations. Fees vary with the daemon's
+  fee estimate and with the transaction's weight, which changes by a few bytes between two builds of
+  the same transfer (the ring members are chosen anew).
+* The bridge first checks the wallet's own unlocked balance of the asset in the selected account or
+  subaddresses (a necessary condition, without any request); the core's check with the fee stays
+  authoritative. The core's own "not enough" failures, too few ring members and an oversized
+  transaction are mapped to fixed diagnostics; they are tested with injected failures, not on real
+  data (the test wallet's funds cannot provoke them within the small amounts the tests may use).
+* Building is a set of daemon requests the caller chooses (see the README): heights and fork rules,
+  fee estimate, pool backlog, recent block headers, circulating supply, pricing record history,
+  output distribution and ring members. The node learns that the wallet builds a transaction and in
+  which asset (the ring member request names it); no key image or address is sent.
+* Nothing persists: after a build the balances, the history and the wallet's state are unchanged and
+  a second build of the same transfer works. `getData` encrypts afresh on every call, so its bytes
+  differ even without a change; before and after a build they have the same lengths and open to the
+  same state. The built transactions are wiped and released inside the module before the call
+  returns (the test module's allocator returns to its level after every build).
+* Proven on real data (a funded test wallet, copies only, nothing relayed): one build per V2 asset
+  to the wallet's own second account, one from that account back, two destinations, a repeated
+  build, direct and proxied. Not proven: what the network accepts (nothing was relayed).
+
 ## Text from wallets and the chain
 
 Labels, destination addresses and every other text that comes from wallet bytes or from the chain
@@ -154,7 +189,8 @@ button, an amount or an address. The library never copies such text into an erro
 * Balances other than zero are verified with a funded test wallet that received five transfers in
   four assets (ZPH, ZSD, ZRS, ZYS) at two accounts: the wallet, account and subaddress maps,
   `isUsed` and `numUnspentOutputs` equal the received transfers. Nothing has been sent from a test
-  wallet, so spent outputs, change and balances after a spend are not verified.
+  wallet, so spent outputs, change and balances after a spend are not verified, nor how a locked
+  balance appears in the maps (nothing was locked in the funded wallet when it was observed).
 * Account and subaddress calls check every index against the wallet's own listings, because the
   core's wallet wrapper has no count of them: a call with a subaddress index, or one that lists
   subaddresses, takes time proportional to the account's number of subaddresses times the wallet's

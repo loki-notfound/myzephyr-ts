@@ -13,6 +13,9 @@
 #include <map>
 #include <memory>
 #include "oracle/asset_types.h"
+#include "cryptonote_core/cryptonote_tx_utils.h"
+#include "cryptonote_basic/cryptonote_basic_impl.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
 #include "rapidjson/writer.h"
 #include "rapidjson/stringbuffer.h"
 
@@ -32,7 +35,8 @@ using namespace zephyr_wasm_bridge;
 // returns the armed failure kind for this hook point (after skipping armed passes), else 0:
 // 1 std::runtime_error whose text carries the call's inputs, 2 a non-standard exception,
 // 3 std::bad_alloc, 4 tools::error::invalid_password, 5 tools::error::wallet_internal_error with the
-// pinned core's literal "invalid password" (wallet2::load_keys_buf) (h.kind[name], default 1)
+// pinned core's literal "invalid password" (wallet2::load_keys_buf); 11 to 19 typed build failures
+// (test_throw_build) (h.kind[name], default 1)
 EM_JS(int, zephyr_ts_test_inject, (const char* point), {
   var h = Module["__zephyrTsTestHooks"];
   if (!h) return 0;
@@ -43,7 +47,7 @@ EM_JS(int, zephyr_ts_test_inject, (const char* point), {
   if (h.fail && h.fail[name] > 0) {
     h.fail[name]--; h.events.push("injected:" + name);
     var kind = h.kind && h.kind[name] ? h.kind[name] : 1;
-    return kind >= 1 && kind <= 5 ? kind : 1;
+    return (kind >= 1 && kind <= 5) || (kind >= 11 && kind <= 19) ? kind : 1;
   }
   return 0;
 });
@@ -1611,6 +1615,341 @@ string zephyr_wasm_bridge::get_txs(int handle, const string& status, const strin
     release_txs(confirmed_pool);
     return bridge_error(identifier);
   }
+}
+
+// ------------------------- TRANSACTION BUILD (NO RELAY) ----------------------------
+
+// Builds the transactions of a same-asset transfer of a full wallet, describes them and discards them.
+// The core builds and signs them inside the module (monero_wallet_full::create_txs with m_relay fixed to
+// false: wallet2::commit_tx is never reached, nothing is relayed or stored); this binding reads each built
+// transaction's own bytes inside the module (asset types, ring size, inputs, outputs, unlock time), writes
+// a description without any of those bytes, wipes every secret-bearing string of the result (transaction
+// bytes, metadata, transaction keys, key images) and breaks the result's reference cycles so that it is
+// freed before the binding returns. No byte of a built transaction crosses into JavaScript.
+//
+// Requests: the core asks the daemon for what it needs to build (heights and fork rules, the fee
+// estimate, the priority's backlog estimate, output distributions and ring members); it sends no key
+// image. Every value is checked before the core's transaction code runs: the asset (a V2 asset), the
+// destinations (addresses with the core's own parser for the wallet's network, amounts above zero and
+// their sum within uint64), the account and subaddresses (the wallet's own), the priority; then the
+// wallet's unlocked balance of that asset in the selected account or subaddresses must cover the amounts
+// (a necessary condition read from the core's own balance; the core's check with the fee stays
+// authoritative), so an obviously short build sends no request.
+namespace {
+  // the outputs a transaction can carry today (V2 assets only: since hard fork 11 the chain rejects V1 outputs)
+  bool is_v2_asset(const string& asset) {
+    for (const auto& a : oracle::ASSET_TYPES_V2) if (a == asset) return true;
+    return false;
+  }
+
+  // strict "a1,a2,..." of addresses (base58 characters, 90 to 140 of them), 1..max_count entries
+  std::vector<std::string> parse_destination_addresses(const string& text, uint32_t max_count) {
+    std::vector<std::string> out;
+    size_t pos = 0;
+    while (true) {
+      size_t end = text.find(',', pos);
+      string item = text.substr(pos, end == string::npos ? string::npos : end - pos);
+      if (!is_address_text(item)) throw bridge_failure("CORE_INVALID_ADDRESS");
+      out.push_back(item);
+      if (out.size() > max_count) throw bridge_failure("TOO_MANY_DESTINATIONS");
+      if (end == string::npos) break;
+      pos = end + 1;
+    }
+    return out;
+  }
+
+  // strict "n1,n2,..." of decimal uint64 amounts above zero whose sum fits uint64
+  std::vector<uint64_t> parse_destination_amounts(const string& text, size_t count) {
+    std::vector<uint64_t> out;
+    uint64_t sum = 0;
+    size_t pos = 0;
+    while (true) {
+      size_t end = text.find(',', pos);
+      string item = text.substr(pos, end == string::npos ? string::npos : end - pos);
+      if (item.empty() || item.size() > 20 || (item.size() > 1 && item[0] == '0')) throw bridge_failure("AMOUNT_RANGE");
+      for (char c : item) if (c < '0' || c > '9') throw bridge_failure("AMOUNT_RANGE");
+      if (item.size() == 20 && item > string("18446744073709551615")) throw bridge_failure("AMOUNT_RANGE");
+      uint64_t v = std::stoull(item);
+      if (v == 0) throw bridge_failure("AMOUNT_ZERO");
+      if (sum + v < sum) throw bridge_failure("AMOUNT_RANGE");
+      sum += v;
+      out.push_back(v);
+      if (end == string::npos) break;
+      pos = end + 1;
+    }
+    if (out.size() != count) throw bridge_failure("UNEXPECTED_RESULT");
+    return out;
+  }
+
+  // the core's own address parser for the wallet's network; a valid address of another network and an
+  // integrated address have their own identifiers. The address text never leaves this function.
+  void check_destination_address(const std::string& address, monero_network_type network) {
+    cryptonote::network_type nettype = network == monero_network_type::MAINNET ? cryptonote::MAINNET : network == monero_network_type::TESTNET ? cryptonote::TESTNET : cryptonote::STAGENET;
+    cryptonote::address_parse_info info;
+    if (!cryptonote::get_account_address_from_str(info, nettype, address)) {
+      for (cryptonote::network_type other : {cryptonote::MAINNET, cryptonote::TESTNET, cryptonote::STAGENET}) {
+        cryptonote::address_parse_info ignored;
+        if (other != nettype && cryptonote::get_account_address_from_str(ignored, other, address)) throw bridge_failure("ADDRESS_NETWORK");
+      }
+      throw bridge_failure("CORE_INVALID_ADDRESS");
+    }
+    if (info.has_payment_id) throw bridge_failure("INTEGRATED_ADDRESS");
+  }
+
+  void wipe(boost::optional<std::string>& text) {
+    if (text) { std::fill(text->begin(), text->end(), '\0'); text->clear(); text = boost::none; }
+  }
+
+  // wipe the secret-bearing strings of built transactions and break their reference cycles (transaction ->
+  // input -> transaction, transaction <-> transaction set, transaction <-> transfers)
+  void release_built(std::vector<std::shared_ptr<monero_tx_wallet>>& txs) {
+    for (auto& tx : txs) {
+      if (!tx) continue;
+      wipe(tx->m_full_hex);
+      wipe(tx->m_metadata);
+      wipe(tx->m_key);
+      for (auto& input : tx->m_inputs) {
+        if (!input) continue;
+        if (input->m_key_image != boost::none && input->m_key_image.get()) wipe(input->m_key_image.get()->m_hex);
+        input->m_tx.reset();
+      }
+      tx->m_inputs.clear();
+      for (auto& t : tx->m_incoming_transfers) if (t) t->m_tx.reset();
+      if (tx->m_outgoing_transfer != boost::none && tx->m_outgoing_transfer.get()) tx->m_outgoing_transfer.get()->m_tx.reset();
+      if (tx->m_tx_set != boost::none && tx->m_tx_set.get()) {
+        std::shared_ptr<monero_tx_set> set = tx->m_tx_set.get();
+        wipe(set->m_signed_tx_hex);
+        wipe(set->m_unsigned_tx_hex);
+        wipe(set->m_multisig_tx_hex);
+        set->m_txs.clear();
+      }
+      tx->m_tx_set = boost::none;
+    }
+    txs.clear();
+  }
+
+  struct built_description {
+    std::string hash, source_asset, destination_asset;
+    uint64_t amount, fee, change, weight, unlock_time;
+    size_t inputs, outputs, ring_size;
+  };
+
+  // one built transaction, described from the core's values and from its own bytes, parsed in place
+  built_description describe_built_tx(const monero_tx_wallet& tx, const string& asset) {
+    if (!is_tx_hash(tx.m_hash) || !tx.m_full_hex || !tx.m_fee || !tx.m_change_amount || !tx.m_weight || tx.m_outgoing_transfer == boost::none || !tx.m_outgoing_transfer.get()
+        || !tx.m_outgoing_transfer.get()->m_amount || tx.m_outgoing_transfer.get()->m_asset_type != asset || !tx.m_is_relayed || *tx.m_is_relayed || !tx.m_in_tx_pool || *tx.m_in_tx_pool) throw bridge_failure("UNEXPECTED_RESULT");
+    built_description d;
+    cryptonote::blobdata blob;
+    if (!epee::string_tools::parse_hexstr_to_binbuff(*tx.m_full_hex, blob)) throw bridge_failure("UNEXPECTED_RESULT");
+    cryptonote::transaction parsed;
+    crypto::hash hash;
+    bool ok = cryptonote::parse_and_validate_tx_from_blob(blob, parsed, hash);
+    std::fill(blob.begin(), blob.end(), '\0');
+    if (!ok || epee::string_tools::pod_to_hex(hash) != *tx.m_hash) throw bridge_failure("UNEXPECTED_RESULT");
+    if (!cryptonote::get_tx_asset_types(parsed, hash, d.source_asset, d.destination_asset, false)) throw bridge_failure("UNEXPECTED_RESULT");
+    if (!is_core_asset_type(d.source_asset) || !is_core_asset_type(d.destination_asset)) throw bridge_failure("UNEXPECTED_ASSET_TYPE");
+    if (parsed.vin.empty() || parsed.vout.empty() || parsed.rct_signatures.txnFee != *tx.m_fee) throw bridge_failure("UNEXPECTED_RESULT");
+    d.ring_size = 0;
+    for (const auto& in : parsed.vin) {
+      if (in.type() != typeid(cryptonote::txin_zephyr_key)) throw bridge_failure("UNEXPECTED_RESULT");
+      size_t ring = boost::get<cryptonote::txin_zephyr_key>(in).key_offsets.size();
+      if (ring == 0 || (d.ring_size != 0 && ring != d.ring_size)) throw bridge_failure("UNEXPECTED_RESULT");
+      d.ring_size = ring;
+    }
+    d.hash = *tx.m_hash;
+    d.inputs = parsed.vin.size();
+    d.outputs = parsed.vout.size();
+    d.unlock_time = parsed.unlock_time;
+    d.amount = *tx.m_outgoing_transfer.get()->m_amount;
+    d.fee = *tx.m_fee;
+    d.change = *tx.m_change_amount;
+    d.weight = *tx.m_weight;
+    if (d.amount + d.fee < d.amount) throw bridge_failure("UNEXPECTED_RESULT");
+    return d;
+  }
+
+  // BEGIN CORE MESSAGE TABLE (build context)
+  // fixed messages of the pinned core's build path for failed daemon requests (wallet2::use_fork_rules,
+  // the fee estimate); any other text of a build failure is never compared beyond these entries
+  const core_message_rule BUILD_MESSAGE_RULES[] = {
+    {"Failed to get height", "DAEMON_RESPONSE"},
+    {"Failed to get earliest fork height", "DAEMON_RESPONSE"},
+    {"Wallet is not connected to daemon", "DAEMON_NOT_CONNECTED"},
+    {"Failed to connect to daemon", "DAEMON_UNREACHABLE"}
+  };
+  // END CORE MESSAGE TABLE
+
+#if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)
+  // test-only: a typed failure of the core's build path at the armed point (h.kind[name]): 11 not enough
+  // unlocked money, 12 not enough money, 13 not enough for the fee, 14 not enough outputs to mix, 15 too
+  // large, 16 no connection to the daemon, 17 a busy daemon, 18 a failed ring member request carrying a
+  // node status with the destinations; any other kind an untyped failure whose text carries the destinations
+  void test_throw_build(const char* point, const std::string& inputs) {
+    int kind = zephyr_ts_test_inject(point);
+    switch (kind) {
+      case 0: return;
+      case 11: THROW_WALLET_EXCEPTION(tools::error::not_enough_unlocked_money, 1, 2, 3);
+      case 12: THROW_WALLET_EXCEPTION(tools::error::not_enough_money, 1, 2, 3);
+      case 13: THROW_WALLET_EXCEPTION(tools::error::tx_not_possible, 1, 2, 3);
+      case 14: THROW_WALLET_EXCEPTION(tools::error::not_enough_outs_to_mix, tools::error::not_enough_outs_to_mix::scanty_outs_t(), 15);
+      case 15: THROW_WALLET_EXCEPTION(tools::error::tx_too_big, 200000, 100000);
+      case 16: THROW_WALLET_EXCEPTION(tools::error::no_connection_to_daemon, "get_outs.bin");
+      case 17: THROW_WALLET_EXCEPTION(tools::error::daemon_busy, "get_outs.bin");
+      case 18: THROW_WALLET_EXCEPTION(tools::error::get_outs_error, std::string("injected node status ") + inputs);
+      default: throw std::runtime_error(std::string("injected build failure: ") + inputs);
+    }
+  }
+#else
+  inline void test_throw_build(const char*, const std::string&) {}
+#endif
+}
+
+// Classify a failure of build_txs (call only inside a catch handler); the exception text never leaves this
+// function. A function of the bridge namespace, so that the exception whitelist lets it catch the rethrow.
+const char* zephyr_wasm_bridge::classify_build_exception(int handle) {
+  try {
+    throw;
+  } catch (const bridge_failure& e) {
+    return e.m_identifier;
+  } catch (const tools::error::not_enough_unlocked_money&) {
+    return "NOT_ENOUGH_UNLOCKED";
+  } catch (const tools::error::not_enough_money&) {
+    return "NOT_ENOUGH_MONEY";
+  } catch (const tools::error::tx_not_possible&) {
+    return "NOT_ENOUGH_FOR_FEE";
+  } catch (const tools::error::not_enough_outs_to_mix&) {
+    return "NOT_ENOUGH_OUTS_TO_MIX";
+  } catch (const tools::error::tx_too_big&) {
+    return "TX_TOO_LARGE";
+  } catch (const tools::error::zero_amount&) {
+    return "AMOUNT_ZERO";
+  } catch (const tools::error::tx_sum_overflow&) {
+    return "AMOUNT_RANGE";
+  } catch (const tools::error::no_connection_to_daemon&) {
+    return daemon_failure(handle, "DAEMON_UNREACHABLE");
+  } catch (const tools::error::wallet_rpc_error&) {
+    return "DAEMON_RESPONSE"; // busy, payment or another daemon status, including node text that is not read
+  } catch (const tools::error::get_outs_error&) {
+    return "DAEMON_RESPONSE"; // the ring member request failed at the daemon
+  } catch (const tools::error::refresh_error&) {
+    return "DAEMON_RESPONSE";
+  } catch (const std::exception& e) {
+    return daemon_failure(handle, match_core_message(BUILD_MESSAGE_RULES, e.what(), "TX_BUILD_FAILED"));
+  } catch (...) {
+    return "TX_BUILD_FAILED";
+  }
+}
+
+// {"txs":[{"hash","sourceAsset","destinationAsset","amount","fee","feeAsset","totalDebited","change","ringSize",
+// "inputs","outputs","weight","unlockTime"[,"destinations":[{"address","amount"},..]]},..]}: the transactions the
+// core built for a same-asset transfer of asset from account_idx (and subaddress_indices "" or "i,j,..."), with
+// priority 0..3, discarded inside the module. addresses "a1,a2,..." and amounts "n1,n2,..." name the
+// destinations (at most max_destinations). Nothing is relayed: m_relay is the constant false below.
+void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string& addresses, const string& amounts, uint32_t account_idx, const string& subaddress_indices,
+                                   uint32_t priority, uint32_t max_destinations, emscripten::val callback) {
+  string result;
+  std::vector<std::shared_ptr<monero_tx_wallet>> txs;
+  monero_tx_config config;
+  try {
+    if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
+    monero_wallet* wallet = (monero_wallet*) handle;
+    if (wallet->is_view_only()) throw bridge_failure("VIEW_ONLY_TX");
+    if (wallet->is_multisig()) throw bridge_failure("MULTISIG");
+    if (!is_core_asset_type(asset)) throw bridge_failure("ASSET_TYPE");
+    if (!is_v2_asset(asset)) throw bridge_failure("TX_ASSET");
+    if (priority > 3) throw bridge_failure("TX_PRIORITY");
+    std::vector<std::string> destination_addresses = parse_destination_addresses(addresses, max_destinations);
+    std::vector<uint64_t> destination_amounts = parse_destination_amounts(amounts, destination_addresses.size());
+    std::vector<uint32_t> indices = parse_indices(subaddress_indices, 1000);
+    require_account(wallet, account_idx);
+    if (!indices.empty()) {
+      size_t count = subaddresses_of(wallet, account_idx).size();
+      for (uint32_t i : indices) if ((size_t) i >= count) throw bridge_failure("SUBADDRESS_NOT_FOUND");
+    }
+    monero_network_type network = wallet->get_network_type();
+    for (const auto& a : destination_addresses) check_destination_address(a, network);
+    ZEPHYR_TS_TEST_THROW("error.build", addresses + " " + amounts);
+    test_throw_build("build.core", addresses + " " + amounts); // test module only: the core's typed build failures
+    // a necessary condition from the core's own balance of this asset in the selected outputs (no request)
+    uint64_t needed = 0, unlocked = 0, balance = 0;
+    for (uint64_t v : destination_amounts) needed += v;
+    if (indices.empty()) {
+      unlocked = wallet->get_unlocked_balance(asset, account_idx);
+      balance = wallet->get_balance(asset, account_idx);
+    } else {
+      for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(asset, account_idx, i); balance += wallet->get_balance(asset, account_idx, i); }
+    }
+    if (needed > balance) throw bridge_failure("NOT_ENOUGH_MONEY");
+    if (needed > unlocked) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
+    config.m_account_index = account_idx;
+    config.m_subaddress_indices = indices;
+    config.source_currency = asset;
+    config.destination_currency = asset;
+    config.m_priority = (monero_tx_priority) priority;
+    config.m_can_split = true;
+    config.m_relay = false; // the only value this binding ever passes: the core does not commit or relay
+    for (size_t i = 0; i < destination_addresses.size(); i++) {
+      std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
+      d->m_address = destination_addresses[i];
+      d->m_amount = destination_amounts[i];
+      d->m_asset_type = asset;
+      config.m_destinations.push_back(d);
+    }
+    txs = wallet->create_txs(config);
+    test_barrier("build.after");
+    if (txs.empty() || txs.size() > 64) throw bridge_failure("UNEXPECTED_RESULT");
+    std::vector<built_description> described;
+    for (const auto& tx : txs) {
+      if (!tx) throw bridge_failure("UNEXPECTED_RESULT");
+      built_description d = describe_built_tx(*tx, asset);
+      if (d.source_asset != asset || d.destination_asset != asset) throw bridge_failure("UNEXPECTED_RESULT");
+      described.push_back(d);
+    }
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    w.StartObject();
+    w.Key("txs");
+    w.StartArray();
+    for (const auto& d : described) {
+      w.StartObject();
+      w.Key("hash"); write_string(w, d.hash);
+      w.Key("sourceAsset"); write_string(w, d.source_asset);
+      w.Key("destinationAsset"); write_string(w, d.destination_asset);
+      w.Key("amount"); write_string(w, decimal(d.amount));
+      w.Key("fee"); write_string(w, decimal(d.fee));
+      w.Key("feeAsset"); write_string(w, d.source_asset); // the chain books the fee in the source asset (tx_memory_pool: fee_asset_type)
+      w.Key("totalDebited"); write_string(w, decimal(d.amount + d.fee));
+      w.Key("change"); write_string(w, decimal(d.change));
+      w.Key("ringSize"); w.Uint((unsigned) d.ring_size);
+      w.Key("inputs"); w.Uint((unsigned) d.inputs);
+      w.Key("outputs"); w.Uint((unsigned) d.outputs);
+      w.Key("weight"); write_string(w, decimal(d.weight));
+      w.Key("unlockTime"); write_string(w, decimal(d.unlock_time));
+      if (described.size() == 1) { // the core attributes destinations only when it built one transaction
+        w.Key("destinations");
+        w.StartArray();
+        for (size_t i = 0; i < destination_addresses.size(); i++) {
+          w.StartObject();
+          w.Key("address"); write_string(w, destination_addresses[i]);
+          w.Key("amount"); write_string(w, decimal(destination_amounts[i]));
+          w.EndObject();
+        }
+        w.EndArray();
+      }
+      w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    release_built(txs);
+    config.m_destinations.clear();
+    result = string(buffer.GetString(), buffer.GetSize());
+  } catch (...) {
+    const char* identifier = classify_build_exception(handle);
+    release_built(txs);
+    config.m_destinations.clear();
+    result = bridge_error(identifier);
+  }
+  callback(result);
 }
 
 string zephyr_wasm_bridge::get_version(int handle) {

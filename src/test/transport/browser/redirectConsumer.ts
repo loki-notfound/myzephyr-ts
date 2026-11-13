@@ -10,6 +10,7 @@ import { setWorkerDistPath, terminateWorker } from "../../../main/ts/index";
 import { RedirectReport, RedirectServerStats, runRedirectChecks } from "../RedirectChecks";
 import { runHistoryRequestCheck } from "../HistoryRequestCheck";
 import { runPoolRefreshCheck } from "../PoolRefreshCheck";
+import { runRelayRefusalCheck } from "../RelayRefusalCheck";
 
 async function run(): Promise<void> {
   const violations: string[] = [];
@@ -24,7 +25,9 @@ async function run(): Promise<void> {
       const r = await runRedirectChecks(env, mode, { first: targets.first, stats });
       const h = await runHistoryRequestCheck(mode, { first: targets.first, stats });
       const p = await runPoolRefreshCheck(mode, { first: targets.first, stats, marker: targets.marker });
-      reports.push(Object.assign({}, r, { checks: r.checks.concat([h.check, p.check]), history: { requestsBeforeHistory: h.requestsBeforeHistory, requestsDuringHistory: h.requestsDuringHistory, historyCalls: h.historyCalls },
+      const s = mode === "direct" ? await runRelayRefusalCheck({ first: targets.first, stats }) : undefined;
+      reports.push(Object.assign({}, r, { checks: r.checks.concat([h.check, p.check], s === undefined ? [] : [s.check]),
+        relay: s === undefined ? undefined : { refused: s.refused, attempts: s.attempts, daemonRequestsDuringAttempts: s.daemonRequestsDuringAttempts, controlRequests: s.controlRequests }, history: { requestsBeforeHistory: h.requestsBeforeHistory, requestsDuringHistory: h.requestsDuringHistory, historyCalls: h.historyCalls },
         pool: { steps: p.steps, poolTxRequests: p.poolTxRequests } }));
     }
     await terminateWorker();

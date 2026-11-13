@@ -15,8 +15,9 @@ The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not
 ## Status
 
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
-the read-only history of transactions and transfers and an explicit pool refresh (below). Creating or sending transactions,
-conversions and listeners are not supported yet. Read
+the read-only history of transactions and transfers, an explicit pool refresh, and building same-asset
+transactions without relay to inspect them (below). Sending (relaying) transactions, conversions and
+listeners are not supported yet. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 
 ## Core and pinned sources
@@ -244,19 +245,71 @@ The page needs a Content-Security-Policy that allows WebAssembly compilation and
 origin; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the policy, the three daemon address forms
 and proxy requirements.
 
+### Building transactions without relay
+
+`buildTransfer(config)` builds the transactions of a same-asset transfer, describes them and
+discards them. The core builds and signs them inside the WebAssembly module; nothing is relayed and
+nothing is stored: there is no relay call in this version, the bridge passes the core's relay flag as
+the constant `false`, the transport refuses every request to the daemon's submit and relay endpoints
+(`UNSUPPORTED_CAPABILITY`/`RELAY_REQUEST`), and no byte of a built transaction (hex, signed set, key
+images, transaction key) leaves the module. Full wallets with spend keys only: keys-only and
+view-only wallets reject with `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_TX` or `VIEW_ONLY_TX`.
+
+The configuration (`ZephyrTransferConfig`, a plain object of own data properties; unknown fields
+reject with `INVALID_CONFIG`/`UNKNOWN_FIELD`):
+
+* `asset`: `"ZPH"`, `"ZSD"`, `"ZRS"` or `"ZYS"` (`INVALID_CONFIG`/`ASSET_TYPE`; the V1 names reject
+  with `TX_ASSET`, the chain no longer accepts them as outputs);
+* `destinationAsset` (optional): equal to `asset`; another asset is a conversion and rejects with
+  `UNSUPPORTED_CAPABILITY`/`CONVERSION`;
+* `destinations`: 1 to 15 `{ address, amount }` (`DESTINATIONS`, `TOO_MANY_DESTINATIONS`), amounts
+  `bigint` in atomic units above zero, each and their sum at most 2^64-1 (`AMOUNT_ZERO`,
+  `AMOUNT_RANGE`); addresses are checked with the core's own parser for the wallet's network
+  (`INVALID_ADDRESS`/`CORE_INVALID_ADDRESS`, `ADDRESS_NETWORK` for an address of another network;
+  integrated addresses reject with `UNSUPPORTED_CAPABILITY`/`INTEGRATED_ADDRESS`);
+* `accountIndex`: the account to spend from (`ADDRESS_INDEX_RANGE`, `ACCOUNT_NOT_FOUND`);
+* `subaddressIndices` (optional): spend only from these subaddresses of the account
+  (`SUBADDRESS_INDICES`, `SUBADDRESS_NOT_FOUND`);
+* `priority` (optional): `"default"` (the core's choice), `"unimportant"`, `"normal"` or
+  `"elevated"` (`TX_PRIORITY`).
+
+Every value is checked before the build is dispatched; then the wallet's unlocked balance of the
+asset in the selected account or subaddresses must cover the amounts, or the build rejects with
+`TX_NOT_POSSIBLE`/`NOT_ENOUGH_UNLOCKED` (`NOT_ENOUGH_MONEY` when even the balance with locked outputs
+is short) without any request. The core then asks the daemon for heights and fork rules, the fee
+estimate and the pool's backlog, recent block headers, the circulating supply and the pricing record
+history (it reads them for every transaction it constructs), and the output distribution and ring
+members (`/get_output_distribution.bin`, `/get_outs.bin`); it sends no key image and no address.
+Failures of the core's build: `TX_NOT_POSSIBLE`/`NOT_ENOUGH_UNLOCKED`, `NOT_ENOUGH_MONEY`,
+`NOT_ENOUGH_FOR_FEE`, `NOT_ENOUGH_OUTS_TO_MIX`, `TX_TOO_LARGE`; daemon failures as the other daemon
+calls (`DAEMON_ERROR`); any other failure `NATIVE_ERROR`/`TX_BUILD_FAILED`.
+
+The result (`ZephyrTransferBuild`) is `{ txs, multipleTxs }`; each `ZephyrBuiltTx` carries `hash`,
+`sourceAsset` and `destinationAsset` (read from the built transaction), `destinations` (when one
+transaction was built), `amount`, `fee`, `feeAsset` (the source asset), `totalDebited` (amount and
+fee), `change`, `ringSize`, `inputs`, `outputs` (change included), `weight` and `unlockTime`. Two
+builds of the same transfer differ in `hash` (a new transaction key) and by a few bytes in `weight`,
+with `fee` and `change` following it (the ring members are chosen anew each time).
+
+```typescript
+const account1 = await wallet.getAddress(1, 0);
+const build = await wallet.buildTransfer({ asset: "ZSD", destinations: [{ address: account1, amount: 100000000000n }], accountIndex: 0 });
+console.log(build.txs[0].fee, build.txs[0].feeAsset, build.txs[0].ringSize);   // e.g. 307400000n "ZSD" 16
+```
+
 ## Not ported
 
 Everything else inherited from monero-ts stays in the source as unported classes under
 `src/main/ts/` and is not exported by the package: the daemon and wallet RPC clients, the
 connection manager, background synchronization, listeners, the inherited query-based history,
-transaction creation and relay, outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
+the inherited transaction creation, relay and sweeps, outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
 most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
 inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and
 `ZephyrSubaddress`). The
 inherited Monero test suite and its root entry point are not part of this repository's tree; the
-tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`. Transactions and conversions need
-further work and their own tests with funded wallets.
+tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`. Relaying
+transactions and conversions need further work and their own tests with funded wallets.
 
 ## Building and testing
 

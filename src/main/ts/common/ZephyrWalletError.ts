@@ -22,7 +22,8 @@ export type ZephyrWalletErrorCode =
   | "WALLET_CLOSED"
   | "MALFORMED_MESSAGE"
   | "NATIVE_ERROR"
-  | "DAEMON_ERROR";
+  | "DAEMON_ERROR"
+  | "TX_NOT_POSSIBLE";
 
 export const ZEPHYR_WALLET_ERROR_CODES: readonly ZephyrWalletErrorCode[] = [
   "UNSUPPORTED_CAPABILITY",
@@ -34,7 +35,8 @@ export const ZEPHYR_WALLET_ERROR_CODES: readonly ZephyrWalletErrorCode[] = [
   "WALLET_CLOSED",
   "MALFORMED_MESSAGE",
   "NATIVE_ERROR",
-  "DAEMON_ERROR"
+  "DAEMON_ERROR",
+  "TX_NOT_POSSIBLE"
 ];
 
 /** Fixed message per code; no message text is ever taken from a native or remote source. */
@@ -48,7 +50,8 @@ export const ZEPHYR_WALLET_ERROR_MESSAGES: Readonly<Record<ZephyrWalletErrorCode
   WALLET_CLOSED: "Wallet is closed",
   MALFORMED_MESSAGE: "Malformed worker message",
   NATIVE_ERROR: "Native wallet operation failed",
-  DAEMON_ERROR: "Daemon request failed"
+  DAEMON_ERROR: "Daemon request failed",
+  TX_NOT_POSSIBLE: "Transaction not possible"
 };
 
 /**
@@ -119,13 +122,25 @@ export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // with INVALID_CONFIG a malformed transaction hash, a hash list that is not a non-empty array of distinct
   // hashes, a height range that is not a pair of safe integers from low to high, a subaddress index
   // without an account index, and a hash the wallet's selection does not contain
-  "KEYS_ONLY_HISTORY", "TX_HASH", "TX_HASHES", "HEIGHT_RANGE", "QUERY_ACCOUNT_REQUIRED", "TX_NOT_FOUND"
+  "KEYS_ONLY_HISTORY", "TX_HASH", "TX_HASHES", "HEIGHT_RANGE", "QUERY_ACCOUNT_REQUIRED", "TX_NOT_FOUND",
+  // building transactions without relay: UNSUPPORTED_CAPABILITY for keys-only and view-only wallets, a conversion
+  // and an integrated address; INVALID_CONFIG for an asset the chain no longer accepts as output (V1), destinations
+  // that are not a non-empty array, more than 15 of them, an amount of zero or outside uint64 (or their sum), a
+  // priority outside the four; INVALID_ADDRESS/ADDRESS_NETWORK for a valid address of another network;
+  // TX_NOT_POSSIBLE when the wallet's unlocked balance (or its balance) in the asset does not cover the amounts, the
+  // fee cannot be covered, the chain has too few outputs for the rings, or the transaction would be too large;
+  // NATIVE_ERROR/TX_BUILD_FAILED for any other failure of the core's build
+  "KEYS_ONLY_TX", "VIEW_ONLY_TX", "CONVERSION", "INTEGRATED_ADDRESS", "TX_ASSET", "DESTINATIONS", "TOO_MANY_DESTINATIONS",
+  "AMOUNT_ZERO", "AMOUNT_RANGE", "TX_PRIORITY", "ADDRESS_NETWORK", "NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE",
+  "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE", "TX_BUILD_FAILED",
+  // the transport refuses every request that would submit or relay a transaction or a block (no relay in this version)
+  "RELAY_REQUEST"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];
 
 /** Context of a native failure, used to choose a stable code. */
-export type ZephyrNativeErrorContext = "create" | "restore" | "open" | "changePassword" | "address" | "close" | "daemon" | "sync" | "other";
+export type ZephyrNativeErrorContext = "create" | "restore" | "open" | "changePassword" | "address" | "close" | "daemon" | "sync" | "build" | "other";
 
 /**
  * Fixed identifiers the native bridge can report (src/main/cpp/zephyr_wasm_bridge.cpp, fixed error
@@ -148,7 +163,10 @@ export const BRIDGE_ERROR_IDENTIFIERS = [
   "KEYS_ONLY_ACCOUNTS", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS",
   "SUBADDRESS_INDICES", "ADDRESS_NOT_IN_WALLET", "UNEXPECTED_RESULT",
   // read-only history
-  "KEYS_ONLY_HISTORY", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND"
+  "KEYS_ONLY_HISTORY", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND",
+  // building transactions without relay
+  "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS", "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE",
+  "ADDRESS_NETWORK", "NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE", "TX_BUILD_FAILED"
 ] as const;
 
 export type ZephyrBridgeErrorIdentifier = typeof BRIDGE_ERROR_IDENTIFIERS[number];
@@ -160,12 +178,16 @@ const BRIDGE_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})"\}$/;
 const BRIDGE_PASSWORD_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})","passwordState":"(unchanged|changed|unknown)"\}$/;
 
 /** Bridge identifiers whose code does not depend on the call context. */
-const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "REGTEST", "LISTENER", "SAVE_ON_CLOSE", "KEYS_ONLY_ACCOUNTS", "KEYS_ONLY_HISTORY"]);
+const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "REGTEST", "LISTENER", "SAVE_ON_CLOSE", "KEYS_ONLY_ACCOUNTS", "KEYS_ONLY_HISTORY",
+  "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS"]);
+/** Transaction builds the wallet's funds or the chain cannot satisfy */
+const BRIDGE_TX_NOT_POSSIBLE: ReadonlySet<string> = new Set(["NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE"]);
 const BRIDGE_INVALID_CONFIG: ReadonlySet<string> = new Set(["NETWORK_TYPE", "CREATE_MODE", "SEED_LANGUAGE", "SEED_AND_KEYS", "CORE_UNKNOWN_LANGUAGE", "CORE_LOOKAHEAD"]);
 const BRIDGE_INVALID_RECOVERY: ReadonlySet<string> = new Set(["SEED_EMPTY", "KEYS_MISSING"]);
 /** Daemon results keep DAEMON_ERROR and argument checks INVALID_CONFIG in every context */
 const BRIDGE_DAEMON: ReadonlySet<string> = new Set(["DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED"]);
-const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS", "SUBADDRESS_INDICES", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND"]);
+const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS", "SUBADDRESS_INDICES", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND",
+  "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE"]);
 
 function isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic {
   return typeof value === "string" && (ZEPHYR_WALLET_ERROR_DIAGNOSTICS as readonly string[]).includes(value);
@@ -244,6 +266,8 @@ export default class ZephyrWalletError extends Error {
     if (BRIDGE_INVALID_RECOVERY.has(identifier)) return new ZephyrWalletError("INVALID_RECOVERY_MATERIAL", identifier);
     if (BRIDGE_DAEMON.has(identifier)) return new ZephyrWalletError("DAEMON_ERROR", identifier);
     if (BRIDGE_INVALID_ARGUMENT.has(identifier)) return new ZephyrWalletError("INVALID_CONFIG", identifier);
+    if (BRIDGE_TX_NOT_POSSIBLE.has(identifier)) return new ZephyrWalletError("TX_NOT_POSSIBLE", identifier);
+    if (identifier === "ADDRESS_NETWORK") return new ZephyrWalletError("INVALID_ADDRESS", identifier);
     return ZephyrWalletError.contextError(context, identifier);
   }
 
@@ -269,6 +293,7 @@ export default class ZephyrWalletError extends Error {
       case "open": return new ZephyrWalletError("INVALID_WALLET_DATA", diagnostic);
       case "restore": return new ZephyrWalletError("INVALID_RECOVERY_MATERIAL", diagnostic);
       case "address": return new ZephyrWalletError("INVALID_ADDRESS", diagnostic);
+      case "build": return new ZephyrWalletError(diagnostic === "CORE_INVALID_ADDRESS" ? "INVALID_ADDRESS" : "NATIVE_ERROR", diagnostic);
       case "close": return new ZephyrWalletError("NATIVE_ERROR", "CORE_CLOSE_FAILED");
       default: return new ZephyrWalletError("NATIVE_ERROR", diagnostic);
     }

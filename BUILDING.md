@@ -153,6 +153,16 @@ keep it to one. A disposable wallet without funds lives in `build/test-wallets/`
 is removed afterwards; set `ZEPHYR_TS_TEST_KEEP_WALLET` to a new directory to keep a copy for the
 packaging tests.
 
+`N22` (Node.js direct, with the funded inputs below) builds transactions without relay on a copy of
+the funded wallet: one per V2 asset to its own second account, one back, two destinations and a
+repeated build, every request through the forwarder, which forwards only its read allowlist and
+counts submit and relay requests (there must be none); balances, history and the reopened bytes must
+be unchanged and the proxied descriptions equal except the fields random by nature. `N23` builds
+again in the test module (`--test-module`, its own direct run on the bytes `N22` synced, no sync) and
+requires the allocator to return to its level after every build. The transport check `S01` (offline,
+in the redirect runners' main thread and page) shows that the transport refuses every submit and
+relay request before sending it.
+
 `N19` (every run) counts the requests at the forwarder and in the request allowlist while the
 history calls run: there must be none. `N21` (every run) calls `refreshPool` twice through the
 forwarder: only the pool hashes and pool transactions may be requested, nothing refused, and the

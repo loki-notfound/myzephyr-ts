@@ -27,6 +27,7 @@ namespace zephyr_wasm_bridge
   enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC, ERROR_CONTEXT_ADDRESS_INDEX };
   const char* classify_current_exception(int context); // only inside a catch handler
   const char* probe_password_state(int handle, const string& old_password, const string& new_password);
+  const char* classify_build_exception(int handle); // only inside a catch handler of build_txs
 
   string set_log_level(int level);
   string get_integrated_address_util(int network_type, const string& standard_address, const string& payment_id);
@@ -86,6 +87,9 @@ namespace zephyr_wasm_bridge
   // explicit pool refresh of full wallets: one daemon request set (pool hashes, then the pool transactions not
   // scanned before), keeps the wallet's incoming pool transfers for get_txs; at most max_txs of them
   void refresh_pool(int handle, uint32_t max_txs, emscripten::val callback);
+  // build, describe and discard the transactions of a same-asset transfer of a full wallet; never relays
+  // (m_relay is fixed to false) and returns no byte of a built transaction
+  void build_txs(int handle, const string& asset, const string& addresses, const string& amounts, uint32_t account_idx, const string& subaddress_indices, uint32_t priority, uint32_t max_destinations, emscripten::val callback);
   string get_version(int handle);
   string get_seed(int handle);
   string get_seed_language(int handle);

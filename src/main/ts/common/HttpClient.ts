@@ -29,6 +29,14 @@ export default class HttpClient {
   static BLOCKED_REQUEST_SUMMARY: Record<string, number> = Object.create(null); // "METHOD rpc-method" -> count
   static ALLOWED_REQUESTS = 0;
   static ALLOWED_REQUEST_SUMMARY: Record<string, number> = Object.create(null); // "METHOD /endpoint rpc-method" -> count
+  /**
+   * No relay: a request to a daemon endpoint or JSON-RPC method that submits or relays a transaction or
+   * a block is refused before anything is sent, also on a configured route and also when the core itself
+   * would send it (wallet2's commit path), and counted here. This version of the SDK never relays.
+   */
+  static readonly RELAY_ENDPOINTS: readonly string[] = ["/sendrawtransaction", "/send_raw_transaction"];
+  static readonly RELAY_METHODS: readonly string[] = ["relay_tx", "submit_block", "submitblock", "send_raw_transaction", "sendrawtransaction"];
+  static REFUSED_RELAY_REQUESTS = 0;
   protected static DAEMON_ROUTES = new Map<string, { origin: string; basePath: string; count: number }>();
 
   /** Allow requests to a daemon route (one registration per wallet that uses it). */
@@ -60,6 +68,14 @@ export default class HttpClient {
     for (const route of HttpClient.DAEMON_ROUTES.values()) {
       endpoint = matchRoute(request?.uri, route);
       if (endpoint !== undefined) break;
+    }
+    if ((endpoint !== undefined && HttpClient.RELAY_ENDPOINTS.includes(endpoint.toLowerCase())) || (rpcMatch !== null && HttpClient.RELAY_METHODS.includes(rpcMatch[1].toLowerCase()))
+        || (typeof request?.uri === "string" && HttpClient.RELAY_ENDPOINTS.some((e) => request.uri.split("?")[0].toLowerCase().endsWith(e)))) {
+      HttpClient.REFUSED_RELAY_REQUESTS++;
+      HttpClient.BLOCKED_REQUESTS++;
+      const key = httpMethod + " relay";
+      HttpClient.BLOCKED_REQUEST_SUMMARY[key] = (HttpClient.BLOCKED_REQUEST_SUMMARY[key] ?? 0) + 1;
+      throw ZephyrWalletError.unsupported("RELAY_REQUEST");
     }
     if (endpoint === undefined) {
       HttpClient.BLOCKED_REQUESTS++;

@@ -54,16 +54,25 @@ const FAKE_HEIGHT = Number(arg("fake-height", "1000"));
 const CHECKS = arg("checks", "").split(",").filter((c) => /^N[0-9]{2}$/.test(c));
 const MAX_UPSTREAM = 2;
 
-// read-only daemon surface used by wallet refresh and the explicit pool refresh (/gettransactions: the pool
-// transactions the wallet has not scanned yet); everything else is refused locally
+// read-only daemon surface used by wallet refresh, the explicit pool refresh (/gettransactions: the pool
+// transactions the wallet has not scanned yet) and building a transaction without relay (output
+// distributions and ring members, the pool's backlog, recent block headers, and the chain's circulating supply
+// and pricing record history, which the core reads for every transaction it constructs); everything else is refused
+// locally and counted
 const ALLOWED_PATHS = new Set(["/json_rpc", "/getheight", "/get_height", "/getinfo", "/get_info", "/getblocks.bin", "/get_blocks.bin",
-  "/gethashes.bin", "/get_hashes.bin", "/get_transaction_pool_hashes.bin", "/get_o_indexes.bin", "/gettransactions"]);
+  "/gethashes.bin", "/get_hashes.bin", "/get_transaction_pool_hashes.bin", "/get_o_indexes.bin", "/gettransactions", "/get_outs.bin",
+  "/get_output_distribution.bin"]);
 const ALLOWED_METHODS = new Set(["get_version", "get_info", "getinfo", "get_block_count", "getblockcount", "hard_fork_info", "get_fee_estimate",
-  "get_last_block_header", "getlastblockheader", "get_block_header_by_height", "getblockheaderbyheight"]);
+  "get_last_block_header", "getlastblockheader", "get_block_header_by_height", "getblockheaderbyheight", "get_output_distribution",
+  "get_txpool_backlog", "getblockheadersrange", "get_block_headers_range", "get_output_histogram", "get_circulating_supply", "get_pricing_record_history"]);
+// requests that would submit or relay a transaction or a block: refused like every request outside the
+// allowlist, and counted separately (a run must show zero)
+const RELAY_PATHS = new Set(["/sendrawtransaction", "/send_raw_transaction", "/start_mining", "/stop_mining"]);
+const RELAY_METHODS = new Set(["relay_tx", "submit_block", "submitblock", "send_raw_transaction", "sendrawtransaction"]);
 const MOUNTS = ["/fake/nodestatus", "/fake/malformed", "/fake/status", "/rpc", "/slow"]; // longest first; "" is the root
 
 const stats = { started: new Date().toISOString(), upstream: UPSTREAM, routes: {}, denied: {}, binDigests: [], maxConcurrentUpstream: 0, upstreamRequests: 0,
-  upstreamErrors: 0, pageRequests: [], cspReports: [], preflights: {} };
+  upstreamErrors: 0, pageRequests: [], cspReports: [], preflights: {}, relayRequests: 0 };
 let active = 0;
 const waiters = [];
 const acquire = () => new Promise((resolve) => { if (active < MAX_UPSTREAM) { active++; stats.maxConcurrentUpstream = Math.max(stats.maxConcurrentUpstream, active); resolve(); } else waiters.push(resolve); });
@@ -136,6 +145,7 @@ function splitMount(pathname) {
 }
 
 function deny(listener, endpoint, method, res, headers) {
+  if (RELAY_PATHS.has(endpoint.toLowerCase()) || RELAY_METHODS.has(String(method).toLowerCase())) stats.relayRequests++;
   const k = listener + " " + endpoint + " " + method;
   stats.denied[k] = (stats.denied[k] || 0) + 1;
   res.writeHead(403, headers); res.end();

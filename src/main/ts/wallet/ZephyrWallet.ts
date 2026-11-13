@@ -17,6 +17,7 @@ import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAdd
 import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBalances";
 import { ZephyrAccount, ZephyrAccountOptions, ZephyrAddressIndex, ZephyrSubaddress, accountOptions } from "../common/ZephyrAccounts";
 import { checkLabel, checkSubaddressIndices } from "../common/ZephyrLifecycleContract";
+import { ZephyrTransferBuild, ZephyrTransferConfig, checkTransferConfig } from "../common/ZephyrTransfer";
 import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx, checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistory";
 
 
@@ -516,6 +517,27 @@ export class ZephyrWallet {
     const txs = await this.call("other", () => wallet.getHistoryChecked({ status: "all", hashes: [h] }));
     if (txs.length !== 1 || txs[0].hash !== h) throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
     return txs[0];
+  }
+
+  // ------------------------- building transactions without relay -------------------------
+
+  /**
+   * Build the transactions of a same-asset transfer, describe them and discard them (common/ZephyrTransfer.ts).
+   * Nothing is relayed and nothing is stored: there is no relay call in this version, the bridge passes
+   * relay false, and no byte of a built transaction (hex, signed set, key images, transaction key) leaves
+   * the module. The configuration is validated before the build is dispatched; the addresses are then
+   * checked with the core's own parser for the wallet's network, and the wallet's unlocked balance of the
+   * asset in the selected account or subaddresses must cover the amounts (TX_NOT_POSSIBLE otherwise, before
+   * any request). The core then asks the daemon for heights and fork rules, the fee estimate and the
+   * outputs it needs for the rings (no key image is sent). Full wallets with spend keys only: keys-only
+   * wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_TX, view-only ones with VIEW_ONLY_TX. A conversion
+   * rejects with UNSUPPORTED_CAPABILITY/CONVERSION before dispatch.
+   */
+  async buildTransfer(config: ZephyrTransferConfig): Promise<ZephyrTransferBuild> {
+    const wallet = this.full("KEYS_ONLY_TX");
+    const request = checkTransferConfig(config);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("build", () => wallet.buildTransferChecked(request));
   }
 
   // ----------------------- representative unsupported calls -----------------------

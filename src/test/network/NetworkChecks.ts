@@ -85,8 +85,12 @@ export interface NetworkOptions {
   readonly seed?: SeedWallet;
   /** where a fresh measured restore stores its wallet for later runs */
   readonly saveSeed?: (seed: SeedWallet) => Promise<void>;
-  /** the funded history check's inputs (N20); absent: N20 is not run */
+  /** the funded history check's inputs (N20, N22); absent: they are not run */
   readonly funded?: FundedInputs;
+  /** where N22 writes the bytes it synced (for N23 in a run with the test module) */
+  readonly saveBuildSynced?: (seed: SeedWallet) => Promise<void>;
+  /** the wallet N23 opens without a sync (the bytes N22 synced); absent: N23 is not run */
+  readonly fundedSynced?: SeedWallet;
   /** test-side request recorder of the calling context (direct mode only) */
   readonly recorder?: RequestRecorder;
   readonly log?: (line: string) => void;
@@ -1003,6 +1007,148 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       await w.close();
     }
   }
+
+  // ------------------------------------------------------------------ N22, N23: funded builds without relay (inputs from outside the public tree)
+  /** Read-only state of a wallet for the nothing-persists comparison: balances, unlocked balances, accounts with subaddresses, history. */
+  async function walletState(w: F.ZephyrWallet): Promise<string> {
+    const show = (v: unknown) => JSON.stringify(v, (k, x) => (typeof x === "bigint" ? x.toString() + "n" : x instanceof Map ? Object.fromEntries(Array.from((x as Map<unknown, unknown>).entries()).map(([a, b]) => [String(a), b])) : x));
+    const accounts = await w.getAccounts({ includeSubaddresses: true });
+    const maps: unknown[] = [];
+    for (const a of accounts) maps.push([await w.getBalance(a.index), await w.getUnlockedBalance(a.index)]);
+    return show({ balance: await w.getBalance(), unlocked: await w.getUnlockedBalance(), accounts, maps, txs: await w.getTxs(), height: await w.getHeight() });
+  }
+  const bytesEqual = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+  /**
+   * The description without the fields that are random by nature: the hash (a new transaction key and new
+   * decoys each build) and the weight with what follows from it (fee, change, total): the ring members' offsets
+   * are random, so their variable-length encoding makes the weight vary by a few bytes and the per-byte fee
+   * with it. What stays fixed for the same inputs is fee + change (the inputs' sum minus the amount).
+   */
+  const withoutRandom = (b: F.ZephyrTransferBuild) => JSON.stringify({ multipleTxs: b.multipleTxs, txs: b.txs.map((t) => ({ ...t, hash: "-", weight: "-", fee: "-", change: "-", totalDebited: "-", feePlusChange: (t.fee + t.change).toString() })) }, (k, x) => (typeof x === "bigint" ? x.toString() : x));
+  /** The random fields stay within their bound: the weight within 32 bytes, the fee per weight within 1%. */
+  const randomWithinBounds = (a: F.ZephyrTransferBuild, b: F.ZephyrTransferBuild) => a.txs.every((t, i) => {
+    const u = b.txs[i];
+    const rate = (x: F.ZephyrBuiltTx) => Number(x.fee) / x.weight;
+    return Math.abs(t.weight - u.weight) <= 32 && Math.abs(rate(t) - rate(u)) <= 0.01 * rate(t);
+  });
+  /** Fields of two single-transaction descriptions that differ (for the notes). */
+  const differing = (a: F.ZephyrTransferBuild, b: F.ZephyrTransferBuild) => Object.keys(a.txs[0]).filter((k) => JSON.stringify((a.txs[0] as unknown as Record<string, unknown>)[k], (x, v) => (typeof v === "bigint" ? v.toString() : v)) !== JSON.stringify((b.txs[0] as unknown as Record<string, unknown>)[k], (x, v) => (typeof v === "bigint" ? v.toString() : v))).map((k) => k + " " + String((a.txs[0] as unknown as Record<string, unknown>)[k]) + "/" + String((b.txs[0] as unknown as Record<string, unknown>)[k]));
+
+  await check("N22", "Funded builds without relay on a copy, through the allowlisting forwarder: one build per V2 asset to the wallet's own account 1, one from account 1 to the primary address, two destinations, a repeated build; the description is the core's (assets, fee in the source asset, change, ring size, inputs, outputs, weight); an amount above the balance rejects without a request; balances, history and wallet bytes unchanged; direct and proxied equal except the hash; no request refused and none relayed", async (notes) => {
+    const funded = opts.funded;
+    if (funded === undefined) throw new CheckNotRun("no funded wallet supplied (FUNDED_WALLET_IN and FUNDED_EXPECT)");
+    if (t.base === undefined) throw new CheckFailure("no target");
+    const unit = BigInt("1000000000000");
+    const tenth = unit / BigInt(10);
+    const w = await F.openWalletData({ networkType: 0, password: funded.wallet.password, keysData: new Uint8Array(funded.wallet.keys), cacheData: new Uint8Array(funded.wallet.cache), server: t.base, proxyToWorker: false });
+    const relayBefore = (HttpClient as unknown as { REFUSED_RELAY_REQUESTS: number }).REFUSED_RELAY_REQUESTS;
+    try {
+      expect((await w.isConnectedToDaemon()) === true, "connected through the forwarder");
+      const dh0 = await w.getDaemonHeight();
+      const h0 = await w.getHeight();
+      expect(dh0 - h0 <= FRESH_SYNC_BLOCKS, "the copy starts within the sync window");
+      await sync("N22", w, "funded copy for builds, forwarder base path", "real", undefined, dh0 - h0);
+      const primary = await w.getPrimaryAddress();
+      const account1 = await w.getAddress(1, 0);
+      const label = (a: string) => (a === primary ? "primary" : a === account1 ? "account1" : "OTHER");
+      const state0 = await walletState(w);
+      const data0 = await w.getData();
+      const data0b = await w.getData();
+      const deterministic = bytesEqual(data0.keys, data0b.keys) && bytesEqual(data0.cache, data0b.cache);
+      const plans: Array<[string, F.ZephyrTransferConfig]> = [];
+      for (const asset of ["ZPH", "ZSD", "ZRS", "ZYS"]) plans.push([asset + " account 0 to account 1", { asset, destinations: [{ address: account1, amount: tenth }], accountIndex: 0 }]);
+      plans.push(["ZPH account 1 to the primary address", { asset: "ZPH", destinations: [{ address: primary, amount: tenth }], accountIndex: 1 }]);
+      plans.push(["ZPH two destinations", { asset: "ZPH", destinations: [{ address: account1, amount: tenth / BigInt(2) }, { address: primary, amount: tenth / BigInt(2) }], accountIndex: 0 }]);
+      plans.push(["ZPH account 0 to account 1, again", plans[0][1]]);
+      const results: Record<string, unknown> = {};
+      const builds: F.ZephyrTransferBuild[] = [];
+      for (const [name, cfg] of plans) {
+        for (const d of cfg.destinations) expect(label(d.address) !== "OTHER" && d.amount <= unit, "destinations are the wallet's own addresses, amounts at most 1 unit");
+        const r0 = await forwarderRoutes();
+        const t0 = Date.now();
+        const b = await w.buildTransfer(cfg);
+        const ms = Date.now() - t0;
+        const r1 = await forwarderRoutes();
+        const requests: Record<string, number> = {};
+        for (const k of Object.keys(r1.routes)) if (r1.routes[k] !== (r0.routes[k] ?? 0)) requests[k] = r1.routes[k] - (r0.routes[k] ?? 0);
+        expect(r1.denied === r0.denied, name + ": no request refused by the forwarder");
+        expect(!b.multipleTxs && b.txs.length === 1, name + ": one transaction");
+        const tx = b.txs[0];
+        const sum = cfg.destinations.reduce((n, d) => n + d.amount, BigInt(0));
+        expect(tx.sourceAsset === cfg.asset && tx.destinationAsset === cfg.asset && tx.feeAsset === cfg.asset, name + ": assets");
+        expect(tx.amount === sum && tx.totalDebited === sum + tx.fee && tx.fee > BigInt(0) && tx.fee < unit / BigInt(100), name + ": amount, fee and total");
+        expect(tx.ringSize === 16 && tx.inputs >= 1 && tx.outputs === cfg.destinations.length + 1 && tx.unlockTime === BigInt(0) && tx.weight > 0, name + ": ring size 16, inputs, outputs (destinations and change), unlock time");
+        expect(JSON.stringify((tx.destinations ?? []).map((d) => [label(d.address), d.amount.toString()])) === JSON.stringify(cfg.destinations.map((d) => [label(d.address), d.amount.toString()])), name + ": destinations as requested");
+        builds.push(b);
+        results[name] = { hash: tx.hash, asset: tx.sourceAsset, amount: tx.amount.toString(), fee: tx.fee.toString(), feeAsset: tx.feeAsset, totalDebited: tx.totalDebited.toString(), change: tx.change.toString(),
+          ringSize: tx.ringSize, inputs: tx.inputs, outputs: tx.outputs, weight: tx.weight, unlockTime: tx.unlockTime.toString(), destinations: (tx.destinations ?? []).map((d) => label(d.address) + ":" + d.amount.toString()), requests, ms };
+      }
+      expect(builds[6].txs[0].hash !== builds[0].txs[0].hash, "a repeated identical build gives a new transaction (new hash)");
+      notes.push("repeated build differs in: " + differing(builds[0], builds[6]).join("; "));
+      expect(withoutRandom(builds[6]) === withoutRandom(builds[0]) && randomWithinBounds(builds[0], builds[6]), "a repeated identical build has the same description except the fields random by nature, which stay within their bounds");
+      // an amount above the balance: rejected from the wallet's own balance, no request
+      const r0 = await forwarderRoutes();
+      await expectCode(w.buildTransfer({ asset: "ZYS", destinations: [{ address: account1, amount: BigInt(6) * unit }], accountIndex: 0 }), "TX_NOT_POSSIBLE", "an amount above the balance", notes, "NOT_ENOUGH_MONEY");
+      await expectCode(w.buildTransfer({ asset: "ZSD", destinations: [{ address: primary, amount: tenth }], accountIndex: 1 }), "TX_NOT_POSSIBLE", "an asset account 1 does not hold", notes, "NOT_ENOUGH_MONEY");
+      const r1 = await forwarderRoutes();
+      expect(JSON.stringify(r0) === JSON.stringify(r1), "the rejected builds sent no request");
+      // nothing persists
+      const state1 = await walletState(w);
+      const data1 = await w.getData();
+      expect(state1 === state0, "balances, unlocked balances, accounts, history and height equal those before the builds");
+      const keysEqual = bytesEqual(data0.keys, data1.keys), cacheEqual = bytesEqual(data0.cache, data1.cache);
+      expect(!deterministic || (keysEqual && cacheEqual), "the wallet bytes equal those before the builds (getData is deterministic here)");
+      // getData encrypts afresh on every call (two calls without any change differ), so the bytes are compared by
+      // length and by what they open to: both reopen offline to the same state
+      expect(data0.keys.length === data1.keys.length && data0.cache.length === data1.cache.length, "the wallet bytes have the same lengths before and after the builds");
+      const reopened: string[] = [];
+      for (const d of [data0, data1]) {
+        const o = await F.openWalletData({ networkType: 0, password: funded.wallet.password, keysData: new Uint8Array(d.keys), cacheData: new Uint8Array(d.cache), proxyToWorker: false });
+        try { reopened.push(await walletState(o)); } finally { await o.close(); }
+      }
+      expect(reopened[0] === state0 && reopened[1] === state0, "the bytes before and after the builds reopen to the same state");
+      // direct and proxied: the same builds in a worker from the same synced bytes
+      const p = await F.openWalletData({ networkType: 0, password: funded.wallet.password, keysData: new Uint8Array(data0.keys), cacheData: new Uint8Array(data0.cache), server: t.base, proxyToWorker: true });
+      const proxied: Record<string, boolean> = {};
+      try {
+        for (const i of [0, 3, 4, 5]) {
+          const b = await p.buildTransfer(plans[i][1]);
+          proxied[plans[i][0]] = withoutRandom(b) === withoutRandom(builds[i]) && randomWithinBounds(b, builds[i]);
+          notes.push("proxied " + plans[i][0] + " differs in: " + differing(builds[i], b).join("; "));
+          expect(proxied[plans[i][0]], "proxied " + plans[i][0] + " equals the direct description except the fields random by nature");
+        }
+      } finally { await p.close(); }
+      if (opts.saveBuildSynced !== undefined) await opts.saveBuildSynced({ keys: data1.keys, cache: data1.cache, password: funded.wallet.password });
+      const relayAfter = (HttpClient as unknown as { REFUSED_RELAY_REQUESTS: number }).REFUSED_RELAY_REQUESTS;
+      expect(relayAfter === relayBefore, "no relay request was attempted in this context");
+      report.measurements.N22 = { builds: results, deterministicGetData: deterministic, keysEqual, cacheEqual, reopenedEqual: reopened[0] === state0 && reopened[1] === state0, keysBytes: data0.keys.length, cacheBytes: data0.cache.length, proxiedEqual: proxied, relayRefused: relayAfter - relayBefore };
+      notes.push(plans.length + " builds; fees " + Object.entries(results).map(([k, v]) => k.split(" ")[0] + " " + (v as { fee: string }).fee).join(", ") + "; getData deterministic " + deterministic + ", keys equal " + keysEqual + ", cache equal " + cacheEqual);
+    } finally {
+      await w.close();
+    }
+  }, 1800000);
+
+  await check("N23", "Funded builds in the test module: after a warm-up the allocator returns to the same level after every build (the built transactions and their bytes are released inside the module)", async (notes) => {
+    const synced = opts.fundedSynced;
+    if (synced === undefined) throw new CheckNotRun("no synced funded copy supplied (a run with the test module after N22)");
+    if (t.base === undefined) throw new CheckFailure("no target");
+    const module = LibraryUtils.getWasmModule() as { test_heap_in_use?: () => number } | undefined;
+    if (module === undefined || typeof module.test_heap_in_use !== "function") throw new CheckFailure("not the test module");
+    const w = await F.openWalletData({ networkType: 0, password: synced.password, keysData: new Uint8Array(synced.keys), cacheData: new Uint8Array(synced.cache), server: t.base, proxyToWorker: false });
+    try {
+      const account1 = await w.getAddress(1, 0);
+      const cfg: F.ZephyrTransferConfig = { asset: "ZPH", destinations: [{ address: account1, amount: BigInt("100000000000") }], accountIndex: 0 };
+      const heap = () => (module.test_heap_in_use as () => number)();
+      for (let i = 0; i < 2; i++) await w.buildTransfer(cfg); // warm-up: the core's caches of daemon answers and the gamma picker
+      const deltas: number[] = [];
+      for (let i = 0; i < 5; i++) { const h0 = heap(); await w.buildTransfer(cfg); deltas.push(heap() - h0); }
+      notes.push("allocator growth of 5 builds after a warm-up of 2: " + deltas.join(","));
+      report.measurements.N23 = { deltas };
+      expect(deltas.every((d) => d === deltas[0]) && deltas[0] <= 0, "every build returns the allocator to its level (growth " + deltas.join(",") + ")");
+    } finally {
+      await w.close();
+    }
+  }, 1200000);
 
   const entryGuard = await Internal.getNetworkGuardReport();
   report.networkGuard = combinedGuard(entryGuard, GUARD_LEDGER);

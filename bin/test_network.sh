@@ -28,6 +28,12 @@
 # cache.bin, password.txt) and FUNDED_EXPECT (its expected history, JSON), both from outside this tree;
 # without them N20 is reported as not run. N20 makes two more syncs of that copy (one after the next
 # block, waiting up to 20 minutes for it) and never writes the copy; FUNDED_WALLET_OUT=<new directory> receives the synced bytes.
+# With the same inputs N22 builds transactions without relay on another copy (one more sync): one per V2
+# asset to the wallet's own account 1, one from account 1 to its primary address, two destinations and a
+# repeated build, every request through the forwarder, which forwards only its read allowlist and counts
+# submit and relay requests (there must be none); nothing is relayed and no byte of a built transaction
+# leaves the module. N23 then builds again in the test module, in its own direct run on the bytes N22
+# synced (no sync), and requires the allocator to return to its level after every build.
 #
 # Environment (optional): CHROMIUM=<browser binary> (default: chromium); DIRECT_CHECKS, WORKER_CHECKS
 # and BROWSER_CHECKS select a subset of the checks per run (checks after N02 that reopen the measured
@@ -43,7 +49,7 @@ CHROMIUM=${CHROMIUM:-chromium}
 OUT=$ROOT/build/test-results/network; SEED=$ROOT/build/test-wallets/network-seed
 rm -rf "$OUT" "$SEED"; mkdir -p "$OUT" "$(dirname "$SEED")"; chmod 700 "$OUT" "$(dirname "$SEED")"
 MARKER=MARKERnodetext
-DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20}
+DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20,N22}
 WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16,N19,N21}
 BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16,N19,N21}
 FUNDED_ARGS=()
@@ -51,6 +57,9 @@ if [ -n "${FUNDED_WALLET_IN:-}" ] || [ -n "${FUNDED_EXPECT:-}" ]; then
   [ -s "${FUNDED_WALLET_IN:-}/keys.bin" ] && [ -s "${FUNDED_EXPECT:-}" ] || die "FUNDED_WALLET_IN and FUNDED_EXPECT go together"
   FUNDED_ARGS=(--funded-in "$FUNDED_WALLET_IN" --funded-expect "$FUNDED_EXPECT")
   [ -z "${FUNDED_WALLET_OUT:-}" ] || FUNDED_ARGS+=(--funded-out "$FUNDED_WALLET_OUT")
+  # N22 keeps the bytes it synced for N23 (allocation accounting in the test module, its own run)
+  FUNDED_BUILD=$ROOT/build/test-wallets/funded-build; rm -rf "$FUNDED_BUILD"
+  [[ ",$DIRECT_CHECKS," != *",N22,"* ]] || FUNDED_ARGS+=(--funded-build-out "$FUNDED_BUILD")
 fi
 UPSTREAM=$(node -e 'console.log(require(process.argv[1]).requireTestEndpoints().upstream.url)' "$ROOT/src/test/network/testEndpoints.cjs")
 
@@ -68,9 +77,9 @@ for (const c of checks) {
 JS
 }
 
-node_run() { # mode checks [seed args...]
+node_run() { # mode checks [seed args...]; RUNNAME names the run directory (default: the mode)
   local mode=$1 checks=$2; shift 2
-  local run=$OUT/node-$mode rc=0 fwd i
+  local run=$OUT/node-${RUNNAME:-$mode} rc=0 fwd i
   mkdir -p "$run"
   node "$ROOT/src/test/network/forwarder.cjs" --upstream "$UPSTREAM" --out "$run/fwd" --marker "$MARKER" --slow-ms 1500 > "$run/fwd.stdout" 2> "$run/fwd.stderr" &
   fwd=$!
@@ -99,6 +108,10 @@ if [[ ",$DIRECT_CHECKS," == *",N02,"* ]]; then
 else
   mkdir -p "$SEED"; chmod 700 "$SEED"   # a subset without the measured restore: the later runs get no seed wallet
   node_run worker "$WORKER_CHECKS"
+fi
+if [ -n "${FUNDED_BUILD:-}" ] && [ -s "$FUNDED_BUILD/keys.bin" ]; then
+  RUNNAME=alloc node_run direct N23 --test-module "$ROOT/dist/zephyr.test.js" --funded-synced "$FUNDED_BUILD"
+  rm -rf "$FUNDED_BUILD"
 fi
 
 ROOT_PAGE=$OUT/browser-root; RUN=$OUT/chromium; mkdir -p "$ROOT_PAGE" "$RUN"

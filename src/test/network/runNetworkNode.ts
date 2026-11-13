@@ -2,12 +2,15 @@
  * Node runner of the network stage (test only).
  *
  *   --mode direct|worker --out report.json --targets targets.json --marker TEXT --checks N01,N02,...
- *   [--seed-in dir] [--seed-out dir] [--funded-in dir --funded-expect file [--funded-out dir]]
+ *   [--seed-in dir] [--seed-out dir] [--funded-in dir --funded-expect file [--funded-out dir] [--funded-build-out dir]]
+ *   [--test-module file --funded-synced dir]
  *
  * --funded-in names a copy of a funded test wallet (keys.bin, cache.bin, password.txt) and
  * --funded-expect its expected history (JSON, FundedExpectations); both come from outside the public
- * tree and select check N20, which is reported as not run without them. --funded-out receives the
- * synced bytes (0600) for a later comparison with another implementation; the inputs are never written.
+ * tree and select checks N20 and N22, which are reported as not run without them. --funded-out receives the
+ * synced bytes of N20 (0600) for a later comparison with another implementation, --funded-build-out those
+ * of N22 (with the password) for N23; the inputs are never written. N23 runs in direct mode with the test
+ * module (--test-module, the instrumented module) and opens --funded-synced without a sync.
  *
  * The seed directory (test output only, never published) holds a disposable wallet without funds saved
  * by the measured fresh sync, so later runs reopen it and sync a few blocks only. Writes a
@@ -18,6 +21,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
+import { useTestModule, useTestModuleFile } from "../lifecycle/testSupport";
 import { FundedExpectations, FundedInputs, NetworkTargets, RequestRecorder, SeedWallet, installRequestRecorder, runNetworkChecks } from "./NetworkChecks";
 
 function arg(name: string): string | undefined {
@@ -64,11 +68,31 @@ async function main(): Promise<number> {
     process.stderr.write("--funded-in and --funded-expect go together\n");
     return 2;
   }
+  const buildOut = arg("funded-build-out");
+  const saveBuildSynced = buildOut === undefined ? undefined : async (s: SeedWallet): Promise<void> => {
+    if (fs.existsSync(buildOut)) throw new Error("--funded-build-out must name a new directory");
+    fs.mkdirSync(buildOut, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(buildOut, "keys.bin"), s.keys, { mode: 0o600 });
+    fs.writeFileSync(path.join(buildOut, "cache.bin"), s.cache, { mode: 0o600 });
+    fs.writeFileSync(path.join(buildOut, "password.txt"), s.password, { mode: 0o600 });
+  };
+  const syncedIn = arg("funded-synced");
+  const fundedSynced: SeedWallet | undefined = syncedIn === undefined ? undefined : { keys: new Uint8Array(fs.readFileSync(path.join(syncedIn, "keys.bin"))), cache: new Uint8Array(fs.readFileSync(path.join(syncedIn, "cache.bin"))),
+    password: fs.readFileSync(path.join(syncedIn, "password.txt"), "utf8").replace(/\n$/, "") };
+  const testModule = arg("test-module");
+  const artifacts: Record<string, string> = {};
+  if (testModule !== undefined) {
+    if (mode !== "direct") { process.stderr.write("--test-module needs --mode direct\n"); return 2; }
+    const moduleFile = path.resolve(testModule);
+    useTestModuleFile(moduleFile.replace(/\.js$/, ".wasm"));
+    await useTestModule(() => require(moduleFile));
+    artifacts["zephyr.test.js"] = crypto.createHash("sha256").update(fs.readFileSync(moduleFile)).digest("hex");
+  }
   let recorder: RequestRecorder | undefined = undefined;
   if (mode === "direct") recorder = installRequestRecorder(async (b: Uint8Array) => crypto.createHash("sha256").update(b).digest("hex"));
   const log = (line: string): void => { process.stdout.write(line + "\n"); };
-  const report = await runNetworkChecks({ env: mode === "direct" ? "node-direct" : "node-worker", proxyToWorker: mode === "worker", targets, marker, checks, seed, saveSeed, funded, recorder, log });
-  const output = Object.assign({}, report, { node: process.version, platform: process.platform + "-" + process.arch, artifacts: { "zephyr.js": crypto.createHash("sha256").update(fs.readFileSync(path.resolve(__dirname, "../../../zephyr.js"))).digest("hex"), ...(mode === "worker" ? { "ZephyrWebWorker.js": crypto.createHash("sha256").update(fs.readFileSync(LibraryUtils.WORKER_DIST_PATH)).digest("hex") } : {}) } });
+  const report = await runNetworkChecks({ env: mode === "direct" ? "node-direct" : "node-worker", proxyToWorker: mode === "worker", targets, marker, checks, seed, saveSeed, funded, saveBuildSynced, fundedSynced, recorder, log });
+  const output = Object.assign({}, report, { node: process.version, platform: process.platform + "-" + process.arch, artifacts: { ...artifacts, "zephyr.js": crypto.createHash("sha256").update(fs.readFileSync(path.resolve(__dirname, "../../../zephyr.js"))).digest("hex"), ...(mode === "worker" ? { "ZephyrWebWorker.js": crypto.createHash("sha256").update(fs.readFileSync(LibraryUtils.WORKER_DIST_PATH)).digest("hex") } : {}) } });
   fs.writeFileSync(out, JSON.stringify(output, null, 2) + "\n");
   process.stdout.write("checks: " + report.checks.map((c) => c.id + "=" + c.status).join(" ") + "\n");
   if (LibraryUtils.WORKER) await LibraryUtils.terminateWorker();

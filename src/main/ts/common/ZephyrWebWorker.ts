@@ -24,6 +24,7 @@ import { parseDaemonAddress } from "./ZephyrDaemonAddress";
 import { toAccountBalancesDto, toAssetBalancesDto } from "./ZephyrBalances";
 import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccounts";
 import { checkSelection, toTxDto } from "./ZephyrHistory";
+import { checkTransferRequest, toBuildDto } from "./ZephyrTransfer";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
@@ -194,6 +195,9 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
     (await walletOf(walletId).getHistoryChecked(checkSelection(status, minHeight, maxHeight, hashes))).map(toTxDto),
   // explicit pool refresh: a daemon request; the reply is the count of incoming pool transactions
   refreshPool: async (walletId: string) => await walletOf(walletId).refreshPoolChecked(),
+  // build, describe and discard same-asset transactions: the request was validated by the table and is checked again
+  buildTransfer: async (walletId: string, asset: string, addresses: string[], amounts: string[], accountIdx: number, indices: number[], priority: number) =>
+    toBuildDto(await walletOf(walletId).buildTransferChecked(checkTransferRequest(asset, addresses, amounts, accountIdx, indices, priority))),
   isClosed: async (walletId: string) => walletOf(walletId).isClosed(),
   prepareClose: async (walletId: string) => walletOf(walletId).prepareClose(),
   close: async (walletId: string) => {
