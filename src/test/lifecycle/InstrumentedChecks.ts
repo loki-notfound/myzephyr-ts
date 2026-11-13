@@ -1087,6 +1087,55 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await w.close();
   });
 
+  await check("T22", "Conversion failures of the core map to fixed pairs (failures injected in the test module): the reserve ratio messages with their computed ratios, a missing or unusable pricing record, a conversion that would need splitting, a zero converted amount, more than one destination, more than four decimals, an invalid pair; the build's typed failures; an untyped failure never carries the destination; rejected conversions leave the allocator unchanged", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    const own = await w.getPrimaryAddress();
+    const cfg = { sourceAsset: "ZPH", destinationAsset: "ZSD", destination: { address: own, amount: BigInt("123400000000") }, accountIndex: 0 };
+    const pairs: Array<[number, string, string]> = [[21, "TX_NOT_POSSIBLE", "RESERVE_RATIO"], [22, "TX_NOT_POSSIBLE", "RESERVE_RATIO"], [23, "TX_NOT_POSSIBLE", "RESERVE_RATIO"], [24, "TX_NOT_POSSIBLE", "RESERVE_RATIO"],
+      [25, "TX_NOT_POSSIBLE", "RESERVE_RATIO"], [26, "TX_NOT_POSSIBLE", "PRICING_RECORD"], [27, "TX_NOT_POSSIBLE", "PRICING_RECORD"], [28, "TX_NOT_POSSIBLE", "CONVERSION_SPLIT"], [35, "TX_NOT_POSSIBLE", "CONVERSION_SPLIT"],
+      [29, "TX_NOT_POSSIBLE", "CONVERSION_AMOUNT"], [34, "TX_NOT_POSSIBLE", "CONVERSION_AMOUNT"], [30, "INVALID_CONFIG", "CONVERSION_DESTINATIONS"], [31, "INVALID_CONFIG", "AMOUNT_PRECISION"],
+      [32, "INVALID_CONFIG", "CONVERSION_PAIR"], [33, "INVALID_CONFIG", "CONVERSION_PAIR"],
+      [11, "TX_NOT_POSSIBLE", "NOT_ENOUGH_UNLOCKED"], [12, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"], [13, "TX_NOT_POSSIBLE", "NOT_ENOUGH_FOR_FEE"], [14, "TX_NOT_POSSIBLE", "NOT_ENOUGH_OUTS_TO_MIX"],
+      [15, "TX_NOT_POSSIBLE", "TX_TOO_LARGE"], [16, "DAEMON_ERROR", "DAEMON_RESPONSE"], [17, "DAEMON_ERROR", "DAEMON_RESPONSE"], [18, "DAEMON_ERROR", "DAEMON_RESPONSE"], [19, "NATIVE_ERROR", "TX_BUILD_FAILED"]];
+    for (const [kind, code, diag] of pairs) {
+      await hooks.resetCounters();
+      await hooks.arm({ fail: { "conversion.core": 1 }, kind: { "conversion.core": kind } });
+      const err = await expectCode(w.buildConversion(cfg), code, "injected conversion failure kind " + kind, notes, diag);
+      const text = scanText(err) + scanText(err.toEnvelope());
+      expect(!text.includes(own.toLowerCase()) && !text.includes("123400000000") && !text.includes("injected") && !/[0-9]\.[0-9]/.test(text) && !text.includes("satisfied") && !text.includes("pricing record"), "kind " + kind + ": no destination, ratio or core text in the error");
+      expect((await hooks.state()).events.includes("injected:conversion.core"), "kind " + kind + " fired");
+    }
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "error.conversion": 1 } });
+    await expectCode(w.buildConversion(cfg), "NATIVE_ERROR", "injected failure carrying the inputs", notes, "TX_BUILD_FAILED");
+    await hooks.resetCounters();
+    // the same-asset build keeps its own classification: a conversion message there is unknown text
+    await hooks.arm({ fail: { "build.core": 1 }, kind: { "build.core": 21 } });
+    await expectCode(w.buildTransfer({ asset: "ZPH", destinations: [{ address: own, amount: BigInt(1) }], accountIndex: 0 }), "NATIVE_ERROR", "a reserve ratio message in a same-asset build", notes, "TX_BUILD_FAILED");
+    await hooks.resetCounters();
+    const heap = async () => (await hooks.state()).heapInUse;
+    for (let i = 0; i < 2; i++) await expectCode(w.buildConversion(cfg), "TX_NOT_POSSIBLE", "warm-up", [], "NOT_ENOUGH_MONEY");
+    const deltas: number[] = [];
+    for (let i = 0; i < 5; i++) { const h0 = await heap(); try { await w.buildConversion(cfg); } catch (err) { /* NOT_ENOUGH_MONEY */ } deltas.push((await heap()) - h0); }
+    notes.push("allocator growth of 5 conversions the bridge rejects: " + deltas.join(","));
+    expect(deltas.every((d) => d === 0), "conversions the bridge rejects retain nothing");
+    // failures injected as the core throws them (measured, reported: see the round's evidence)
+    const injected: Record<string, number[]> = {};
+    for (const kind of [21, 26, 12, 16, 19]) {
+      injected[String(kind)] = [];
+      for (let i = 0; i < 3; i++) {
+        await hooks.arm({ fail: { "conversion.core": 1 }, kind: { "conversion.core": kind } });
+        const h0 = await heap(); try { await w.buildConversion(cfg); } catch (err) { /* the kind's pair */ } injected[String(kind)].push((await heap()) - h0);
+        await hooks.resetCounters();
+      }
+    }
+    notes.push("allocator growth of injected core failures by kind: " + Object.entries(injected).map(([k, v]) => k + ":" + v.join(",")).join(" "));
+    expect(Object.values(injected).every((v) => v.every((d) => d === v[0])), "the growth per injected failure is constant per kind (no accumulation beyond one exception object)");
+    expect((await w.getTxs()).length === 0, "nothing recorded");
+    await w.close();
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

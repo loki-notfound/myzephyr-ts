@@ -7,7 +7,7 @@
  *
  * --funded-in names a copy of a funded test wallet (keys.bin, cache.bin, password.txt) and
  * --funded-expect its expected history (JSON, FundedExpectations); both come from outside the public
- * tree and select checks N20 and N22, which are reported as not run without them. --funded-out receives the
+ * tree and select checks N20, N22 and N24, which are reported as not run without them. --funded-out receives the
  * synced bytes of N20 (0600) for a later comparison with another implementation, --funded-build-out those
  * of N22 (with the password) for N23; the inputs are never written. N23 runs in direct mode with the test
  * module (--test-module, the instrumented module) and opens --funded-synced without a sync.

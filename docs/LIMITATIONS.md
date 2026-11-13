@@ -169,6 +169,41 @@ that wallet's worker.
   to the wallet's own second account, one from that account back, two destinations, a repeated
   build, direct and proxied. Not proven: what the network accepts (nothing was relayed).
 
+## Building conversions without relay
+
+* `buildConversion` builds one conversion transaction inside the module and discards it; it cannot
+  relay, under the same guards as `buildTransfer`. The six V2 pairs only, one destination, an amount in
+  the source asset with at most four decimals; the core never splits a conversion.
+* What a description means: `amountBurnt` and `amountMinted` are the built transaction's own fields
+  (what the transaction takes in the source asset and what its destination output carries in the
+  destination asset), `pricingRecordHeight` names the block whose pricing record sets the rate. The SDK
+  computes no rate and reports none. The core's formula (zephyr `cryptonote_tx_utils.cpp`,
+  `zeph_to_zephusd`, `zephusd_to_zeph`, `zeph_to_zephrsv`, `zephrsv_to_zeph`, `zephusd_to_zyield`,
+  `zyield_to_zephusd`) uses, from that record, the side of the spot and moving-average price that gives
+  the converter less, minus a conversion fee of 0.1 % (ZSD and ZYS pairs) or 1 % (ZRS pairs); the yield
+  pairs use the chain's own ZYS price. Observed on mainnet on 2026-11-13: the minted amount equalled
+  that formula exactly for every pair that built.
+* A conversion transaction has four outputs: the destination, the change and two outputs of zero that
+  the core adds (one per asset) so that the minted output cannot be singled out.
+* Fees are in the source asset: the core computes the fee in ZPH (200 atomic units per byte of weight
+  observed, as for a transfer) and converts it into the source asset with the moving-average price
+  (ZSD, ZRS) or the ZYS price. Observed with one input and a weight of about 2,290: 0.000458 ZPH for
+  ZPH to ZRS, 0.0000548 ZSD for ZSD to ZPH and ZSD to ZYS, 0.0000275 ZYS for ZYS to ZSD.
+* The reserve ratio decides at build time which pairs are possible (README). With the ratio near 1.66
+  on 2026-11-13, ZPH to ZSD and ZRS to ZPH were refused (`TX_NOT_POSSIBLE`/`RESERVE_RATIO`); ZPH to ZRS,
+  ZSD to ZPH, ZSD to ZYS and ZYS to ZSD built.
+* Requests: a conversion build sends what a transfer build sends plus the block header with the pricing
+  record of the wallet's top block (`getblockheaderbyheight`) and one more circulating supply and
+  pricing record history read. The node learns the wallet's height and that it builds a conversion; a
+  refused conversion sends the reads up to the refusal and no ring member request.
+* A refused conversion is a typed failure of the core; each refusal leaves about 136 bytes in the
+  module (measured in the test module). A built conversion releases everything.
+* Not proven: a relayed conversion and what the network charges for it, the amount actually received,
+  and the slippage between build and inclusion: the rate is fixed by the pricing record the transaction
+  names, and the chain accepts that record only while it is at most 10 blocks old when the transaction
+  is mined (`tx_pr_height_valid`); a conversion relayed later is rejected, and the reserve ratio is
+  checked again against the block that includes it.
+
 ## Text from wallets and the chain
 
 Labels, destination addresses and every other text that comes from wallet bytes or from the chain

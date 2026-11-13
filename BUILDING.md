@@ -159,7 +159,15 @@ repeated build, every request through the forwarder, which forwards only its rea
 counts submit and relay requests (there must be none); balances, history and the reopened bytes must
 be unchanged and the proxied descriptions equal except the fields random by nature. `N23` builds
 again in the test module (`--test-module`, its own direct run on the bytes `N22` synced, no sync) and
-requires the allocator to return to its level after every build. The transport check `S01` (offline,
+requires the allocator to return to its level after every build. `N24` (after `N22`, from the bytes
+`N22` holds, one more sync) builds each of the six conversions without relay, 0.1 of the source asset
+to the wallet's own primary address: for each pair it reads the chain's reserve state through the
+forwarder (the pricing record of the wallet's top block, the circulating supply, the pricing record
+history), derives with the pinned core's reserve rule whether the pair builds or is refused, and
+requires exactly that outcome (a description, or `TX_NOT_POSSIBLE`/`RESERVE_RATIO`); it recomputes the
+minted amount with the core's formula from the pricing record the transaction names and requires it to
+be equal, repeats the six in a worker, and requires balances, history and the reopened bytes to be
+unchanged. The transport check `S01` (offline,
 in the redirect runners' main thread and page) shows that the transport refuses every submit and
 relay request before sending it.
 

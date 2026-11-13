@@ -41,6 +41,7 @@ import HttpClient from "../common/HttpClient";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
 import { ZephyrAccountBalances, ZephyrAssetBalances, fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalances";
 import { MAX_DESTINATIONS, ZephyrTransferBuild, ZephyrTransferRequest, checkTransferRequest, fromBuildDto, parseBridgeBuild } from "../common/ZephyrTransfer";
+import { ZephyrConversionBuild, ZephyrConversionRequest, checkConversionRequest, fromConversionDto, parseBridgeConversion } from "../common/ZephyrConversion";
 import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, ZephyrWalletTx, checkSelection, fromPoolRefreshDto, fromTxsDto, parseBridgeTxs, parsePoolRefresh } from "../common/ZephyrHistory";
 import { ZephyrAccount, ZephyrAddressIndex, ZephyrSubaddress, fromAccountDto, fromAccountsDto, fromAddressIndexDto, fromSubaddressDto, fromSubaddressesDto, parseBridgeAccount, parseBridgeAccounts, parseBridgeAddressIndex, parseBridgeSubaddress, parseBridgeSubaddresses } from "../common/ZephyrAccounts";
 import { configFields, toCoreConfigJson, validateCreateConfig, validateOpenConfig } from "./model/ZephyrWalletCoreConfig";
@@ -982,6 +983,23 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       return new Promise<ZephyrTransferBuild>((resolve, reject) => {
         this.module.build_txs(this.cppAddress, r.asset, r.addresses.join(","), r.amounts.join(","), r.accountIndex, r.subaddressIndices.join(","), r.priority, MAX_DESTINATIONS, (result: unknown) => {
           try { resolve(parseBridgeBuild(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /**
+   * Build, describe and discard the one transaction of a conversion (bridge build_conversion; never relays,
+   * returns no byte of the built transaction). The request is checked again before the native call.
+   */
+  async buildConversionChecked(request: ZephyrConversionRequest): Promise<ZephyrConversionBuild> {
+    const r = checkConversionRequest(request?.sourceAsset, request?.destinationAsset, request?.address, request?.amount, request?.accountIndex, request?.subaddressIndices, request?.priority);
+    if (this.getWalletProxy()) return this.getWalletProxy().buildConversionChecked(r);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<ZephyrConversionBuild>((resolve, reject) => {
+        this.module.build_conversion(this.cppAddress, r.sourceAsset, r.destinationAsset, r.address, r.amount, r.accountIndex, r.subaddressIndices.join(","), r.priority, (result: unknown) => {
+          try { resolve(parseBridgeConversion(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
         });
       });
     });
@@ -2388,6 +2406,11 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
 
   async buildTransferChecked(request: ZephyrTransferRequest): Promise<ZephyrTransferBuild> {
     return fromBuildDto(await this.invokeWorker("buildTransfer", [request.asset, request.addresses.slice(), request.amounts.slice(), request.accountIndex, request.subaddressIndices.slice(), request.priority]), request);
+  }
+
+  async buildConversionChecked(request: ZephyrConversionRequest): Promise<ZephyrConversionBuild> {
+    return fromConversionDto(await this.invokeWorker("buildConversion", [request.sourceAsset, request.destinationAsset, request.address, request.amount, request.accountIndex,
+      request.subaddressIndices.slice(), request.priority]), request);
   }
 
   async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }

@@ -33,7 +33,13 @@
 # repeated build, every request through the forwarder, which forwards only its read allowlist and counts
 # submit and relay requests (there must be none); nothing is relayed and no byte of a built transaction
 # leaves the module. N23 then builds again in the test module, in its own direct run on the bytes N22
-# synced (no sync), and requires the allocator to return to its level after every build.
+# synced (no sync), and requires the allocator to return to its level after every build. N24 builds the six
+# conversions without relay (0.1 of the source asset each, to the wallet's own primary address) from the bytes N22
+# holds (one more sync): for each pair it reads the chain's reserve state through the forwarder, derives with the
+# pinned core's reserve rule whether the pair builds or is refused (TX_NOT_POSSIBLE/RESERVE_RATIO) and requires
+# exactly that outcome, recomputes the minted amount from the pricing record the transaction names, and repeats the
+# six in a worker. N25 follows N23 in the test module's run: the allocator must return to its level after every
+# built conversion and after every conversion the reserve rule refuses.
 #
 # Environment (optional): CHROMIUM=<browser binary> (default: chromium); DIRECT_CHECKS, WORKER_CHECKS
 # and BROWSER_CHECKS select a subset of the checks per run (checks after N02 that reopen the measured
@@ -49,7 +55,7 @@ CHROMIUM=${CHROMIUM:-chromium}
 OUT=$ROOT/build/test-results/network; SEED=$ROOT/build/test-wallets/network-seed
 rm -rf "$OUT" "$SEED"; mkdir -p "$OUT" "$(dirname "$SEED")"; chmod 700 "$OUT" "$(dirname "$SEED")"
 MARKER=MARKERnodetext
-DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20,N22}
+DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20,N22,N24}
 WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16,N19,N21}
 BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16,N19,N21}
 FUNDED_ARGS=()
@@ -110,7 +116,7 @@ else
   node_run worker "$WORKER_CHECKS"
 fi
 if [ -n "${FUNDED_BUILD:-}" ] && [ -s "$FUNDED_BUILD/keys.bin" ]; then
-  RUNNAME=alloc node_run direct N23 --test-module "$ROOT/dist/zephyr.test.js" --funded-synced "$FUNDED_BUILD"
+  RUNNAME=alloc node_run direct N23,N25 --test-module "$ROOT/dist/zephyr.test.js" --funded-synced "$FUNDED_BUILD"
   rm -rf "$FUNDED_BUILD"
 fi
 

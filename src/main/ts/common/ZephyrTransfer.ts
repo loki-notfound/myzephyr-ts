@@ -10,8 +10,8 @@ import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalances";
  * The description is read-only plain data with bigint amounts in atomic units.
  *
  * The configuration is a small explicit set, validated before the build is dispatched; unknown fields
- * reject. Conversions (a destination asset other than the source asset) are not supported in this
- * version and reject before dispatch.
+ * reject. A destination asset other than the source asset rejects before dispatch: conversions are
+ * built by buildConversion (common/ZephyrConversion.ts).
  */
 
 /** The core's transaction priorities (0..3): the core's automatic choice, then increasing fees. */
@@ -81,13 +81,14 @@ export interface ZephyrTransferBuild {
 export const MAX_DESTINATIONS = 15;
 /** Bound of the transactions one build may return (the core splits only when it must). */
 export const MAX_BUILT_TXS = 64;
-const V2_ASSETS: readonly string[] = ["ZPH", "ZSD", "ZRS", "ZYS"];
-const V1_ASSETS: readonly string[] = ["ZEPH", "ZEPHUSD", "ZEPHRSV", "ZYIELD"];
-const PRIORITIES: Readonly<Record<ZephyrTxPriority, number>> = Object.freeze({ default: 0, unimportant: 1, normal: 2, elevated: 3 });
-const UINT64_MAX = BigInt("18446744073709551615");
-const ADDRESS_TEXT = /^[1-9A-HJ-NP-Za-km-z]{90,140}$/;
-const DECIMAL = /^(0|[1-9][0-9]{0,19})$/;
-const TX_HASH = /^[0-9a-f]{64}$/;
+export const V2_ASSETS: readonly string[] = ["ZPH", "ZSD", "ZRS", "ZYS"];
+export const V1_ASSETS: readonly string[] = ["ZEPH", "ZEPHUSD", "ZEPHRSV", "ZYIELD"];
+/** The core's priority values (monero_tx_priority 0..3) by name. */
+export const PRIORITIES: Readonly<Record<ZephyrTxPriority, number>> = Object.freeze({ default: 0, unimportant: 1, normal: 2, elevated: 3 });
+export const UINT64_MAX = BigInt("18446744073709551615");
+export const ADDRESS_TEXT = /^[1-9A-HJ-NP-Za-km-z]{90,140}$/;
+export const DECIMAL = /^(0|[1-9][0-9]{0,19})$/;
+export const TX_HASH = /^[0-9a-f]{64}$/;
 const CONFIG_KEYS = ["asset", "destinationAsset", "destinations", "accountIndex", "subaddressIndices", "priority"];
 
 /** The validated request the bridge and the worker receive: amounts as exact decimal text. */
@@ -100,13 +101,13 @@ export interface ZephyrTransferRequest {
   readonly priority: number;
 }
 
-type Bad = () => never;
+export type Bad = () => never;
 const invalid = (d: "CONFIG_TYPE" | "UNKNOWN_FIELD" | "FIELD_TYPE" | "ASSET_TYPE" | "TX_ASSET" | "DESTINATIONS" | "TOO_MANY_DESTINATIONS" | "AMOUNT_ZERO" | "AMOUNT_RANGE" | "ADDRESS_INDEX_RANGE" | "TX_PRIORITY"): never => {
   throw new ZephyrWalletError("INVALID_CONFIG", d);
 };
 
 /** A plain object (or one without prototype) of own enumerable data properties, no symbol keys. */
-function plainData(value: unknown, bad: Bad): Record<string, unknown> {
+export function plainData(value: unknown, bad: Bad): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) bad();
   const proto = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) bad();
@@ -175,18 +176,18 @@ export function checkTransferRequest(asset: unknown, addresses: unknown, amounts
 
 // ------------------------------------------------------------------ results
 
-function fields(value: unknown, required: readonly string[], optional: readonly string[], bad: Bad): Record<string, unknown> {
+export function fields(value: unknown, required: readonly string[], optional: readonly string[], bad: Bad): Record<string, unknown> {
   const f = plainData(value, bad);
   for (const k of required) if (!Object.prototype.hasOwnProperty.call(f, k)) bad();
   for (const k of Object.keys(f)) if (!required.includes(k) && !optional.includes(k)) bad();
   return f;
 }
 
-function amountOf(value: unknown, bad: Bad): bigint {
+export function amountOf(value: unknown, bad: Bad): bigint {
   try { return parseUint64Text(value); } catch (err) { return bad(); }
 }
 
-function countOf(value: unknown, max: number, bad: Bad): number {
+export function countOf(value: unknown, max: number, bad: Bad): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) bad();
   return value as number;
 }

@@ -133,6 +133,11 @@ export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   "KEYS_ONLY_TX", "VIEW_ONLY_TX", "CONVERSION", "INTEGRATED_ADDRESS", "TX_ASSET", "DESTINATIONS", "TOO_MANY_DESTINATIONS",
   "AMOUNT_ZERO", "AMOUNT_RANGE", "TX_PRIORITY", "ADDRESS_NETWORK", "NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE",
   "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE", "TX_BUILD_FAILED",
+  // building conversions without relay: INVALID_CONFIG for a pair that is not one of the six V2 conversions, more than
+  // one destination, an amount with more than four decimals; TX_NOT_POSSIBLE when the reserve ratio does not allow the
+  // pair, the pricing record is missing, unusable or could not be read, the conversion would need more than one
+  // transaction, or the converted amount would be zero
+  "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT",
   // the transport refuses every request that would submit or relay a transaction or a block (no relay in this version)
   "RELAY_REQUEST"
 ] as const;
@@ -166,7 +171,9 @@ export const BRIDGE_ERROR_IDENTIFIERS = [
   "KEYS_ONLY_HISTORY", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND",
   // building transactions without relay
   "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS", "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE",
-  "ADDRESS_NETWORK", "NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE", "TX_BUILD_FAILED"
+  "ADDRESS_NETWORK", "NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE", "TX_BUILD_FAILED",
+  // building conversions without relay
+  "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT"
 ] as const;
 
 export type ZephyrBridgeErrorIdentifier = typeof BRIDGE_ERROR_IDENTIFIERS[number];
@@ -181,13 +188,14 @@ const BRIDGE_PASSWORD_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})","passwordState
 const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "REGTEST", "LISTENER", "SAVE_ON_CLOSE", "KEYS_ONLY_ACCOUNTS", "KEYS_ONLY_HISTORY",
   "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS"]);
 /** Transaction builds the wallet's funds or the chain cannot satisfy */
-const BRIDGE_TX_NOT_POSSIBLE: ReadonlySet<string> = new Set(["NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE"]);
+const BRIDGE_TX_NOT_POSSIBLE: ReadonlySet<string> = new Set(["NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE",
+  "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT"]);
 const BRIDGE_INVALID_CONFIG: ReadonlySet<string> = new Set(["NETWORK_TYPE", "CREATE_MODE", "SEED_LANGUAGE", "SEED_AND_KEYS", "CORE_UNKNOWN_LANGUAGE", "CORE_LOOKAHEAD"]);
 const BRIDGE_INVALID_RECOVERY: ReadonlySet<string> = new Set(["SEED_EMPTY", "KEYS_MISSING"]);
 /** Daemon results keep DAEMON_ERROR and argument checks INVALID_CONFIG in every context */
 const BRIDGE_DAEMON: ReadonlySet<string> = new Set(["DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED"]);
 const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS", "SUBADDRESS_INDICES", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND",
-  "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE"]);
+  "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE", "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION"]);
 
 function isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic {
   return typeof value === "string" && (ZEPHYR_WALLET_ERROR_DIAGNOSTICS as readonly string[]).includes(value);

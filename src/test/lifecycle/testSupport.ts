@@ -261,7 +261,7 @@ export interface InstrumentationArm {
   /** native hook points to fail (count), after skipping the given number of passes */
   readonly fail?: Record<string, number>;
   readonly skip?: Record<string, number>;
-  /** failure kind per hook point: 1 runtime_error carrying the call inputs, 2 non-standard, 3 bad_alloc, 4 invalid_password */
+  /** failure kind per hook point: 1 runtime_error carrying the call inputs, 2 non-standard, 3 bad_alloc, 4 invalid_password; the build kinds 11-19 and conversion kinds 21-35 of the bridge */
   readonly kind?: Record<string, number>;
   /** make the JS copy of the first or second wallet buffer of the next getData fail */
   readonly copyFailure?: "first" | "second";

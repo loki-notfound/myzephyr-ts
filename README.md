@@ -16,8 +16,8 @@ The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not
 
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
 the read-only history of transactions and transfers, an explicit pool refresh, and building same-asset
-transactions without relay to inspect them (below). Sending (relaying) transactions, conversions and
-listeners are not supported yet. Read
+transactions and conversions without relay to inspect them (below). Sending (relaying) transactions or
+conversions and listeners are not supported yet. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 
 ## Core and pinned sources
@@ -261,7 +261,7 @@ reject with `INVALID_CONFIG`/`UNKNOWN_FIELD`):
 * `asset`: `"ZPH"`, `"ZSD"`, `"ZRS"` or `"ZYS"` (`INVALID_CONFIG`/`ASSET_TYPE`; the V1 names reject
   with `TX_ASSET`, the chain no longer accepts them as outputs);
 * `destinationAsset` (optional): equal to `asset`; another asset is a conversion and rejects with
-  `UNSUPPORTED_CAPABILITY`/`CONVERSION`;
+  `UNSUPPORTED_CAPABILITY`/`CONVERSION` (conversions are built by `buildConversion`, below);
 * `destinations`: 1 to 15 `{ address, amount }` (`DESTINATIONS`, `TOO_MANY_DESTINATIONS`), amounts
   `bigint` in atomic units above zero, each and their sum at most 2^64-1 (`AMOUNT_ZERO`,
   `AMOUNT_RANGE`); addresses are checked with the core's own parser for the wallet's network
@@ -297,6 +297,50 @@ const build = await wallet.buildTransfer({ asset: "ZSD", destinations: [{ addres
 console.log(build.txs[0].fee, build.txs[0].feeAsset, build.txs[0].ringSize);   // e.g. 307400000n "ZSD" 16
 ```
 
+### Building conversions without relay
+
+`buildConversion(config)` builds the one transaction of a conversion between two V2 assets, describes
+it and discards it, under the same rules as `buildTransfer`: built and signed inside the module, never
+relayed, nothing stored, no byte of the transaction leaves the module, full wallets with spend keys only.
+The six conversions are ZPH to ZSD and back, ZPH to ZRS and back, and ZSD to ZYS and back.
+
+The configuration (`ZephyrConversionConfig`, a plain object of own data properties; unknown fields
+reject with `INVALID_CONFIG`/`UNKNOWN_FIELD`):
+
+* `sourceAsset`, `destinationAsset`: one of the six pairs (`INVALID_CONFIG`/`CONVERSION_PAIR` for any
+  other combination, the same asset included; `ASSET_TYPE` and `TX_ASSET` as for `buildTransfer`);
+* `destination`: exactly one `{ address, amount }` (an array rejects with `CONVERSION_DESTINATIONS`);
+  `amount` is what is converted, in atomic units of the source asset, with at most four decimals: a
+  multiple of 10^8 (`AMOUNT_PRECISION`), above zero and at most 2^64-1; the address as for
+  `buildTransfer`;
+* `accountIndex`, `subaddressIndices` (optional), `priority` (optional): as for `buildTransfer`.
+
+The core decides at build time. It reads the pricing record of the wallet's top block
+(`getblockheaderbyheight`), the circulating supply and the pricing record history, and refuses a pair
+the reserve ratio does not allow: `TX_NOT_POSSIBLE`/`RESERVE_RATIO` (the ratio and every other part of
+the core's message stay inside the module). Under the pinned core, ZPH to ZSD and ZRS to ZPH need a
+reserve ratio (spot and moving average) of at least 4.0 after the conversion, ZPH to ZRS one below 8.0
+(or fewer than 100 ZSD in circulation), ZSD to ZPH only assets in the reserve, and the ZSD-ZYS pairs are
+not gated by the ratio. Other failures of a conversion: `TX_NOT_POSSIBLE`/`PRICING_RECORD` (no usable
+pricing record, also when it could not be read), `CONVERSION_SPLIT` (it would need more than one
+transaction), `CONVERSION_AMOUNT` (the converted amount would be zero); the build's own failures as for
+`buildTransfer`; any other `NATIVE_ERROR`/`TX_BUILD_FAILED`.
+
+The result (`ZephyrConversionBuild`) carries `hash`, `sourceAsset` and `destinationAsset` (read from the
+built transaction), `destination` (the caller's), `amountBurnt` and `amountMinted` (the transaction's own
+fields: what is taken in the source asset and what the destination output carries in the destination
+asset), `fee` and `feeAsset` (the source asset), `totalDebited` (`amountBurnt` and `fee`), `change`,
+`ringSize`, `inputs`, `outputs` (four: the destination, the change and two zero outputs the core adds to
+every conversion), `weight`, `unlockTime` and `pricingRecordHeight` (the block whose
+pricing record sets the rate). The SDK computes no rate: the rate and its conversion fee follow from that
+pricing record by the core's formula (docs/LIMITATIONS.md).
+
+```typescript
+const primary = await wallet.getPrimaryAddress();
+const c = await wallet.buildConversion({ sourceAsset: "ZPH", destinationAsset: "ZRS", destination: { address: primary, amount: 100000000000n }, accountIndex: 0 });
+console.log(c.amountBurnt, c.amountMinted, c.fee, c.feeAsset, c.pricingRecordHeight);
+```
+
 ## Not ported
 
 Everything else inherited from monero-ts stays in the source as unported classes under
@@ -309,7 +353,7 @@ inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddress`). The
 inherited Monero test suite and its root entry point are not part of this repository's tree; the
 tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`. Relaying
-transactions and conversions need further work and their own tests with funded wallets.
+transactions and conversions needs further work and its own tests with funded wallets.
 
 ## Building and testing
 

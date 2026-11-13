@@ -25,6 +25,7 @@ import { toAccountBalancesDto, toAssetBalancesDto } from "./ZephyrBalances";
 import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccounts";
 import { checkSelection, toTxDto } from "./ZephyrHistory";
 import { checkTransferRequest, toBuildDto } from "./ZephyrTransfer";
+import { checkConversionRequest, toConversionDto } from "./ZephyrConversion";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
@@ -198,6 +199,9 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   // build, describe and discard same-asset transactions: the request was validated by the table and is checked again
   buildTransfer: async (walletId: string, asset: string, addresses: string[], amounts: string[], accountIdx: number, indices: number[], priority: number) =>
     toBuildDto(await walletOf(walletId).buildTransferChecked(checkTransferRequest(asset, addresses, amounts, accountIdx, indices, priority))),
+  // build, describe and discard the one transaction of a conversion: the request was validated by the table and is checked again
+  buildConversion: async (walletId: string, sourceAsset: string, destinationAsset: string, address: string, amount: string, accountIdx: number, indices: number[], priority: number) =>
+    toConversionDto(await walletOf(walletId).buildConversionChecked(checkConversionRequest(sourceAsset, destinationAsset, address, amount, accountIdx, indices, priority))),
   isClosed: async (walletId: string) => walletOf(walletId).isClosed(),
   prepareClose: async (walletId: string) => walletOf(walletId).prepareClose(),
   close: async (walletId: string) => {

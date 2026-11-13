@@ -57,8 +57,9 @@ const MAX_UPSTREAM = 2;
 // read-only daemon surface used by wallet refresh, the explicit pool refresh (/gettransactions: the pool
 // transactions the wallet has not scanned yet) and building a transaction without relay (output
 // distributions and ring members, the pool's backlog, recent block headers, and the chain's circulating supply
-// and pricing record history, which the core reads for every transaction it constructs); everything else is refused
-// locally and counted
+// and pricing record history, which the core reads for every transaction it constructs) and building a conversion
+// without relay (in addition the block header with the pricing record of the wallet's top block,
+// getblockheaderbyheight); everything else is refused locally and counted
 const ALLOWED_PATHS = new Set(["/json_rpc", "/getheight", "/get_height", "/getinfo", "/get_info", "/getblocks.bin", "/get_blocks.bin",
   "/gethashes.bin", "/get_hashes.bin", "/get_transaction_pool_hashes.bin", "/get_o_indexes.bin", "/gettransactions", "/get_outs.bin",
   "/get_output_distribution.bin"]);

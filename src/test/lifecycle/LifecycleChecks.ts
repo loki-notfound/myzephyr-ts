@@ -15,6 +15,7 @@ import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
 import * as History from "../../main/ts/common/ZephyrHistory";
 import * as Transfer from "../../main/ts/common/ZephyrTransfer";
+import * as Conversion from "../../main/ts/common/ZephyrConversion";
 
 export type CheckStatus = "pass" | "fail" | "not-run";
 
@@ -1735,6 +1736,115 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       try { (Transfer.checkTransferRequest as (...a: unknown[]) => unknown)(...args); notes.push("request accepted: " + label); expect(false, "request accepted"); } catch (err) { expect(codeOf(err) === "INVALID_CONFIG", "request " + label + " rejected"); }
     }
     notes.push(cases.length + " deviations rejected by the bridge parser and by the worker DTO parser");
+  });
+
+  await check("C36", "Building conversions offline: every configuration rejection before any native call (pairs, one destination, four decimals); addresses checked by the core's parser, unknown account and subaddress, and a wallet without funds rejected for each of the six pairs without a request; keys-only and view-only wallets rejected; buildTransfer still rejects a conversion", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    const own = await w.getPrimaryAddress();
+    const one = BigInt("1000000000000");
+    const base = { sourceAsset: "ZPH", destinationAsset: "ZRS", destination: { address: own, amount: one }, accountIndex: 0 };
+    let read = 0;
+    const getter = { sourceAsset: "ZPH", destinationAsset: "ZRS", destination: { address: own, amount: one } } as Record<string, unknown>;
+    Object.defineProperty(getter, "accountIndex", { enumerable: true, get: () => { read++; return 0; } });
+    const destGetter = { amount: one } as Record<string, unknown>;
+    Object.defineProperty(destGetter, "address", { enumerable: true, get: () => { read++; return own; } });
+    const cases: Array<[string, unknown, string, string]> = [
+      ["a number", 5, "INVALID_CONFIG", "CONFIG_TYPE"], ["null", null, "INVALID_CONFIG", "CONFIG_TYPE"], ["an array", [], "INVALID_CONFIG", "CONFIG_TYPE"], ["a getter", getter, "INVALID_CONFIG", "CONFIG_TYPE"],
+      ["an unknown field", { ...base, relay: true }, "INVALID_CONFIG", "UNKNOWN_FIELD"], ["a destinations field", { ...base, destinations: [{ address: own, amount: one }] }, "INVALID_CONFIG", "UNKNOWN_FIELD"],
+      ["a lower-case source asset", { ...base, sourceAsset: "zph" }, "INVALID_CONFIG", "ASSET_TYPE"], ["an unknown destination asset", { ...base, destinationAsset: "XMR" }, "INVALID_CONFIG", "ASSET_TYPE"],
+      ["no destination asset", { sourceAsset: "ZPH", destination: { address: own, amount: one }, accountIndex: 0 }, "INVALID_CONFIG", "ASSET_TYPE"],
+      ["a V1 source asset", { ...base, sourceAsset: "ZEPH", destinationAsset: "ZEPHRSV" }, "INVALID_CONFIG", "TX_ASSET"], ["an audit pair", { ...base, sourceAsset: "ZEPH", destinationAsset: "ZPH" }, "INVALID_CONFIG", "TX_ASSET"],
+      ["the same asset", { ...base, destinationAsset: "ZPH" }, "INVALID_CONFIG", "CONVERSION_PAIR"], ["ZPH to ZYS", { ...base, destinationAsset: "ZYS" }, "INVALID_CONFIG", "CONVERSION_PAIR"],
+      ["ZRS to ZSD", { ...base, sourceAsset: "ZRS", destinationAsset: "ZSD" }, "INVALID_CONFIG", "CONVERSION_PAIR"], ["ZYS to ZPH", { ...base, sourceAsset: "ZYS", destinationAsset: "ZPH" }, "INVALID_CONFIG", "CONVERSION_PAIR"],
+      ["ZRS to ZYS", { ...base, sourceAsset: "ZRS", destinationAsset: "ZYS" }, "INVALID_CONFIG", "CONVERSION_PAIR"],
+      ["two destinations", { ...base, destination: [{ address: own, amount: one }, { address: own, amount: one }] }, "INVALID_CONFIG", "CONVERSION_DESTINATIONS"],
+      ["one destination in an array", { ...base, destination: [{ address: own, amount: one }] }, "INVALID_CONFIG", "CONVERSION_DESTINATIONS"],
+      ["no destination", { sourceAsset: "ZPH", destinationAsset: "ZRS", accountIndex: 0 }, "INVALID_CONFIG", "FIELD_TYPE"], ["a destination with a getter", { ...base, destination: destGetter }, "INVALID_CONFIG", "FIELD_TYPE"],
+      ["a destination with another field", { ...base, destination: { address: own, amount: one, asset: "ZRS" } }, "INVALID_CONFIG", "UNKNOWN_FIELD"],
+      ["an address that is not text", { ...base, destination: { address: 7, amount: one } }, "INVALID_ADDRESS", "ADDRESS_TYPE"], ["a short address", { ...base, destination: { address: own.substring(0, 40), amount: one } }, "INVALID_ADDRESS", "ADDRESS_TYPE"],
+      ["an amount as a number", { ...base, destination: { address: own, amount: 1 } }, "INVALID_CONFIG", "FIELD_TYPE"], ["amount zero", { ...base, destination: { address: own, amount: BigInt(0) } }, "INVALID_CONFIG", "AMOUNT_ZERO"],
+      ["a negative amount", { ...base, destination: { address: own, amount: BigInt(-100000000) } }, "INVALID_CONFIG", "AMOUNT_RANGE"],
+      ["an amount of 2^64", { ...base, destination: { address: own, amount: BigInt("18446744073709551616") } }, "INVALID_CONFIG", "AMOUNT_RANGE"],
+      ["five decimals", { ...base, destination: { address: own, amount: BigInt("10000000") } }, "INVALID_CONFIG", "AMOUNT_PRECISION"],
+      ["one atomic unit", { ...base, destination: { address: own, amount: BigInt(1) } }, "INVALID_CONFIG", "AMOUNT_PRECISION"],
+      ["0.12345", { ...base, sourceAsset: "ZSD", destinationAsset: "ZYS", destination: { address: own, amount: BigInt("123450000000") } }, "INVALID_CONFIG", "AMOUNT_PRECISION"],
+      ["no account index", { sourceAsset: "ZPH", destinationAsset: "ZRS", destination: { address: own, amount: one } }, "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"],
+      ["an account index of 2^32", { ...base, accountIndex: 4294967296 }, "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"], ["empty subaddress indices", { ...base, subaddressIndices: [] }, "INVALID_CONFIG", "SUBADDRESS_INDICES"],
+      ["an unknown priority", { ...base, priority: "high" }, "INVALID_CONFIG", "TX_PRIORITY"]
+    ];
+    const native = await countNativeCalls(async () => {
+      for (const [label, cfg, code, diag] of cases) await expectCode(w.buildConversion(cfg as F.ZephyrConversionConfig), code, "buildConversion with " + label, notes, diag);
+      await expectCode((w.buildConversion as (...a: unknown[]) => Promise<unknown>)(base, {}), "INVALID_CONFIG", "buildConversion with a second argument", notes, "FIELD_TYPE");
+      await expectCode(w.buildTransfer({ asset: "ZPH", destinationAsset: "ZRS", destinations: [{ address: own, amount: one }], accountIndex: 0 }), "UNSUPPORTED_CAPABILITY", "buildTransfer with a destination asset", notes, "CONVERSION");
+    });
+    if (!proxy) expect(native === 0, "no native export called by " + (cases.length + 2) + " rejections, got " + native);
+    expect(read === 0, "no accessor was invoked (" + read + ")");
+    const testnet = await F.createKeysWallet({ networkType: 1, proxyToWorker: proxy });
+    const foreign = await testnet.getPrimaryAddress();
+    await testnet.close();
+    await LibraryUtils.loadWasmModule();
+    const integrated = (JSON.parse(LibraryUtils.getWasmModule().get_integrated_address_util(0, own, "")) as { integratedAddress: string }).integratedAddress;
+    const lastChar = own.charAt(own.length - 1);
+    const bad = own.substring(0, own.length - 1) + (lastChar === "A" ? "B" : "A");
+    const sub = (await w.getSubaddresses(0)).length;
+    const bridged: Array<[string, F.ZephyrConversionConfig, string, string]> = [
+      ["a testnet address", { ...base, destination: { address: foreign, amount: one } }, "INVALID_ADDRESS", "ADDRESS_NETWORK"],
+      ["an address with a wrong checksum", { ...base, destination: { address: bad, amount: one } }, "INVALID_ADDRESS", "CORE_INVALID_ADDRESS"],
+      ["an integrated address", { ...base, destination: { address: integrated, amount: one } }, "UNSUPPORTED_CAPABILITY", "INTEGRATED_ADDRESS"],
+      ["an account the wallet does not have", { ...base, accountIndex: 7 }, "INVALID_CONFIG", "ACCOUNT_NOT_FOUND"],
+      ["a subaddress the account does not have", { ...base, subaddressIndices: [sub + 3] }, "INVALID_CONFIG", "SUBADDRESS_NOT_FOUND"]
+    ];
+    for (const [source, destination] of Conversion.CONVERSION_PAIRS) bridged.push(["no funds, " + source + " to " + destination, { sourceAsset: source, destinationAsset: destination, destination: { address: own, amount: Conversion.CONVERSION_AMOUNT_STEP }, accountIndex: 0 }, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"]);
+    bridged.push(["no funds in subaddress 0", { ...base, subaddressIndices: [0], priority: "elevated" }, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"]);
+    for (const [label, cfg, code, diag] of bridged) await expectCode(w.buildConversion(cfg), code, "buildConversion with " + label, notes, diag);
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy });
+    await expectCode(k.buildConversion(base), "UNSUPPORTED_CAPABILITY", "keys-only buildConversion", notes, "KEYS_ONLY_TX");
+    await k.close();
+    const v = await F.restoreWalletFromKeys({ networkType: 0, password: pw, primaryAddress: address, privateViewKey: privView, proxyToWorker: proxy });
+    await expectCode(v.buildConversion({ ...base, destination: { address, amount: one } }), "UNSUPPORTED_CAPABILITY", "view-only buildConversion", notes, "VIEW_ONLY_TX");
+    await v.close();
+    expect((await w.getTxs()).length === 0, "nothing was recorded by the rejected builds");
+    await w.close();
+    await expectCode(w.buildConversion(base), "WALLET_CLOSED", "buildConversion after close", notes);
+    notes.push(cases.length + " configuration rejections before dispatch, " + bridged.length + " in the bridge");
+  });
+
+  await check("C37", "Conversion decoding: the bridge's description and the worker DTO are accepted exactly against the request, every deviation rejects with a fixed code; DTOs round-trip; the worker request is validated again", async (notes) => {
+    const addr = address;
+    const request = Conversion.checkConversionConfig({ sourceAsset: "ZSD", destinationAsset: "ZYS", destination: { address: addr, amount: BigInt("500000000000") }, accountIndex: 0 });
+    const h = (n: number) => n.toString(16).padStart(64, "0");
+    const tx = { hash: h(1), sourceAsset: "ZSD", destinationAsset: "ZYS", destination: { address: addr, amount: "500000000000" }, amountBurnt: "500000000000", amountMinted: "432100000000",
+      fee: "308000000", feeAsset: "ZSD", totalDebited: "500308000000", change: "9499692000000", ringSize: 16, inputs: 1, outputs: 2, weight: "1540", unlockTime: "0", pricingRecordHeight: "906500" };
+    const one = Conversion.parseBridgeConversion(JSON.stringify({ tx }), request);
+    expect(Object.isFrozen(one) && Object.isFrozen(one.destination) && one.amountBurnt === BigInt("500000000000") && one.amountMinted === BigInt("432100000000") && one.feeAsset === "ZSD"
+      && one.totalDebited === BigInt("500308000000") && one.pricingRecordHeight === 906500 && one.weight === 1540 && one.destination.amount === BigInt("500000000000"), "one conversion decoded");
+    const show = (v: unknown) => JSON.stringify(v, (k, x) => (typeof x === "bigint" ? "n" + x.toString() : x));
+    expect(show(Conversion.fromConversionDto(JSON.parse(JSON.stringify(Conversion.toConversionDto(one))), request)) === show(one), "DTO round trip");
+    const m = (fn: (t: Record<string, any>) => void): unknown => { const c = JSON.parse(JSON.stringify(tx)); fn(c); return { tx: c }; };
+    const cases: Array<[string, unknown]> = [
+      ["extra field", m((t) => { t.hex = "00"; })], ["missing field", m((t) => { delete t.amountMinted; })], ["a rate field", m((t) => { t.rate = "1"; })], ["upper-case hash", m((t) => { t.hash = "AB".repeat(32); })],
+      ["another source asset", m((t) => { t.sourceAsset = "ZPH"; })], ["another destination asset", m((t) => { t.destinationAsset = "ZSD"; })], ["another fee asset", m((t) => { t.feeAsset = "ZYS"; })],
+      ["burnt not the requested amount", m((t) => { t.amountBurnt = "400000000000"; t.totalDebited = "400308000000"; })], ["minted zero", m((t) => { t.amountMinted = "0"; })],
+      ["total not burnt plus fee", m((t) => { t.totalDebited = "1"; })], ["minted as a number", m((t) => { t.amountMinted = 432100000000; })], ["fee above 2^64-1", m((t) => { t.fee = "18446744073709551616"; })],
+      ["pricing record height zero", m((t) => { t.pricingRecordHeight = "0"; })], ["pricing record height above 2^53", m((t) => { t.pricingRecordHeight = "9007199254740993"; })],
+      ["ring size zero", m((t) => { t.ringSize = 0; })], ["17 outputs", m((t) => { t.outputs = 17; })], ["one output", m((t) => { t.outputs = 1; })], ["weight zero", m((t) => { t.weight = "0"; })],
+      ["destination of another address", m((t) => { t.destination.address = addr.substring(0, addr.length - 1) + "z"; })], ["destination amount changed", m((t) => { t.destination.amount = "1"; })],
+      ["destination as a list", m((t) => { t.destination = [t.destination]; })], ["several transactions", { txs: [tx] }], ["tx not an object", { tx: [tx] }], ["extra top-level field", { tx, more: 1 }]
+    ];
+    let bridgeRejected = 0, dtoRejected = 0;
+    for (const [label, value] of cases) {
+      try { Conversion.parseBridgeConversion(JSON.stringify(value), request); notes.push("bridge accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") bridgeRejected++; else notes.push("bridge " + label + ": " + codeOf(err)); }
+      try { Conversion.fromConversionDto(value, request); notes.push("dto accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "MALFORMED_MESSAGE/MESSAGE_SHAPE") dtoRejected++; else notes.push("dto " + label + ": " + codeOf(err)); }
+    }
+    expect(bridgeRejected === cases.length && dtoRejected === cases.length, "every deviation rejected (" + bridgeRejected + " and " + dtoRejected + " of " + cases.length + ")");
+    for (const text of ["", "[]", "{bad", "{\"error\":\"X\"}x"]) { try { Conversion.parseBridgeConversion(text, request); expect(false, "text accepted"); } catch (err) { expect(codeOf(err) === "NATIVE_ERROR", "malformed text rejected"); } }
+    const requests: Array<[string, unknown[], string]> = [["amount text with a sign", ["ZSD", "ZYS", addr, "-100000000", 0, [], 0], "AMOUNT_RANGE"], ["priority 4", ["ZSD", "ZYS", addr, "100000000", 0, [], 4], "TX_PRIORITY"],
+      ["a pair that is not a conversion", ["ZSD", "ZRS", addr, "100000000", 0, [], 0], "CONVERSION_PAIR"], ["five decimals", ["ZSD", "ZYS", addr, "10000000", 0, [], 0], "AMOUNT_PRECISION"],
+      ["a V1 asset", ["ZEPHUSD", "ZYS", addr, "100000000", 0, [], 0], "TX_ASSET"]];
+    for (const [label, args, diag] of requests) {
+      try { (Conversion.checkConversionRequest as (...a: unknown[]) => unknown)(...args); notes.push("request accepted: " + label); expect(false, "request accepted"); } catch (err) { expect(codeOf(err) + diagnosticOf(err) === "INVALID_CONFIG/" + diag, "request " + label + " rejected with " + diag); }
+    }
+    notes.push(cases.length + " deviations rejected by the bridge parser and by the worker DTO parser, " + requests.length + " worker requests rejected");
   });
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close

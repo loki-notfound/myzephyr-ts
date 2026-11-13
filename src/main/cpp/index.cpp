@@ -80,8 +80,9 @@ EMSCRIPTEN_BINDINGS(module)
   // explicit pool refresh (full wallets; a daemon request the caller chooses)
   emscripten::function("refresh_pool", &zephyr_wasm_bridge::refresh_pool);
 
-  // build, describe and discard same-asset transactions (full wallets); there is no relay binding
+  // build, describe and discard same-asset transactions and conversions (full wallets); there is no relay binding
   emscripten::function("build_txs", &zephyr_wasm_bridge::build_txs);
+  emscripten::function("build_conversion", &zephyr_wasm_bridge::build_conversion);
   emscripten::function("close", &zephyr_wasm_bridge::close);
 
 #if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)

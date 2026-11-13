@@ -47,7 +47,7 @@ EM_JS(int, zephyr_ts_test_inject, (const char* point), {
   if (h.fail && h.fail[name] > 0) {
     h.fail[name]--; h.events.push("injected:" + name);
     var kind = h.kind && h.kind[name] ? h.kind[name] : 1;
-    return (kind >= 1 && kind <= 5) || (kind >= 11 && kind <= 19) ? kind : 1;
+    return (kind >= 1 && kind <= 5) || (kind >= 11 && kind <= 19) || (kind >= 21 && kind <= 35) ? kind : 1;
   }
   return 0;
 });
@@ -220,6 +220,30 @@ namespace {
   };
   // END CORE MESSAGE TABLE
 
+  // BEGIN CORE MESSAGE TABLE (conversion context of builds)
+  // fixed messages of the pinned core's conversion build (wallet2::create_transactions_2 with
+  // cryptonote::reserve_ratio_satisfied, monero_wallet_full::create_txs). Entries ending in '*' match the start
+  // of the message only: the reserve ratio messages carry computed ratios, which never leave the classifier.
+  const core_message_rule CONVERSION_MESSAGE_RULES[] = {
+    {"Reserve ratio cannot be calculated. Pricing record is missing rates.", "PRICING_RECORD"},
+    {"Failed to get pricing record", "PRICING_RECORD"},
+    {"Reserve ratio not satisfied. *", "RESERVE_RATIO"},
+    {"Spot reserve ratio not satisfied. *", "RESERVE_RATIO"},
+    {"MA reserve ratio not satisfied. *", "RESERVE_RATIO"},
+    {"Reserve ratios not satisfied. *", "RESERVE_RATIO"},
+    {"Cannot split conversion transaction - use a smaller amount or consolidate your inputs", "CONVERSION_SPLIT"},
+    {"Transaction would be too large.  Try create_txs()", "CONVERSION_SPLIT"},
+    {"Failed to convert needed_money to *", "CONVERSION_AMOUNT"},
+    {"cant specify more than 1 destination with conversions.", "CONVERSION_DESTINATIONS"},
+    {"Mint/redeem TX amounts permit at most 4 decimal places", "AMOUNT_PRECISION"},
+    {"invalid tx type", "CONVERSION_PAIR"},
+    {"not a valid tx type", "CONVERSION_PAIR"}
+  };
+  // END CORE MESSAGE TABLE
+
+  // the contexts of the core's transaction build: same-asset transfers (build_txs) and conversions (build_conversion)
+  bool build_context(int context) { return context == ERROR_CONTEXT_BUILD || context == ERROR_CONTEXT_CONVERSION; }
+
   // BEGIN CORE MESSAGE TABLE (address context)
   const core_message_rule ADDRESS_MESSAGE_RULES[] = {
     {"Invalid address", "CORE_INVALID_ADDRESS"},
@@ -274,31 +298,31 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
     return context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : context == ERROR_CONTEXT_BUFFER ? "NATIVE_BUFFER_FAILED" : "CORE_INVALID_PASSWORD";
   } catch (const tools::error::no_connection_to_daemon&) {
     // the core received no usable answer; refined by the transport's failure kind (daemon_failure)
-    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || context == ERROR_CONTEXT_BUILD ? "DAEMON_UNREACHABLE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || build_context(context) ? "DAEMON_UNREACHABLE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::wallet_rpc_error&) {
     // busy, payment or other daemon status, including node-supplied text that is not read
-    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || context == ERROR_CONTEXT_BUILD ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || build_context(context) ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::refresh_error&) {
     // failed daemon request or unusable daemon data during refresh (blocks, hashes, pool, indices)
-    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || context == ERROR_CONTEXT_BUILD ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || build_context(context) ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::not_enough_unlocked_money&) {
-    // the transfer errors of the core's transaction build (build_txs); no other binding builds
-    return context == ERROR_CONTEXT_BUILD ? "NOT_ENOUGH_UNLOCKED" : "CORE_UNCLASSIFIED";
+    // the transfer errors of the core's transaction build (build_txs, build_conversion); no other binding builds
+    return build_context(context) ? "NOT_ENOUGH_UNLOCKED" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::not_enough_money&) {
-    return context == ERROR_CONTEXT_BUILD ? "NOT_ENOUGH_MONEY" : "CORE_UNCLASSIFIED";
+    return build_context(context) ? "NOT_ENOUGH_MONEY" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::tx_not_possible&) {
-    return context == ERROR_CONTEXT_BUILD ? "NOT_ENOUGH_FOR_FEE" : "CORE_UNCLASSIFIED";
+    return build_context(context) ? "NOT_ENOUGH_FOR_FEE" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::not_enough_outs_to_mix&) {
-    return context == ERROR_CONTEXT_BUILD ? "NOT_ENOUGH_OUTS_TO_MIX" : "CORE_UNCLASSIFIED";
+    return build_context(context) ? "NOT_ENOUGH_OUTS_TO_MIX" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::tx_too_big&) {
-    return context == ERROR_CONTEXT_BUILD ? "TX_TOO_LARGE" : "CORE_UNCLASSIFIED";
+    return build_context(context) ? "TX_TOO_LARGE" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::zero_amount&) {
-    return context == ERROR_CONTEXT_BUILD ? "AMOUNT_ZERO" : "CORE_UNCLASSIFIED";
+    return build_context(context) ? "AMOUNT_ZERO" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::tx_sum_overflow&) {
-    return context == ERROR_CONTEXT_BUILD ? "AMOUNT_RANGE" : "CORE_UNCLASSIFIED";
+    return build_context(context) ? "AMOUNT_RANGE" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::get_outs_error&) {
     // the ring member request failed at the daemon
-    return context == ERROR_CONTEXT_BUILD ? "DAEMON_RESPONSE" : "CORE_UNCLASSIFIED";
+    return build_context(context) ? "DAEMON_RESPONSE" : "CORE_UNCLASSIFIED";
   } catch (const std::exception& e) {
     switch (context) {
       case ERROR_CONTEXT_CREATE: return match_core_message(CREATE_MESSAGE_RULES, e.what(), "CORE_UNCLASSIFIED");
@@ -310,10 +334,16 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
       case ERROR_CONTEXT_DAEMON: return match_core_message(DAEMON_MESSAGE_RULES, e.what(), "DAEMON_RESPONSE");
       case ERROR_CONTEXT_SYNC: return match_core_message(DAEMON_MESSAGE_RULES, e.what(), "SYNC_FAILED");
       case ERROR_CONTEXT_BUILD: return match_core_message(BUILD_DAEMON_MESSAGE_RULES, e.what(), "TX_BUILD_FAILED");
+      case ERROR_CONTEXT_CONVERSION: {
+        // the conversion messages first (reserve ratio, pricing record, pair, destinations, precision, split, zero
+        // converted amount), then the build's daemon messages; any other text is TX_BUILD_FAILED
+        const char* identifier = match_core_message(CONVERSION_MESSAGE_RULES, e.what(), nullptr);
+        return identifier != nullptr ? identifier : match_core_message(BUILD_DAEMON_MESSAGE_RULES, e.what(), "TX_BUILD_FAILED");
+      }
       default: return "CORE_UNCLASSIFIED";
     }
   } catch (...) {
-    return context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : context == ERROR_CONTEXT_BUFFER ? "NATIVE_BUFFER_FAILED" : context == ERROR_CONTEXT_SYNC ? "SYNC_FAILED" : context == ERROR_CONTEXT_DAEMON ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_BUILD ? "TX_BUILD_FAILED" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : context == ERROR_CONTEXT_BUFFER ? "NATIVE_BUFFER_FAILED" : context == ERROR_CONTEXT_SYNC ? "SYNC_FAILED" : context == ERROR_CONTEXT_DAEMON ? "DAEMON_RESPONSE" : build_context(context) ? "TX_BUILD_FAILED" : "CORE_UNCLASSIFIED";
   }
 }
 
@@ -1726,6 +1756,12 @@ namespace {
     if (info.has_payment_id) throw bridge_failure("INTEGRATED_ADDRESS");
   }
 
+  // the relay flag of every build's configuration (build_txs, build_conversion): the only assignment of m_relay in
+  // this file, the constant false; the core then neither commits nor relays what it builds
+  void fix_relay_false(monero_tx_config& config) {
+    config.m_relay = false;
+  }
+
   void wipe(boost::optional<std::string>& text) {
     if (text) { std::fill(text->begin(), text->end(), '\0'); text->clear(); text = boost::none; }
   }
@@ -1761,10 +1797,12 @@ namespace {
   struct built_description {
     std::string hash, source_asset, destination_asset;
     uint64_t amount, fee, change, weight, unlock_time;
+    uint64_t amount_burnt, amount_minted, pricing_record_height; // the transaction's own fields (0 for a same-asset transfer)
     size_t inputs, outputs, ring_size;
   };
 
-  // one built transaction, described from the core's values and from its own bytes, parsed in place
+  // one built transaction, described from the core's values and from its own bytes, parsed in place; asset is the
+  // source asset the core was asked to spend (the outgoing transfer's asset)
   built_description describe_built_tx(const monero_tx_wallet& tx, const string& asset) {
     if (!is_tx_hash(tx.m_hash) || !tx.m_full_hex || !tx.m_fee || !tx.m_change_amount || !tx.m_weight || tx.m_outgoing_transfer == boost::none || !tx.m_outgoing_transfer.get()
         || !tx.m_outgoing_transfer.get()->m_amount || tx.m_outgoing_transfer.get()->m_asset_type != asset || !tx.m_is_relayed || *tx.m_is_relayed || !tx.m_in_tx_pool || *tx.m_in_tx_pool) throw bridge_failure("UNEXPECTED_RESULT");
@@ -1794,6 +1832,9 @@ namespace {
     d.fee = *tx.m_fee;
     d.change = *tx.m_change_amount;
     d.weight = *tx.m_weight;
+    d.amount_burnt = parsed.amount_burnt;
+    d.amount_minted = parsed.amount_minted;
+    d.pricing_record_height = parsed.pricing_record_height;
     if (d.amount + d.fee < d.amount) throw bridge_failure("UNEXPECTED_RESULT");
     return d;
   }
@@ -1803,8 +1844,11 @@ namespace {
   // test-only: a typed failure of the core's build path at the armed point (h.kind[name]): 11 not enough
   // unlocked money, 12 not enough money, 13 not enough for the fee, 14 not enough outputs to mix, 15 too
   // large, 16 no connection to the daemon, 17 a busy daemon, 18 a failed ring member request carrying a
-  // node status with the destinations; any other kind an untyped failure whose text carries the destinations
-  void test_throw_build(const char* point, const std::string& inputs) {
+  // node status with the destinations; 21 to 34 the conversion messages of the core (the reserve ratio ones with
+  // computed ratios in their text); any other kind an untyped failure whose text carries the destinations. Inlined
+  // into the binding: a test-only function cannot be on the exception whitelist, so its own frame would skip the
+  // cleanups of the exception's temporaries; inlined, the throw happens in the binding's whitelisted frame
+  __attribute__((always_inline)) inline void test_throw_build(const char* point, const std::string& inputs) {
     int kind = zephyr_ts_test_inject(point);
     switch (kind) {
       case 0: return;
@@ -1816,6 +1860,21 @@ namespace {
       case 16: THROW_WALLET_EXCEPTION(tools::error::no_connection_to_daemon, "get_outs.bin");
       case 17: THROW_WALLET_EXCEPTION(tools::error::daemon_busy, "get_outs.bin");
       case 18: THROW_WALLET_EXCEPTION(tools::error::get_outs_error, std::string("injected node status ") + inputs);
+      case 21: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Spot reserve ratio not satisfied. New reserve ratio would be 1.612345678901 which is less than minimum 4.0");
+      case 22: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "MA reserve ratio not satisfied. New reserve ratio would be 1.598765432109 which is less than minimum 4.0");
+      case 23: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Reserve ratio not satisfied. New reserve ratio would be 1.587654321098 which is less than the minimum 4.0");
+      case 24: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Reserve ratios not satisfied. Spot: 1.612345678901 | MA: 1.598765432109");
+      case 25: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Reserve ratio not satisfied. No ZEPH in the reserve.");
+      case 26: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Reserve ratio cannot be calculated. Pricing record is missing rates.");
+      case 27: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to get pricing record");
+      case 28: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Cannot split conversion transaction - use a smaller amount or consolidate your inputs");
+      case 29: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to convert needed_money to ZSD");
+      case 30: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "cant specify more than 1 destination with conversions.");
+      case 31: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Mint/redeem TX amounts permit at most 4 decimal places");
+      case 32: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "invalid tx type");
+      case 33: throw std::runtime_error("not a valid tx type");
+      case 34: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to convert needed_money to ZSD (from ZYS)");
+      case 35: throw std::runtime_error("Transaction would be too large.  Try create_txs()");
       default: throw std::runtime_error(std::string("injected build failure: ") + inputs);
     }
   }
@@ -1828,7 +1887,7 @@ namespace {
 // "inputs","outputs","weight","unlockTime"[,"destinations":[{"address","amount"},..]]},..]}: the transactions the
 // core built for a same-asset transfer of asset from account_idx (and subaddress_indices "" or "i,j,..."), with
 // priority 0..3, discarded inside the module. addresses "a1,a2,..." and amounts "n1,n2,..." name the
-// destinations (at most max_destinations). Nothing is relayed: m_relay is the constant false below.
+// destinations (at most max_destinations). Nothing is relayed: m_relay is the constant false (fix_relay_false).
 void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string& addresses, const string& amounts, uint32_t account_idx, const string& subaddress_indices,
                                    uint32_t priority, uint32_t max_destinations, emscripten::val callback) {
   string result;
@@ -1871,7 +1930,7 @@ void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string
     config.destination_currency = asset;
     config.m_priority = (monero_tx_priority) priority;
     config.m_can_split = true;
-    config.m_relay = false; // the only value this binding ever passes: the core does not commit or relay
+    fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
     for (size_t i = 0; i < destination_addresses.size(); i++) {
       std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
       d->m_address = destination_addresses[i];
@@ -1886,7 +1945,7 @@ void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string
     for (const auto& tx : txs) {
       if (!tx) throw bridge_failure("UNEXPECTED_RESULT");
       built_description d = describe_built_tx(*tx, asset);
-      if (d.source_asset != asset || d.destination_asset != asset) throw bridge_failure("UNEXPECTED_RESULT");
+      if (d.source_asset != asset || d.destination_asset != asset || d.amount_burnt != 0 || d.amount_minted != 0 || d.pricing_record_height != 0) throw bridge_failure("UNEXPECTED_RESULT");
       described.push_back(d);
     }
     rapidjson::StringBuffer buffer;
@@ -1929,6 +1988,113 @@ void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string
     result = string(buffer.GetString(), buffer.GetSize());
   } catch (...) {
     const char* identifier = daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_BUILD));
+    release_built(txs);
+    config.m_destinations.clear();
+    result = bridge_error(identifier);
+  }
+  callback(result);
+}
+
+// {"tx":{"hash","sourceAsset","destinationAsset","destination":{"address","amount"},"amountBurnt","amountMinted","fee","feeAsset",
+// "totalDebited","change","ringSize","inputs","outputs","weight","unlockTime","pricingRecordHeight"}}: the one transaction the core
+// built for a conversion of amount (in source_asset, a multiple of 10^8 atomic units) from account_idx (and subaddress_indices
+// "" or "i,j,...") to one address, with priority 0..3, discarded inside the module. The pair must be one of the six V2
+// conversions. amountBurnt, amountMinted and pricingRecordHeight are the built transaction's own fields; nothing is
+// computed here from a rate. Nothing is relayed: m_relay is the constant false (fix_relay_false).
+void zephyr_wasm_bridge::build_conversion(int handle, const string& source_asset, const string& destination_asset, const string& address, const string& amount,
+                                          uint32_t account_idx, const string& subaddress_indices, uint32_t priority, emscripten::val callback) {
+  string result;
+  std::vector<std::shared_ptr<monero_tx_wallet>> txs;
+  monero_tx_config config;
+  try {
+    if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
+    monero_wallet* wallet = (monero_wallet*) handle;
+    if (wallet->is_view_only()) throw bridge_failure("VIEW_ONLY_TX");
+    if (wallet->is_multisig()) throw bridge_failure("MULTISIG");
+    if (!is_core_asset_type(source_asset) || !is_core_asset_type(destination_asset)) throw bridge_failure("ASSET_TYPE");
+    if (!is_v2_asset(source_asset) || !is_v2_asset(destination_asset)) throw bridge_failure("TX_ASSET");
+    cryptonote::transaction_type tx_type;
+    if (!cryptonote::get_tx_type(source_asset, destination_asset, tx_type)) throw bridge_failure("CONVERSION_PAIR");
+    using tt = cryptonote::transaction_type;
+    if (tx_type != tt::MINT_STABLE && tx_type != tt::REDEEM_STABLE && tx_type != tt::MINT_RESERVE && tx_type != tt::REDEEM_RESERVE && tx_type != tt::MINT_YIELD && tx_type != tt::REDEEM_YIELD) throw bridge_failure("CONVERSION_PAIR");
+    if (priority > 3) throw bridge_failure("TX_PRIORITY");
+    std::vector<std::string> destination_addresses = parse_destination_addresses(address, 1);
+    std::vector<uint64_t> destination_amounts = parse_destination_amounts(amount, 1);
+    if (destination_amounts[0] % 100000000 != 0) throw bridge_failure("AMOUNT_PRECISION"); // at most four decimals (wallet2)
+    std::vector<uint32_t> indices = parse_indices(subaddress_indices, 1000);
+    require_account(wallet, account_idx);
+    if (!indices.empty()) {
+      size_t count = subaddresses_of(wallet, account_idx).size();
+      for (uint32_t i : indices) if ((size_t) i >= count) throw bridge_failure("SUBADDRESS_NOT_FOUND");
+    }
+    check_destination_address(destination_addresses[0], wallet->get_network_type());
+    ZEPHYR_TS_TEST_THROW("error.conversion", address + " " + amount);
+    test_throw_build("conversion.core", address + " " + amount); // test module only: the core's typed and conversion failures
+    // a necessary condition from the core's own balance of the source asset in the selected outputs (no request)
+    uint64_t unlocked = 0, balance = 0;
+    if (indices.empty()) {
+      unlocked = wallet->get_unlocked_balance(source_asset, account_idx);
+      balance = wallet->get_balance(source_asset, account_idx);
+    } else {
+      for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(source_asset, account_idx, i); balance += wallet->get_balance(source_asset, account_idx, i); }
+    }
+    if (destination_amounts[0] > balance) throw bridge_failure("NOT_ENOUGH_MONEY");
+    if (destination_amounts[0] > unlocked) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
+    config.m_account_index = account_idx;
+    config.m_subaddress_indices = indices;
+    config.source_currency = source_asset;
+    config.destination_currency = destination_asset;
+    config.m_priority = (monero_tx_priority) priority;
+    config.m_can_split = false; // a conversion is one transaction (the core refuses to split one)
+    fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
+    std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
+    d->m_address = destination_addresses[0];
+    d->m_amount = destination_amounts[0];
+    d->m_asset_type = destination_asset;
+    config.m_destinations.push_back(d);
+    txs = wallet->create_txs(config);
+    test_barrier("conversion.after");
+    if (txs.size() != 1 || !txs[0]) throw bridge_failure("UNEXPECTED_RESULT");
+    const monero_tx_wallet& tx = *txs[0];
+    built_description b = describe_built_tx(tx, source_asset);
+    // the transaction's own fields against the request and against what the core reported for it
+    if (b.source_asset != source_asset || b.destination_asset != destination_asset) throw bridge_failure("UNEXPECTED_RESULT");
+    if (b.amount_burnt != destination_amounts[0] || b.amount != b.amount_burnt || b.amount_minted == 0 || b.pricing_record_height == 0) throw bridge_failure("UNEXPECTED_RESULT");
+    if (tx.m_incoming_transfers.size() != 1 || !tx.m_incoming_transfers[0] || !tx.m_incoming_transfers[0]->m_amount || tx.m_incoming_transfers[0]->m_asset_type != destination_asset
+        || *tx.m_incoming_transfers[0]->m_amount != b.amount_minted) throw bridge_failure("UNEXPECTED_RESULT");
+    if (b.amount_burnt + b.fee < b.amount_burnt) throw bridge_failure("UNEXPECTED_RESULT");
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    w.StartObject();
+    w.Key("tx");
+    w.StartObject();
+    w.Key("hash"); write_string(w, b.hash);
+    w.Key("sourceAsset"); write_string(w, b.source_asset);
+    w.Key("destinationAsset"); write_string(w, b.destination_asset);
+    w.Key("destination");
+    w.StartObject();
+    w.Key("address"); write_string(w, destination_addresses[0]);
+    w.Key("amount"); write_string(w, decimal(destination_amounts[0]));
+    w.EndObject();
+    w.Key("amountBurnt"); write_string(w, decimal(b.amount_burnt));
+    w.Key("amountMinted"); write_string(w, decimal(b.amount_minted));
+    w.Key("fee"); write_string(w, decimal(b.fee));
+    w.Key("feeAsset"); write_string(w, b.source_asset); // the chain books the fee in the source asset (tx_memory_pool: fee_asset_type)
+    w.Key("totalDebited"); write_string(w, decimal(b.amount_burnt + b.fee));
+    w.Key("change"); write_string(w, decimal(b.change));
+    w.Key("ringSize"); w.Uint((unsigned) b.ring_size);
+    w.Key("inputs"); w.Uint((unsigned) b.inputs);
+    w.Key("outputs"); w.Uint((unsigned) b.outputs);
+    w.Key("weight"); write_string(w, decimal(b.weight));
+    w.Key("unlockTime"); write_string(w, decimal(b.unlock_time));
+    w.Key("pricingRecordHeight"); write_string(w, decimal(b.pricing_record_height));
+    w.EndObject();
+    w.EndObject();
+    release_built(txs);
+    config.m_destinations.clear();
+    result = string(buffer.GetString(), buffer.GetSize());
+  } catch (...) {
+    const char* identifier = daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_CONVERSION));
     release_built(txs);
     config.m_destinations.clear();
     result = bridge_error(identifier);

@@ -18,6 +18,7 @@ import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBala
 import { ZephyrAccount, ZephyrAccountOptions, ZephyrAddressIndex, ZephyrSubaddress, accountOptions } from "../common/ZephyrAccounts";
 import { checkLabel, checkSubaddressIndices } from "../common/ZephyrLifecycleContract";
 import { ZephyrTransferBuild, ZephyrTransferConfig, checkTransferConfig } from "../common/ZephyrTransfer";
+import { ZephyrConversionBuild, ZephyrConversionConfig, checkConversionConfig } from "../common/ZephyrConversion";
 import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx, checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistory";
 
 
@@ -531,13 +532,30 @@ export class ZephyrWallet {
    * any request). The core then asks the daemon for heights and fork rules, the fee estimate and the
    * outputs it needs for the rings (no key image is sent). Full wallets with spend keys only: keys-only
    * wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_TX, view-only ones with VIEW_ONLY_TX. A conversion
-   * rejects with UNSUPPORTED_CAPABILITY/CONVERSION before dispatch.
+   * rejects with UNSUPPORTED_CAPABILITY/CONVERSION before dispatch (see buildConversion).
    */
   async buildTransfer(config: ZephyrTransferConfig): Promise<ZephyrTransferBuild> {
     const wallet = this.full("KEYS_ONLY_TX");
     const request = checkTransferConfig(config);
     if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
     return this.call("build", () => wallet.buildTransferChecked(request));
+  }
+
+  /**
+   * Build the one transaction of a conversion between two V2 assets, describe it and discard it
+   * (common/ZephyrConversion.ts). The pair is one of ZPH to ZSD, ZSD to ZPH, ZPH to ZRS, ZRS to ZPH, ZSD to
+   * ZYS and ZYS to ZSD; there is exactly one destination and its amount, in the source asset, has at most
+   * four decimals. Nothing is relayed and nothing is stored, as for buildTransfer. The core reads the pricing
+   * record of the wallet's top block, the circulating supply and the pricing record history from the daemon
+   * and refuses a pair the reserve ratio does not allow (TX_NOT_POSSIBLE/RESERVE_RATIO). The description
+   * carries the amount burnt and the amount minted as the built transaction states them, the fee (in the
+   * source asset) and the height of the pricing record the transaction refers to; no rate computed by the SDK.
+   */
+  async buildConversion(config: ZephyrConversionConfig): Promise<ZephyrConversionBuild> {
+    const wallet = this.full("KEYS_ONLY_TX");
+    const request = checkConversionConfig(config);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("build", () => wallet.buildConversionChecked(request));
   }
 
   // ----------------------- representative unsupported calls -----------------------

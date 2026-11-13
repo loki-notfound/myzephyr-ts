@@ -47,8 +47,10 @@
  * the pool appear after refreshPool, an explicit daemon request, until the next refresh.
  * Building transactions without relay: buildTransfer builds the transactions of a same-asset transfer,
  * describes them (hash, assets, amounts, fee and fee asset, change, ring size, inputs, outputs, weight)
- * and discards them inside the module.
- * Not supported: listeners, background sync, outputs, sending (relaying) transactions, conversions,
+ * and discards them inside the module. buildConversion builds the one transaction of a conversion between
+ * two V2 assets (the six pairs), describes it (hash, assets, amount burnt, amount minted as the transaction
+ * states it, fee and fee asset, change, counts, weight, pricing record height) and discards it.
+ * Not supported: listeners, background sync, outputs, sending (relaying) transactions or conversions,
  * key images, rescans.
  */
 export {
@@ -73,6 +75,7 @@ export type {
 export type { ZephyrAssetBalances, ZephyrAccountBalances } from "./common/ZephyrBalances";
 export type { ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions } from "./common/ZephyrAccounts";
 export type { ZephyrTransferConfig, ZephyrTransferDestinationInput, ZephyrTransferBuild, ZephyrBuiltTx, ZephyrTxPriority } from "./common/ZephyrTransfer";
+export type { ZephyrConversionConfig, ZephyrConversionDestinationInput, ZephyrConversionBuild } from "./common/ZephyrConversion";
 export type { ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination, ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "./common/ZephyrHistory";
 export { default as ZephyrWalletError } from "./common/ZephyrWalletError";
 export type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./common/ZephyrWalletError";

@@ -1034,6 +1034,9 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
   /** Fields of two single-transaction descriptions that differ (for the notes). */
   const differing = (a: F.ZephyrTransferBuild, b: F.ZephyrTransferBuild) => Object.keys(a.txs[0]).filter((k) => JSON.stringify((a.txs[0] as unknown as Record<string, unknown>)[k], (x, v) => (typeof v === "bigint" ? v.toString() : v)) !== JSON.stringify((b.txs[0] as unknown as Record<string, unknown>)[k], (x, v) => (typeof v === "bigint" ? v.toString() : v))).map((k) => k + " " + String((a.txs[0] as unknown as Record<string, unknown>)[k]) + "/" + String((b.txs[0] as unknown as Record<string, unknown>)[k]));
 
+  /** the bytes N22 holds after its builds (memory only): N24 continues from them with a short sync */
+  let fundedAfterBuilds: SeedWallet | undefined;
+
   await check("N22", "Funded builds without relay on a copy, through the allowlisting forwarder: one build per V2 asset to the wallet's own account 1, one from account 1 to the primary address, two destinations, a repeated build; the description is the core's (assets, fee in the source asset, change, ring size, inputs, outputs, weight); an amount above the balance rejects without a request; balances, history and wallet bytes unchanged; direct and proxied equal except the hash; no request refused and none relayed", async (notes) => {
     const funded = opts.funded;
     if (funded === undefined) throw new CheckNotRun("no funded wallet supplied (FUNDED_WALLET_IN and FUNDED_EXPECT)");
@@ -1095,6 +1098,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       // nothing persists
       const state1 = await walletState(w);
       const data1 = await w.getData();
+      fundedAfterBuilds = { keys: data1.keys, cache: data1.cache, password: funded.wallet.password };
       expect(state1 === state0, "balances, unlocked balances, accounts, history and height equal those before the builds");
       const keysEqual = bytesEqual(data0.keys, data1.keys), cacheEqual = bytesEqual(data0.cache, data1.cache);
       expect(!deterministic || (keysEqual && cacheEqual), "the wallet bytes equal those before the builds (getData is deterministic here)");
@@ -1147,6 +1151,247 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       notes.push("allocator growth of 5 builds after a warm-up of 2: " + deltas.join(","));
       report.measurements.N23 = { deltas };
       expect(deltas.every((d) => d === deltas[0]) && deltas[0] <= 0, "every build returns the allocator to its level (growth " + deltas.join(",") + ")");
+    } finally {
+      await w.close();
+    }
+  }, 1200000);
+
+  // ------------------------------------------------------------------ N24: funded conversions without relay (inputs from outside the public tree)
+  const COIN = BigInt("1000000000000");
+  type PricingRecord = { spot: bigint; moving_average: bigint; stable: bigint; stable_ma: bigint; reserve: bigint; reserve_ma: bigint; reserve_ratio: bigint; reserve_ratio_ma: bigint; yield_price: bigint };
+  const PR_FIELDS = ["spot", "moving_average", "stable", "stable_ma", "reserve", "reserve_ma", "reserve_ratio", "reserve_ratio_ma", "yield_price"] as const;
+  /** A JSON-RPC read through the forwarder's root (the same allowlist as the wallet's requests); numbers must be safe integers. */
+  async function forwarderRpc(method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const body = JSON.stringify({ jsonrpc: "2.0", id: "0", method, params: params ?? {} });
+    const text = await new Promise<string>((resolve, reject) => {
+      const req = http.request((t.root as string) + "/json_rpc", { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }, (res) => {
+        const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c)); res.on("end", () => (res.statusCode === 200 ? resolve(Buffer.concat(chunks).toString("utf8")) : reject(new CheckFailure(method + ": HTTP " + res.statusCode))));
+      });
+      req.on("error", reject); req.end(body);
+    });
+    const parsed = JSON.parse(text) as { result?: Record<string, unknown> };
+    if (parsed.result === undefined || parsed.result.status !== "OK") throw new CheckFailure(method + ": no OK result");
+    return parsed.result;
+  }
+  const prOf = (v: unknown): PricingRecord => {
+    const o = v as Record<string, unknown>;
+    const r: Record<string, bigint> = {};
+    for (const f of PR_FIELDS) { const x = o[f]; if (typeof x !== "number" || !Number.isSafeInteger(x) || x < 0) throw new CheckFailure("pricing record field " + f + " is not a safe integer"); r[f] = BigInt(x); }
+    return r as unknown as PricingRecord;
+  };
+  /** The pinned core's conversion amounts (zephyr 8c6a1202 cryptonote_tx_utils.cpp, hard fork 5 and later): the fee is taken from the rate. */
+  function convertedAmount(source: string, destination: string, amount: bigint, pr: PricingRecord): bigint {
+    const max = (a: bigint, b: bigint) => (a > b ? a : b), min = (a: bigint, b: bigint) => (a < b ? a : b);
+    const round = (x: bigint) => x - (x % BigInt(10000));
+    let rate: bigint;
+    if (source === "ZPH" && destination === "ZSD") { rate = (COIN * COIN) / max(pr.stable, pr.stable_ma); rate = round(rate - rate / BigInt(1000)); }      // zeph_to_zephusd: 0.1%
+    else if (source === "ZSD" && destination === "ZPH") { rate = min(pr.stable, pr.stable_ma); rate = round(rate - rate / BigInt(1000)); }                  // zephusd_to_zeph: 0.1%
+    else if (source === "ZPH" && destination === "ZRS") { rate = (COIN * COIN) / max(pr.reserve, pr.reserve_ma); rate = round(rate - rate / BigInt(100)); } // zeph_to_zephrsv: 1%
+    else if (source === "ZRS" && destination === "ZPH") { rate = min(pr.reserve, pr.reserve_ma); rate = round(rate - rate / BigInt(100)); }                 // zephrsv_to_zeph: 1%
+    else if (source === "ZSD" && destination === "ZYS") { rate = (COIN * COIN) / pr.yield_price; rate = round(rate - rate / BigInt(1000)); }                // zephusd_to_zyield: 0.1%
+    else if (source === "ZYS" && destination === "ZSD") { rate = pr.yield_price; rate = round(rate - rate / BigInt(1000)); }                                 // zyield_to_zephusd: 0.1%
+    else throw new CheckFailure("not a conversion pair");
+    return (amount * rate) / COIN;
+  }
+  /**
+   * Whether the pinned core's reserve rule allows a conversion (cryptonote::reserve_ratio_satisfied, hard fork 5 and later,
+   * with the tallies wallet2::create_transactions_2 passes), from the node's circulating supply, the pricing record the
+   * core uses and the pricing record history. Returns the outcome and the ratios after the conversion (atomic, 10^12 = 1.0).
+   */
+  function reserveRule(source: string, destination: string, amount: bigint, pr: PricingRecord, supply: Array<[string, bigint]>, history: bigint[]): { allowed: boolean; reason: string; spot?: bigint; ma?: bigint } {
+    if (PR_FIELDS.some((f) => pr[f] === BigInt(0))) return { allowed: false, reason: "pricing record missing rates" };
+    if ((source === "ZSD" && destination === "ZYS") || (source === "ZYS" && destination === "ZSD")) return { allowed: true, reason: "yield pairs are not ratio-gated" };
+    const first = (labels: string[]) => { const e = supply.find(([l]) => labels.includes(l)); return e === undefined ? BigInt(0) : e[1]; };
+    const zephReserve = first(["ZEPH", "DJED"]), stables = first(["ZEPHUSD", "ZSD"]), reserves = first(["ZEPHRSV", "ZRS"]);
+    const minted = convertedAmount(source, destination, amount, pr);
+    let tz = BigInt(0), ts = BigInt(0), tr = BigInt(0);
+    const type = source + ">" + destination;
+    if (type === "ZPH>ZSD") { tz = amount; ts = minted; } else if (type === "ZSD>ZPH") { ts = -amount; tz = -minted; } else if (type === "ZPH>ZRS") { tz = amount; tr = minted; } else if (type === "ZRS>ZPH") { tr = -amount; tz = -minted; }
+    if (zephReserve === BigInt(0)) return type === "ZPH>ZRS" ? { allowed: true, reason: "no ZPH in the reserve" } : { allowed: false, reason: "no ZPH in the reserve" };
+    const assets = zephReserve + tz, liabilities = stables + ts, totalReserves = reserves + tr;
+    if (assets < BigInt(0) || liabilities < BigInt(0) || totalReserves < BigInt(0)) return { allowed: false, reason: "negative after the conversion" };
+    if (assets === BigInt(0) && liabilities === BigInt(0)) return { allowed: false, reason: "assets and liabilities zero" };
+    const assetsSpot = assets * pr.spot;
+    if (assets !== BigInt(0) && assetsSpot === BigInt(0)) return { allowed: false, reason: "assets" };
+    let spot = BigInt(0), ma = BigInt(0); // the core's integer "infinity" for no liabilities is 0
+    if (liabilities !== BigInt(0)) {
+      spot = assetsSpot / liabilities;
+      if (history.length >= 719) { let sum = BigInt(0); for (let i = history.length - 1; i >= history.length - 719; i--) sum += history[i]; ma = (sum + spot) / BigInt(720); ma -= ma % BigInt(10000); }
+    }
+    const MIN = BigInt(4) * COIN, MAX = BigInt(8) * COIN;
+    if (type === "ZPH>ZSD") return spot < MIN || ma < MIN ? { allowed: false, reason: "below 4.0", spot, ma } : { allowed: true, reason: "at or above 4.0", spot, ma };
+    if (type === "ZSD>ZPH") return assets === BigInt(0) ? { allowed: false, reason: "assets zero", spot, ma } : { allowed: true, reason: "assets above zero", spot, ma };
+    if (type === "ZPH>ZRS") {
+      if (liabilities < BigInt(100) * COIN) return { allowed: true, reason: "fewer than 100 stablecoins", spot, ma };
+      return spot >= MAX || ma >= MAX ? { allowed: false, reason: "at or above 8.0", spot, ma } : { allowed: true, reason: "below 8.0", spot, ma };
+    }
+    return spot < MIN || ma < MIN ? { allowed: false, reason: "below 4.0", spot, ma } : { allowed: true, reason: "at or above 4.0", spot, ma };
+  }
+  /** The chain's state the core reads for a conversion built at the wallet's height h: pricing record of block h - 1, circulating supply, pricing record history. */
+  async function chainState(h: number): Promise<{ pr: PricingRecord; prHeight: number; supply: Array<[string, bigint]>; history: bigint[]; hf: number }> {
+    const header = (await forwarderRpc("getblockheaderbyheight", { height: h - 1 })).block_header as Record<string, unknown>;
+    const pr = prOf(header.pricing_record);
+    const supply = ((await forwarderRpc("get_circulating_supply")).supply_tally as Array<{ currency_label: string; amount: string }>).map((e): [string, bigint] => [e.currency_label, BigInt(e.amount)]);
+    const history = ((await forwarderRpc("get_pricing_record_history")).pricing_record_history as unknown[]).map((r) => prOf(r).reserve_ratio);
+    const hf = (await forwarderRpc("hard_fork_info")).version as number;
+    return { pr, prHeight: h - 1, supply, history, hf };
+  }
+  const ratioText = (x: bigint | undefined) => (x === undefined ? "-" : (Number(x / BigInt(1000000)) / 1e6).toFixed(6));
+  /** The ZPH equivalent of a fee in an asset, as the node values it (get_fee_in_zeph_equivalent). */
+  function feeInZph(asset: string, fee: bigint, pr: PricingRecord): bigint {
+    if (asset === "ZPH") return fee;
+    if (asset === "ZSD") return (fee * pr.stable_ma) / COIN;
+    if (asset === "ZRS") return (fee * pr.reserve_ma) / COIN;
+    return (((fee * pr.yield_price) / COIN) * pr.stable_ma) / COIN;
+  }
+  const withoutRandomConversion = (b: F.ZephyrConversionBuild) => JSON.stringify({ ...b, hash: "-", weight: "-", fee: "-", change: "-", totalDebited: "-", amountMinted: "-", pricingRecordHeight: "-", destination: { amount: b.destination.amount.toString() }, feePlusChange: (b.fee + b.change).toString() }, (k, x) => (typeof x === "bigint" ? x.toString() : x));
+
+  await check("N24", "Funded conversions without relay on a copy, through the allowlisting forwarder: each of the six V2 pairs, 0.1 of the source asset to the wallet's own primary address; the outcome (a description, or TX_NOT_POSSIBLE/RESERVE_RATIO) is the one the pinned reserve rule gives for the chain's state read from the node; the minted amount equals the core's formula with the pricing record the transaction names; the fee is in the source asset; balances, history and wallet bytes unchanged; direct and proxied give the same outcomes; no request refused and none relayed", async (notes) => {
+    const funded = opts.funded;
+    if (funded === undefined) throw new CheckNotRun("no funded wallet supplied (FUNDED_WALLET_IN and FUNDED_EXPECT)");
+    if (t.base === undefined || t.root === undefined) throw new CheckFailure("no target");
+    const start = fundedAfterBuilds ?? funded.wallet;
+    const amount = BigInt("100000000000"); // 0.1 of the source asset, at most 1 unit, four decimals
+    const w = await F.openWalletData({ networkType: 0, password: start.password, keysData: new Uint8Array(start.keys), cacheData: new Uint8Array(start.cache), server: t.base, proxyToWorker: false });
+    const relayBefore = (HttpClient as unknown as { REFUSED_RELAY_REQUESTS: number }).REFUSED_RELAY_REQUESTS;
+    try {
+      expect((await w.isConnectedToDaemon()) === true, "connected through the forwarder");
+      const dh0 = await w.getDaemonHeight();
+      const h0 = await w.getHeight();
+      expect(dh0 - h0 <= FRESH_SYNC_BLOCKS, "the copy starts within the sync window");
+      await sync("N24", w, "funded copy for conversions, forwarder base path", "real", undefined, dh0 - h0);
+      const primary = await w.getPrimaryAddress();
+      const state0 = await walletState(w);
+      const data0 = await w.getData();
+      const results: Record<string, unknown> = {};
+      const direct: Record<string, F.ZephyrConversionBuild | string> = {};
+      for (const [source, destination] of [["ZPH", "ZSD"], ["ZSD", "ZPH"], ["ZPH", "ZRS"], ["ZRS", "ZPH"], ["ZSD", "ZYS"], ["ZYS", "ZSD"]]) {
+        const name = source + " to " + destination;
+        const h = await w.getHeight();
+        const before = await chainState(h);
+        expect(before.hf >= 5, "hard fork 5 or later (the integer reserve rule and the conversion fees of the pinned core)");
+        const rule = reserveRule(source, destination, amount, before.pr, before.supply, before.history);
+        const cfg: F.ZephyrConversionConfig = { sourceAsset: source, destinationAsset: destination, destination: { address: primary, amount }, accountIndex: 0 };
+        const r0 = await forwarderRoutes();
+        const t0 = Date.now();
+        let outcome: F.ZephyrConversionBuild | string;
+        try { outcome = await w.buildConversion(cfg); } catch (err) { outcome = codeOf(err) + diagnosticOf(err); }
+        const ms = Date.now() - t0;
+        const r1 = await forwarderRoutes();
+        const requests: Record<string, number> = {};
+        for (const k of Object.keys(r1.routes)) if (r1.routes[k] !== (r0.routes[k] ?? 0)) requests[k] = r1.routes[k] - (r0.routes[k] ?? 0);
+        expect(r1.denied === r0.denied, name + ": no request refused by the forwarder");
+        const after = await chainState(await w.getHeight());
+        const ruleAfter = reserveRule(source, destination, amount, after.pr, after.supply, after.history);
+        expect(ruleAfter.allowed === rule.allowed, name + ": the reserve rule gives the same outcome before and after the build (no boundary crossed)");
+        const row: Record<string, unknown> = { derived: rule.allowed ? "builds" : "refused", reason: rule.reason, ratioSpotAfter: ratioText(rule.spot), ratioMaAfter: ratioText(rule.ma), prHeightUsed: before.prHeight, requests, ms };
+        if (typeof outcome === "string") {
+          row.outcome = outcome;
+          expect(!rule.allowed && outcome === "TX_NOT_POSSIBLE/RESERVE_RATIO", name + ": refused with TX_NOT_POSSIBLE/RESERVE_RATIO exactly when the rule refuses (got " + outcome + ", rule " + (rule.allowed ? "allows" : "refuses") + ")");
+        } else {
+          const b = outcome;
+          row.outcome = "built";
+          expect(rule.allowed, name + ": built although the rule refuses");
+          expect(b.sourceAsset === source && b.destinationAsset === destination && b.feeAsset === source, name + ": assets and fee asset");
+          expect(b.destination.address === primary && b.destination.amount === amount && b.amountBurnt === amount, name + ": the destination and the burnt amount");
+          expect(b.totalDebited === amount + b.fee && b.fee > BigInt(0) && b.amountMinted > BigInt(0), name + ": fee, total, minted");
+          // four outputs: the destination, the change, and the two zero outputs the core adds to every conversion (one per
+          // asset, wallet2::transfer_selected_rct) so that the burnt amount's proof and the minted output are not singled out
+          expect(b.ringSize === 16 && b.inputs >= 1 && b.outputs === 4 && b.unlockTime === BigInt(0) && b.weight > 0, name + ": ring size 16, inputs, four outputs, unlock time (got ring " + b.ringSize + ", inputs " + b.inputs + ", outputs " + b.outputs + ")");
+          // the minted amount against the pinned formula with the pricing record of the height the transaction names
+          const named = prOf(((await forwarderRpc("getblockheaderbyheight", { height: b.pricingRecordHeight })).block_header as Record<string, unknown>).pricing_record);
+          const expected = convertedAmount(source, destination, amount, named);
+          expect(b.pricingRecordHeight === before.prHeight || b.pricingRecordHeight === after.prHeight, name + ": the transaction names the pricing record of the wallet's top block");
+          expect(b.amountMinted === expected, name + ": minted " + b.amountMinted + " equals the recomputation " + expected);
+          const zph = feeInZph(source, b.fee, named);
+          row.description = { hash: b.hash, amountBurnt: b.amountBurnt.toString(), amountMinted: b.amountMinted.toString(), recomputed: expected.toString(), fee: b.fee.toString(), feeAsset: b.feeAsset,
+            feeZphEquivalent: zph.toString(), feeZphPerWeight: Number(zph) / b.weight, totalDebited: b.totalDebited.toString(), change: b.change.toString(), ringSize: b.ringSize, inputs: b.inputs, outputs: b.outputs,
+            weight: b.weight, unlockTime: b.unlockTime.toString(), pricingRecordHeight: b.pricingRecordHeight, rate: PR_FIELDS.reduce((o, f) => ({ ...o, [f]: named[f].toString() }), {}) };
+          expect(Number(zph) / b.weight > 50000 && Number(zph) / b.weight < 1000000, name + ": the fee's ZPH equivalent per weight is close to the same-asset fee's magnitude");
+        }
+        direct[name] = outcome;
+        results[name] = row;
+      }
+      const derived = Object.values(results).map((r) => (r as { derived: string }).derived);
+      notes.push("outcomes: " + Object.entries(results).map(([k, v]) => k + " " + (v as { outcome: string }).outcome).join(", "));
+      expect(derived.includes("builds"), "at least one pair builds at this chain state (positive control)");
+      // nothing persists
+      const state1 = await walletState(w);
+      const data1 = await w.getData();
+      expect(state1 === state0, "balances, unlocked balances, accounts, history and height equal those before the conversions");
+      expect(data0.cache.length === data1.cache.length, "the cache bytes have the same length before and after the conversions");
+      const reopened: string[] = [];
+      for (const d of [data0, data1]) {
+        const o = await F.openWalletData({ networkType: 0, password: start.password, keysData: new Uint8Array(d.keys), cacheData: new Uint8Array(d.cache), proxyToWorker: false });
+        try { reopened.push(await walletState(o)); } finally { await o.close(); }
+      }
+      expect(reopened[0] === state0 && reopened[1] === state0, "the bytes before and after the conversions reopen to the same state");
+      // direct and proxied: the same six pairs in a worker from the same synced bytes
+      const p = await F.openWalletData({ networkType: 0, password: start.password, keysData: new Uint8Array(data0.keys), cacheData: new Uint8Array(data0.cache), server: t.base, proxyToWorker: true });
+      const proxied: Record<string, string> = {};
+      try {
+        for (const name of Object.keys(direct)) {
+          const [source, destination] = name.split(" to ");
+          let o: F.ZephyrConversionBuild | string;
+          try { o = await p.buildConversion({ sourceAsset: source, destinationAsset: destination, destination: { address: primary, amount }, accountIndex: 0 }); } catch (err) { o = codeOf(err) + diagnosticOf(err); }
+          const d = direct[name];
+          if (typeof o === "string" || typeof d === "string") {
+            proxied[name] = typeof o === "string" ? o : "built";
+            expect(o === d, "proxied " + name + ": the same outcome as direct");
+          } else {
+            const named = prOf(((await forwarderRpc("getblockheaderbyheight", { height: o.pricingRecordHeight })).block_header as Record<string, unknown>).pricing_record);
+            expect(o.amountMinted === convertedAmount(source, destination, amount, named), "proxied " + name + ": minted equals the recomputation");
+            expect(withoutRandomConversion(o) === withoutRandomConversion(d), "proxied " + name + ": the description equals the direct one except the fields random by nature and the pricing record's");
+            proxied[name] = "built" + (o.pricingRecordHeight === d.pricingRecordHeight && o.amountMinted === d.amountMinted ? ", same minted amount" : ", other pricing record height");
+          }
+        }
+      } finally { await p.close(); }
+      const relayAfter = (HttpClient as unknown as { REFUSED_RELAY_REQUESTS: number }).REFUSED_RELAY_REQUESTS;
+      expect(relayAfter === relayBefore, "no relay request was attempted in this context");
+      report.measurements.N24 = { amount: amount.toString(), conversions: results, proxied, reopenedEqual: reopened[0] === state0 && reopened[1] === state0, relayRefused: relayAfter - relayBefore };
+    } finally {
+      await w.close();
+    }
+  }, 1800000);
+
+  await check("N25", "Funded conversions in the test module: after a warm-up the allocator returns to the same level after every built conversion (the built transaction and its bytes are released inside the module); every conversion the reserve rule refuses changes it by the same amount, which is reported", async (notes) => {
+    const synced = opts.fundedSynced;
+    if (synced === undefined) throw new CheckNotRun("no synced funded copy supplied (a run with the test module after N22)");
+    if (t.base === undefined || t.root === undefined) throw new CheckFailure("no target");
+    const module = LibraryUtils.getWasmModule() as { test_heap_in_use?: () => number } | undefined;
+    if (module === undefined || typeof module.test_heap_in_use !== "function") throw new CheckFailure("not the test module");
+    const w = await F.openWalletData({ networkType: 0, password: synced.password, keysData: new Uint8Array(synced.keys), cacheData: new Uint8Array(synced.cache), server: t.base, proxyToWorker: false });
+    try {
+      const primary = await w.getPrimaryAddress();
+      const amount = BigInt("100000000000");
+      // one pair the chain lets build and one it refuses, as the pinned rule derives them now (no sync: the wallet's own height)
+      const state = await chainState(await w.getHeight());
+      const pairs: Array<[string, string]> = [["ZPH", "ZRS"], ["ZSD", "ZPH"], ["ZSD", "ZYS"], ["ZYS", "ZSD"], ["ZPH", "ZSD"], ["ZRS", "ZPH"]];
+      const builds = pairs.find(([a, b]) => reserveRule(a, b, amount, state.pr, state.supply, state.history).allowed);
+      const refused = pairs.find(([a, b]) => !reserveRule(a, b, amount, state.pr, state.supply, state.history).allowed);
+      if (builds === undefined) throw new CheckFailure("no pair builds at this chain state");
+      const heap = () => (module.test_heap_in_use as () => number)();
+      const attempt = async (pair: [string, string]) => {
+        try { await w.buildConversion({ sourceAsset: pair[0], destinationAsset: pair[1], destination: { address: primary, amount }, accountIndex: 0 }); return "built"; } catch (err) { return codeOf(err) + diagnosticOf(err); }
+      };
+      const measure = async (pair: [string, string], want: string) => {
+        for (let i = 0; i < 2; i++) expect((await attempt(pair)) === want, pair.join(" to ") + ": warm-up outcome " + want);
+        const deltas: number[] = [];
+        for (let i = 0; i < 5; i++) { const h0 = heap(); const o = await attempt(pair); deltas.push(heap() - h0); expect(o === want, pair.join(" to ") + ": outcome " + want); }
+        return deltas;
+      };
+      const built = await measure(builds, "built");
+      notes.push("allocator growth of 5 built conversions " + builds.join(" to ") + " after a warm-up of 2: " + built.join(","));
+      let refusedDeltas: number[] | undefined;
+      if (refused !== undefined) {
+        refusedDeltas = await measure(refused, "TX_NOT_POSSIBLE/RESERVE_RATIO");
+        notes.push("allocator growth of 5 refused conversions " + refused.join(" to ") + " after a warm-up of 2: " + refusedDeltas.join(","));
+      } else notes.push("no pair is refused at this chain state");
+      report.measurements.N25 = { built: { pair: builds.join(" to "), deltas: built }, refused: refused === undefined ? null : { pair: refused.join(" to "), deltas: refusedDeltas } };
+      expect(built.every((d) => d === built[0]) && built[0] <= 0, "every built conversion returns the allocator to its level (growth " + built.join(",") + ")");
+      // a refusal is a typed core exception (wallet_internal_error): measured and reported; each refusal must cost the same
+      // (no accumulation beyond one failure's own amount; see the round's evidence on typed core exceptions)
+      if (refusedDeltas !== undefined) expect(refusedDeltas.every((d) => d === refusedDeltas![0]) && refusedDeltas[0] <= 512, "every refused conversion changes the allocator by the same amount (growth " + refusedDeltas.join(",") + ")");
     } finally {
       await w.close();
     }
