@@ -26,6 +26,7 @@ import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccoun
 import { checkSelection, toTxDto } from "./ZephyrHistory";
 import { checkTransferRequest, toBuildDto } from "./ZephyrTransfer";
 import { checkConversionRequest, toConversionDto } from "./ZephyrConversion";
+import { checkRelayToken, toPreparedConversionDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelay";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
@@ -202,6 +203,14 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   // build, describe and discard the one transaction of a conversion: the request was validated by the table and is checked again
   buildConversion: async (walletId: string, sourceAsset: string, destinationAsset: string, address: string, amount: string, accountIdx: number, indices: number[], priority: number) =>
     toConversionDto(await walletOf(walletId).buildConversionChecked(checkConversionRequest(sourceAsset, destinationAsset, address, amount, accountIdx, indices, priority))),
+  // prepare (build and keep in the wallet's one slot), relay exactly what was prepared, discard it: requests validated by
+  // the table and checked again; the replies are strict DTOs without any byte of a kept transaction
+  prepareTransfer: async (walletId: string, asset: string, addresses: string[], amounts: string[], accountIdx: number, indices: number[], priority: number) =>
+    toPreparedTransferDto(await walletOf(walletId).prepareTransferChecked(checkTransferRequest(asset, addresses, amounts, accountIdx, indices, priority))),
+  prepareConversion: async (walletId: string, sourceAsset: string, destinationAsset: string, address: string, amount: string, accountIdx: number, indices: number[], priority: number) =>
+    toPreparedConversionDto(await walletOf(walletId).prepareConversionChecked(checkConversionRequest(sourceAsset, destinationAsset, address, amount, accountIdx, indices, priority))),
+  relayPrepared: async (walletId: string, token: string) => toRelayDto(await walletOf(walletId).relayPreparedChecked(checkRelayToken(token))),
+  discardPrepared: async (walletId: string, token: string) => await walletOf(walletId).discardPreparedChecked(checkRelayToken(token)),
   isClosed: async (walletId: string) => walletOf(walletId).isClosed(),
   prepareClose: async (walletId: string) => walletOf(walletId).prepareClose(),
   close: async (walletId: string) => {

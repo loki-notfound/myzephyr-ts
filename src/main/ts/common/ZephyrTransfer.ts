@@ -195,7 +195,7 @@ export function countOf(value: unknown, max: number, bad: Bad): number {
 const TX_KEYS = ["hash", "sourceAsset", "destinationAsset", "amount", "fee", "feeAsset", "totalDebited", "change", "ringSize", "inputs", "outputs", "weight", "unlockTime"];
 
 /** The build's wire shape (the bridge's JSON and the worker DTO): {"txs":[...]}, uint64 values as decimal text. */
-function buildFromFields(value: unknown, request: ZephyrTransferRequest, bad: Bad): ZephyrTransferBuild {
+export function buildFromFields(value: unknown, request: ZephyrTransferRequest, bad: Bad): ZephyrTransferBuild {
   const f = fields(value, ["txs"], [], bad);
   if (!Array.isArray(f.txs) || f.txs.length === 0 || f.txs.length > MAX_BUILT_TXS) bad();
   const list = f.txs as unknown[];

@@ -1,11 +1,15 @@
 #include <emscripten.h>
 #include <emscripten/fetch.h>
 #include <iostream>
+#include <algorithm>
+#include <cctype>
 #include "http_client_wasm.h"
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include "string_tools.h"
 #include "misc_log_ex.h"
+#include "cryptonote_basic/cryptonote_format_utils.h"
+#include "rapidjson/document.h"
 
 using namespace std;
 
@@ -14,7 +18,7 @@ using namespace std;
 // failed request reports only {"error":"transport"}: no error text, URI, header or body of a
 // failed request is copied into the module. A response reports its status code, headers and body
 // for the core to parse; the status text supplied by the server is not copied.
-EM_JS(const char*, js_send_json_request, (int client, const char* uri, const char* username, const char* password, const char* proxy_uri, const char* reject_unauthorized_fn_id, const char* method, const char* body, int timeout_ms), {
+EM_JS(const char*, js_send_json_request, (int client, const char* uri, const char* username, const char* password, const char* proxy_uri, const char* reject_unauthorized_fn_id, const char* method, const char* body, int timeout_ms, const char* relay_scope), {
   const HttpClient = this.HttpClient;
   const LibraryUtils = this.LibraryUtils;
 
@@ -36,7 +40,16 @@ EM_JS(const char*, js_send_json_request, (int client, const char* uri, const cha
       Module.stringToUTF8(str, ptr, lengthBytes);
       wakeUp(ptr);
     };
-    const timer = setTimeout(function() { cancellation.cancel(); finish(JSON.stringify({error: "transport"})); }, timeout_ms);
+    // a failed request reports its stage: "refused" (the SDK's transport refused it before sending: its error is a
+    // ZephyrWalletError), "connection" (the connection was refused, so nothing was sent: the cause's fixed code
+    // ECONNREFUSED in Node.js) or "sent" (anything else, including a timeout: an answer may have been lost). Only the
+    // error's name and its cause's code are compared; no text of the error is read
+    const stageOf = function(err) {
+      if (err && err.name === "ZephyrWalletError") return "refused";
+      if (err && err.cause && err.cause.code === "ECONNREFUSED") return "connection";
+      return "sent";
+    };
+    const timer = setTimeout(function() { cancellation.cancel(); finish(JSON.stringify({error: "transport", stage: "sent"})); }, timeout_ms);
 
     // make request and process response or error
     let request;
@@ -48,6 +61,7 @@ EM_JS(const char*, js_send_json_request, (int client, const char* uri, const cha
         password: UTF8ToString(password),
         body: UTF8ToString(body),
         proxyUri: UTF8ToString(proxy_uri) || undefined,
+        relayScope: UTF8ToString(relay_scope) || undefined,
         cancelToken: cancellation.token,
         resolveWithFullResponse: true,
         rejectUnauthorized: LibraryUtils.isRejectUnauthorized(UTF8ToString(reject_unauthorized_fn_id)),
@@ -58,7 +72,7 @@ EM_JS(const char*, js_send_json_request, (int client, const char* uri, const cha
     request.then(resp => {
       finish(JSON.stringify({code: resp.statusCode, message: "", body: typeof resp.body === "string" ? resp.body : "", headers: resp.headers || {}}));
     }).catch(err => {
-      finish(JSON.stringify({error: "transport"})); // the error and its text are not read
+      finish(JSON.stringify({error: "transport", stage: stageOf(err)})); // the error's text is not read
     });
   });
 });
@@ -125,6 +139,18 @@ EM_JS(void, js_cancel_http_request, (int client), {
     Module.httpRequestCancels[client]("Wallet is closing");
   }
 });
+
+// the JavaScript transport's scope for one permitted submit request (HttpClient.openRelayScope, closeRelayScope):
+// opened and closed by the bridge's relay_prepared around its one call of the core's commit, from inside the module
+EM_JS(void, js_relay_scope, (const char* scope, const char* uri, int count), {
+  const HttpClient = this.HttpClient;
+  if (count > 0) HttpClient.openRelayScope(UTF8ToString(scope), UTF8ToString(uri), count);
+  else HttpClient.closeRelayScope(UTF8ToString(scope));
+});
+
+void epee::net_utils::http::http_client_wasm_relay_scope(const std::string& scope, const std::string& uri, int count) {
+  js_relay_scope(scope.c_str(), uri.c_str(), count);
+}
 
 // Request bound: the core's timeout for the call, at least 1 s, and at most 30 s for
 // a JSON request or 120 s for a binary request (blocks and hashes; up to 1,000 blocks per answer).
@@ -215,7 +241,86 @@ void build_http_header_info(const boost::property_tree::ptree& headers_node, htt
   }
 }
 
-bool http_client_wasm::invoke_json(const boost::string_ref path, const boost::string_ref method, const boost::string_ref body, std::chrono::milliseconds timeout, const http_response_info** ppresponse_info, const fields_list& additional_params) {
+// ---- the one way a submit request passes (see http_client_wasm_relay) ----
+
+#if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)
+// test module only: records which check decided about a submit request ("relay-permit:<what>" in the test hooks'
+// events: none, method, shape, parse, hash, passed), so that the tests can name the reason of a refusal
+EM_JS(void, zephyr_ts_test_relay_permit, (const char* what), {
+  var h = Module["__zephyrTsTestHooks"];
+  if (!h) return;
+  if (!h.events) h.events = [];
+  h.events.push("relay-permit:" + UTF8ToString(what));
+});
+#define RELAY_PERMIT_EVENT(what) zephyr_ts_test_relay_permit(what)
+#else
+#define RELAY_PERMIT_EVENT(what) ((void) 0)
+#endif
+
+// the daemon's submit endpoints: the core's commit sends /sendrawtransaction; /send_raw_transaction is its alias
+static bool is_submit_path(const string& path) {
+  string p = path;
+  std::transform(p.begin(), p.end(), p.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+  return p == "/sendrawtransaction" || p == "/send_raw_transaction";
+}
+
+// The scope id that lets this submit request pass, or "" (the JavaScript transport then refuses and counts it): only
+// while the bridge's permit is armed with requests left, only POST /sendrawtransaction, only a body of exactly the
+// core's shape ({"client":"","tx_as_hex":<hex>}; do_not_relay false and do_sanity_checks true only as the defaults
+// they are) whose transaction parses and hashes to the permit's expected hash. A passed request uses the permit up. The transaction's bytes are
+// parsed here and wiped; nothing of them is kept or reported.
+static string relay_scope_for(http_client_wasm_route& route, const string& path, const string& method, const boost::string_ref body) {
+  http_client_wasm_relay& relay = route.relay;
+  if (relay.remaining <= 0 || relay.expected_hash.empty() || relay.scope.empty()) { RELAY_PERMIT_EVENT("none"); return string(); }
+  if (path != "/sendrawtransaction" || method != "POST") { RELAY_PERMIT_EVENT("method"); return string(); }
+  string text(body.data(), body.size());
+  rapidjson::Document doc;
+  doc.ParseInsitu(&text[0]); // string values stay in text, which is wiped below
+  // the core's commit stores the request with epee's KV_SERIALIZE_OPT, which leaves out a field equal to its default:
+  // do_not_relay (false) and do_sanity_checks (true) are not sent, and the daemon applies the same defaults. Either may
+  // appear only with its default value; no other field may appear
+  bool shape = !doc.HasParseError() && doc.IsObject() && doc.MemberCount() >= 2 && doc.MemberCount() <= 4
+    && doc.HasMember("client") && doc["client"].IsString() && doc["client"].GetStringLength() == 0
+    && doc.HasMember("tx_as_hex") && doc["tx_as_hex"].IsString()
+    && (!doc.HasMember("do_not_relay") || (doc["do_not_relay"].IsBool() && !doc["do_not_relay"].GetBool()))
+    && (!doc.HasMember("do_sanity_checks") || (doc["do_sanity_checks"].IsBool() && doc["do_sanity_checks"].GetBool()))
+    && doc.MemberCount() == 2u + (doc.HasMember("do_not_relay") ? 1u : 0u) + (doc.HasMember("do_sanity_checks") ? 1u : 0u);
+  cryptonote::blobdata blob;
+  bool parsed = shape && epee::string_tools::parse_hexstr_to_binbuff(boost::string_ref(doc["tx_as_hex"].GetString(), doc["tx_as_hex"].GetStringLength()), blob);
+  std::fill(text.begin(), text.end(), '\0');
+  if (!shape) { RELAY_PERMIT_EVENT("shape"); return string(); }
+  cryptonote::transaction tx;
+  crypto::hash hash;
+  bool ok = parsed && cryptonote::parse_and_validate_tx_from_blob(blob, tx, hash);
+  std::fill(blob.begin(), blob.end(), '\0');
+  if (!ok) { RELAY_PERMIT_EVENT("parse"); return string(); }
+  if (epee::string_tools::pod_to_hex(hash) != relay.expected_hash) { RELAY_PERMIT_EVENT("hash"); return string(); }
+  RELAY_PERMIT_EVENT("passed");
+  relay.remaining--;
+  return relay.scope;
+}
+
+// the class of the daemon's answer to the passed submit request: its HTTP status, then (status 200) its status compared
+// with the core's constants and its boolean flags; the reason text and every other field are not read
+static void record_relay_answer(http_client_wasm_route& route, int code, const string& body) {
+  http_client_wasm_relay& relay = route.relay;
+  relay.stage = RELAY_STAGE_ANSWERED;
+  relay.http_status = code;
+  relay.status = RELAY_STATUS_NONE;
+  relay.flags = 0;
+  if (code != 200) return;
+  rapidjson::Document doc;
+  doc.Parse(body.c_str());
+  if (doc.HasParseError() || !doc.IsObject() || !doc.HasMember("status") || !doc["status"].IsString() || doc["status"].GetStringLength() == 0) { relay.status = RELAY_STATUS_UNREADABLE; return; }
+  string status(doc["status"].GetString(), doc["status"].GetStringLength());
+  relay.status = status == "OK" ? RELAY_STATUS_OK : status == "BUSY" ? RELAY_STATUS_BUSY : status == "Failed" ? RELAY_STATUS_FAILED : RELAY_STATUS_OTHER;
+  const std::pair<const char*, unsigned> FLAGS[] = {{"low_mixin", RELAY_FLAG_LOW_MIXIN}, {"double_spend", RELAY_FLAG_DOUBLE_SPEND}, {"invalid_input", RELAY_FLAG_INVALID_INPUT},
+    {"invalid_output", RELAY_FLAG_INVALID_OUTPUT}, {"too_big", RELAY_FLAG_TOO_BIG}, {"overspend", RELAY_FLAG_OVERSPEND}, {"fee_too_low", RELAY_FLAG_FEE_TOO_LOW},
+    {"too_few_outputs", RELAY_FLAG_TOO_FEW_OUTPUTS}, {"tx_extra_too_big", RELAY_FLAG_TX_EXTRA_TOO_BIG}, {"sanity_check_failed", RELAY_FLAG_SANITY_CHECK_FAILED}, {"not_relayed", RELAY_FLAG_NOT_RELAYED}};
+  for (const auto& f : FLAGS) if (doc.HasMember(f.first) && doc[f.first].IsBool() && doc[f.first].GetBool()) relay.flags |= f.second;
+}
+
+bool http_client_wasm::invoke_json(const boost::string_ref path, const boost::string_ref method, const boost::string_ref body, std::chrono::milliseconds timeout, const http_response_info** ppresponse_info, const fields_list& additional_params, bool submit, const std::string& relay_scope) {
 
   // make json request through javascript
   string uri = request_uri(path);
@@ -224,8 +329,9 @@ bool http_client_wasm::invoke_json(const boost::string_ref path, const boost::st
   string method_str(method.data(), method.size());
   string body_str(body.data(), body.size());
   m_route->last_failure = 1;
-  const char* resp_str = js_send_json_request((int) this, uri.c_str(), username.c_str(), password.c_str(), m_proxy_uri.c_str(), m_reject_unauthorized_fn_id.c_str(), method_str.c_str(), body_str.c_str(), effective_timeout_ms(timeout, false));
-  if (resp_str == nullptr) return false;
+  const char* resp_str = js_send_json_request((int) this, uri.c_str(), username.c_str(), password.c_str(), m_proxy_uri.c_str(), m_reject_unauthorized_fn_id.c_str(), method_str.c_str(), body_str.c_str(), effective_timeout_ms(timeout, false), relay_scope.c_str());
+  std::fill(body_str.begin(), body_str.end(), '\0'); // a submit request's body is the transaction; nothing of it is kept
+  if (resp_str == nullptr) { if (submit) m_route->relay.stage = RELAY_STAGE_NO_ANSWER; return false; }
 
   // deserialize response to property tree
   std::istringstream iss = std::istringstream(std::string(resp_str));
@@ -235,7 +341,13 @@ bool http_client_wasm::invoke_json(const boost::string_ref path, const boost::st
 
   // check for error
   boost::optional<boost::property_tree::ptree&> error = resp_node.get_child_optional("error");
-  if (error) return false;
+  if (error) {
+    if (submit) {
+      string stage = resp_node.get<string>("stage", "sent");
+      m_route->relay.stage = stage == "refused" ? RELAY_STAGE_REFUSED : stage == "connection" ? RELAY_STAGE_NOT_SENT : RELAY_STAGE_NO_ANSWER;
+    }
+    return false;
+  }
 
   // build response object
   m_response_info.clear();
@@ -247,6 +359,7 @@ bool http_client_wasm::invoke_json(const boost::string_ref path, const boost::st
   m_response_info.m_http_ver_lo = 0;
   build_http_header_info(resp_node.get_child("headers"), m_response_info.m_header_info);
   m_response_info.m_body = resp_node.get<string>("body");
+  if (submit) record_relay_answer(*m_route, m_response_info.m_response_code, m_response_info.m_body);
 
   // set response argument
   if (ppresponse_info && m_response_info.m_response_code != 401) {
@@ -328,7 +441,18 @@ bool http_client_wasm::invoke(const boost::string_ref path, const boost::string_
   string path_str(path.data(), path.size());
   bool is_binary = path_str.size() >= 4 && 0 == path_str.compare(path_str.size() - 4, 4, string(".bin"));
   if (is_binary) return invoke_binary(path, method, body, timeout, ppresponse_info, additional_params);
-  else return invoke_json(path, method, body, timeout, ppresponse_info, additional_params);
+  // a submit request passes only under the bridge's permit (relay_scope_for); without a scope id the JavaScript
+  // transport refuses and counts it. Its record starts as "refused" and is updated by what the transport reports
+  bool submit = is_submit_path(path_str);
+  string relay_scope;
+  if (submit) {
+    m_route->relay.stage = RELAY_STAGE_REFUSED;
+    m_route->relay.http_status = 0;
+    m_route->relay.status = RELAY_STATUS_NONE;
+    m_route->relay.flags = 0;
+    relay_scope = relay_scope_for(*m_route, path_str, string(method.data(), method.size()), body);
+  }
+  return invoke_json(path, method, body, timeout, ppresponse_info, additional_params, submit, relay_scope);
 }
 
 bool http_client_wasm::invoke_get(const boost::string_ref path, std::chrono::milliseconds timeout, const std::string& body, const http_response_info** ppresponse_info, const fields_list& additional_params) {

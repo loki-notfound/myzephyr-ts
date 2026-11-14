@@ -50,8 +50,10 @@
  * and discards them inside the module. buildConversion builds the one transaction of a conversion between
  * two V2 assets (the six pairs), describes it (hash, assets, amount burnt, amount minted as the transaction
  * states it, fee and fee asset, change, counts, weight, pricing record height) and discards it.
- * Not supported: listeners, background sync, outputs, sending (relaying) transactions or conversions,
- * key images, rescans.
+ * Relaying in two explicit steps: prepareTransfer and prepareConversion build and describe as the build
+ * calls do, but keep the built transactions inside the module under an opaque token (one slot per wallet);
+ * relayPrepared(token) relays exactly what was described, and discardPrepared(token) voids it.
+ * Not supported: listeners, background sync, outputs, sweeps, key images, rescans.
  */
 export {
   ZephyrWallet,
@@ -76,6 +78,7 @@ export type { ZephyrAssetBalances, ZephyrAccountBalances } from "./common/Zephyr
 export type { ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions } from "./common/ZephyrAccounts";
 export type { ZephyrTransferConfig, ZephyrTransferDestinationInput, ZephyrTransferBuild, ZephyrBuiltTx, ZephyrTxPriority } from "./common/ZephyrTransfer";
 export type { ZephyrConversionConfig, ZephyrConversionDestinationInput, ZephyrConversionBuild } from "./common/ZephyrConversion";
+export type { ZephyrPreparedTransfer, ZephyrPreparedConversion, ZephyrRelayResult, ZephyrRelayedTx, ZephyrRelayOutcome } from "./common/ZephyrRelay";
 export type { ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination, ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "./common/ZephyrHistory";
 export { default as ZephyrWalletError } from "./common/ZephyrWalletError";
 export type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./common/ZephyrWalletError";

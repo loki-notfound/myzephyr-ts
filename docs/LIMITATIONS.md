@@ -137,14 +137,13 @@ that wallet's worker.
 ## Building transactions without relay
 
 * `buildTransfer` builds and signs inside the module and discards the result; it cannot relay. The
-  bridge fixes the core's relay flag to `false`, no binding can submit or relay, and the transport
-  refuses the daemon's submit and relay requests (`/sendrawtransaction`, `/send_raw_transaction`,
-  JSON-RPC `relay_tx`, `submit_block`) before sending, also if the core itself tried. The core's commit
-  code is still linked into the module (it is part of the wrapper's build function); it is not
-  reachable from any binding of this version. The public build and the tests check all of this.
-* Same-asset transfers in the four V2 assets only. Conversions, sweeps, integrated addresses and
-  payment identifiers, an unlock time, "subtract the fee from a destination" (the core's wrapper does
-  not pass it) and relaying are not supported.
+  bridge fixes the core's relay flag to `false` in every build, and the transport refuses the daemon's
+  submit and relay requests (`/sendrawtransaction`, `/send_raw_transaction`, JSON-RPC `relay_tx`,
+  `submit_block`) before sending, also if the core itself tried, except the one submit request of a
+  relay call (see "Relaying a prepared transaction" below). The public build and the tests check this.
+* Same-asset transfers in the four V2 assets only. Conversions (see `buildConversion`), sweeps,
+  integrated addresses and payment identifiers, an unlock time and "subtract the fee from a destination"
+  (the core's wrapper does not pass it) are not supported.
 * The fee is the core's, in the source asset: for a same-asset transfer the core computes the same
   per-byte fee in every asset (no conversion). Observed on mainnet on 2026-11-13 with one input and
   two outputs at the default priority: about 0.000307 to 0.000309 in each of ZPH, ZSD, ZRS and ZYS
@@ -172,7 +171,7 @@ that wallet's worker.
 ## Building conversions without relay
 
 * `buildConversion` builds one conversion transaction inside the module and discards it; it cannot
-  relay, under the same guards as `buildTransfer`. The six V2 pairs only, one destination, an amount in
+  relay, under the same guards as `buildTransfer` (`prepareConversion` keeps it for `relayPrepared`). The six V2 pairs only, one destination, an amount in
   the source asset with at most four decimals; the core never splits a conversion.
 * What a description means: `amountBurnt` and `amountMinted` are the built transaction's own fields
   (what the transaction takes in the source asset and what its destination output carries in the
@@ -207,6 +206,38 @@ that wallet's worker.
   names, and the chain accepts that record only while it is at most 10 blocks old when the transaction
   is mined (`tx_pr_height_valid`); a conversion relayed later is rejected, and the reserve ratio is
   checked again against the block that includes it.
+
+## Relaying a prepared transaction
+
+* Not yet proven on the network: that the chain accepts what this library relays, the fee the network
+  charges, the amount a conversion delivers, change and locked balances after a spend, and whether a
+  conversion survives the time between build and inclusion. Relay is proven against a local sink that
+  answers as the daemon does (acceptance, every refusal flag, a busy daemon, an HTTP error, an unreadable
+  answer, a dropped connection, a late answer, a refused connection), with transactions built on copies of
+  a funded test wallet and with a synthetic transaction in the test module; nothing of it reached the
+  network. A funded test on mainnet follows before any release.
+* The daemon's reasons come from the module's own transport, not from the core: the wrapper's
+  `relay_txs`, the only commit path the core offers without a source change, turns every commit failure
+  into one text. The transport reads the reply's status (compared with the core's constants) and its
+  boolean flags for that one request; the reply's reason text is never read.
+* A kept build holds the transaction and its secret transaction key in the module's memory until it is
+  relayed or void; anything that can call the wallet can relay its token. The token itself is not a
+  secret and carries no information.
+* The submit request goes to the wallet's configured daemon, which, like every daemon, is trusted by the
+  core; it learns the transaction and the client that sent it. An HTTP error is reported as an unknown
+  outcome, not as a refusal, because a proxy in front of the daemon may have forwarded the request.
+* After acceptance the record lives in the wallet's cache only until the bytes are saved. A transaction
+  that never appears in the pool stays pending; the core marks it failed, and its outputs unspent, only
+  after 500 seconds and a refresh that reads the pool (`wallet2::update_pool_state`).
+* A transfer that the core splits into several transactions is relayed in order and stops at the first
+  that is not accepted; this path is proven by code reading and with single transactions only (the
+  funded test wallet cannot produce a split within its limits).
+* Allocation, measured on the test module with transactions built on the funded copies (check `N28`, a
+  whole cycle of prepare, failed relay and void token): a relay the daemon refuses leaves about 2.1 KB per
+  refusal, a relay to an unreachable daemon about 136 bytes, a void token nothing. The residue is the one
+  every typed core failure leaves (see "Building conversions without relay"); the core's refusal error
+  carries a copy of the transaction. The build keeps the exception cleanups of the core's commit
+  (`wallet2::commit_tx`), without which a failed relay left 3 to 5 KB more.
 
 ## Text from wallets and the chain
 

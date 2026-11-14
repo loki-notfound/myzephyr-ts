@@ -12,6 +12,8 @@
  *             /poolfull    the /ok daemon with two constructed pool hashes; /gettransactions answers them
  *                          with transactions that do not parse (the wallet must skip them)
  *             /poolstatus  the /ok daemon whose pool request answers a node status carrying a marker text
+ *             /sink/<m>    the /ok daemon whose submit and relay requests are answered by the local sink of
+ *                          src/test/network/relaySink.cjs in mode <m> (counts and body lengths only)
  *   second  the target of the other redirects: every request is counted and answered 404
  *
  * Both answer the CORS preflight and add CORS headers for any origin, so that the browser page (a
@@ -23,6 +25,10 @@
  */
 "use strict";
 const http = require("http");
+const path = require("path");
+// the sink module sits in the network tests' source directory (plain CommonJS, also beside the compiled tests)
+const sink = require(path.resolve(__dirname, "../network/relaySink.cjs"));
+const RELAY_MARKER = "MARKERrelaynodetext";
 
 const STATUSES = [301, 302, 303, 307, 308];
 const FAKE_HEIGHT = 1000;
@@ -32,7 +38,7 @@ const POOL_HASHES = POOL_HASH_BYTES.map((s) => Buffer.from(s, "latin1").toString
 const POOL_MARKER = "MARKERpoolnodetext";
 
 function startRedirectServers() {
-  const stats = { first: {}, second: {}, landed: {}, preflights: 0, redirectsSent: 0, poolTxRequests: [] };
+  const stats = { first: {}, second: {}, landed: {}, preflights: 0, redirectsSent: 0, poolTxRequests: [], sink: sink.newStats() };
   const ports = {};
   const count = (bucket, key, bytes) => { const e = bucket[key] || (bucket[key] = { requests: 0, bodyBytes: 0 }); e.requests++; e.bodyBytes += bytes; };
   const cors = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type", "access-control-max-age": "0", "cache-control": "no-store" };
@@ -74,6 +80,12 @@ function startRedirectServers() {
       const url = new URL(req.url, "http://127.0.0.1");
       if (req.method === "OPTIONS") { stats.preflights++; return send(res, 204, {}, ""); }
       if (req.method === "GET" && url.pathname === "/__stats") return send(res, 200, { "content-type": "application/json" }, JSON.stringify(stats));
+      const ms = /^\/sink\/([a-z_-]{1,40})(\/.*)$/.exec(url.pathname);
+      if (ms !== null) {
+        count(stats.first, keyOf(req, "/sink/" + ms[1], ms[2], body), body.length);
+        if (sink.isSubmit(ms[2], ms[2] === "/json_rpc" ? rpc(body).method : "-")) return sink.answer(ms[1], body, req, res, stats.sink, RELAY_MARKER, cors);
+        return daemonJson(res, ms[2], body);
+      }
       const m = /^\/(r|same|bin)(\d{3})(\/.*)$/.exec(url.pathname) || /^\/(ok|landed|poolempty|poolfull|poolstatus)(\/.*)$/.exec(url.pathname);
       if (m === null) { count(stats.first, req.method + " (unknown path)", body.length); return send(res, 404, {}, ""); }
       if (m[1] === "landed") { count(stats.landed, keyOf(req, "/landed", m[2], body), body.length); return send(res, 404, {}, ""); }
@@ -118,4 +130,4 @@ function startRedirectServers() {
   })();
 }
 
-module.exports = { startRedirectServers, STATUSES, POOL_HASHES, POOL_MARKER };
+module.exports = { startRedirectServers, STATUSES, POOL_HASHES, POOL_MARKER, RELAY_MARKER };

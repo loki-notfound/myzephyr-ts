@@ -158,7 +158,7 @@ const TX_KEYS = ["hash", "sourceAsset", "destinationAsset", "destination", "amou
   "weight", "unlockTime", "pricingRecordHeight"];
 
 /** The wire shape (the bridge's JSON and the worker DTO): {"tx":{...}}, uint64 values as decimal text. */
-function conversionFromFields(value: unknown, request: ZephyrConversionRequest, bad: Bad): ZephyrConversionBuild {
+export function conversionFromFields(value: unknown, request: ZephyrConversionRequest, bad: Bad): ZephyrConversionBuild {
   const outer = fields(value, ["tx"], [], bad);
   const t = fields(outer.tx, TX_KEYS, [], bad);
   if (typeof t.hash !== "string" || !TX_HASH.test(t.hash)) bad();

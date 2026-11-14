@@ -6,7 +6,9 @@
 #   Node      loading of the WebAssembly module: missing, invalid, foreign, changed and other-build
 #             files (integrity pin), a rejected compilation, recovery, a runtime without Web Crypto
 #   Node      redirect checks of the transport against two loopback servers started by the runner
-#             (the only connections the monitor lets through), in the main thread and in a worker
+#             (the only connections the monitor lets through), in the main thread and in a worker;
+#             the relay checks (S03) against the same servers' constructed sink daemons, with the test
+#             module in the main thread (a synthetic kept transaction: nothing leaves the machine)
 #   Chromium  lifecycle and instrumented suites in a wallet worker under a same-origin
 #             Content-Security-Policy, the module loading cases, and the redirect checks in the page
 #             and in a wallet worker (headless, network contained)
@@ -91,6 +93,18 @@ redirect_node() { # direct|worker
   grep -q '"kind":"loopback"' "$run/monitor.jsonl" || die "Node redirect checks ($1): no connection to the loopback servers was recorded"
 }
 
+relay_node() { # the relay checks against constructed daemons (test module, main thread)
+  local run=$OUT/node-relay rc=0
+  mkdir -p "$run"
+  log "Node relay checks against constructed daemons"
+  ( cd "$run" && LIFECYCLE_MONITOR_LOG=$run/monitor.jsonl LIFECYCLE_MONITOR_ALLOW_WRITE=$run/report.json:$run/monitor.jsonl \
+      timeout 900 node "${MON[@]}" "$ROOT/dist/src/test/transport/runRelayNode.js" --test-module "$ROOT/dist/zephyr.test.js" --out "$run/report.json" ) \
+      > "$run/stdout.txt" 2> "$run/stderr.txt" || rc=$?
+  grep -E '^checks:' "$run/stdout.txt" || true
+  [ "$rc" = 0 ] || { tail -n 8 "$run/stdout.txt"; tail -n 5 "$run/stderr.txt"; die "Node relay checks failed"; }
+  ! grep -q '"kind":"\(connect\|dns\|fetch\|write\)"' "$run/monitor.jsonl" || die "Node relay checks: the monitor recorded a connection other than to the loopback servers, or an unexpected write"
+}
+
 browser_root() { # dir consumer-bundle worker-bundle [wasm...]
   local dir=$1; shift
   rm -rf "$dir"; mkdir -p "$dir"
@@ -146,6 +160,7 @@ log "Node module loading cases"
 module_cases_node
 redirect_node direct
 redirect_node worker
+relay_node
 if [ "${SKIP_BROWSER:-0}" != 1 ]; then
   command -v "$CHROMIUM" >/dev/null || die "$CHROMIUM not found; set CHROMIUM or SKIP_BROWSER=1"
   browser_suite release

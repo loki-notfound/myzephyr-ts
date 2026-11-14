@@ -19,6 +19,7 @@ import { ZephyrAccount, ZephyrAccountOptions, ZephyrAddressIndex, ZephyrSubaddre
 import { checkLabel, checkSubaddressIndices } from "../common/ZephyrLifecycleContract";
 import { ZephyrTransferBuild, ZephyrTransferConfig, checkTransferConfig } from "../common/ZephyrTransfer";
 import { ZephyrConversionBuild, ZephyrConversionConfig, checkConversionConfig } from "../common/ZephyrConversion";
+import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult, checkRelayToken } from "../common/ZephyrRelay";
 import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx, checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistory";
 
 
@@ -119,6 +120,8 @@ export class ZephyrWallet {
   private terminated = false;
   private daemon: ZephyrDaemonRoute | undefined = undefined;
   private closePromise: Promise<void> | undefined = undefined;
+  /** the token and hashes of the last prepare (the bridge's one slot): a relay result must name exactly these hashes */
+  private prepared: { token: string; hashes: readonly string[] } | undefined = undefined;
 
   private constructor(inner: InnerWallet, kind: "full" | "keys", proxied: boolean) {
     this.inner = inner;
@@ -524,9 +527,9 @@ export class ZephyrWallet {
 
   /**
    * Build the transactions of a same-asset transfer, describe them and discard them (common/ZephyrTransfer.ts).
-   * Nothing is relayed and nothing is stored: there is no relay call in this version, the bridge passes
-   * relay false, and no byte of a built transaction (hex, signed set, key images, transaction key) leaves
-   * the module. The configuration is validated before the build is dispatched; the addresses are then
+   * Nothing is relayed and nothing is stored: the bridge passes relay false, and no byte of a built
+   * transaction (hex, signed set, key images, transaction key) leaves the module. To relay, prepare the same
+   * configuration with prepareTransfer and relay the result's token with relayPrepared. The configuration is validated before the build is dispatched; the addresses are then
    * checked with the core's own parser for the wallet's network, and the wallet's unlocked balance of the
    * asset in the selected account or subaddresses must cover the amounts (TX_NOT_POSSIBLE otherwise, before
    * any request). The core then asks the daemon for heights and fork rules, the fee estimate and the
@@ -556,6 +559,61 @@ export class ZephyrWallet {
     const request = checkConversionConfig(config);
     if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
     return this.call("build", () => wallet.buildConversionChecked(request));
+  }
+
+  // ------------------------- relaying a prepared build -------------------------
+
+  /**
+   * As buildTransfer (the same configuration, checks, requests and description), but the built transactions are
+   * kept inside the module in the wallet's one slot instead of being discarded, under a new token
+   * (common/ZephyrRelay.ts); the previous kept build of this wallet is voided. Nothing is relayed here.
+   */
+  async prepareTransfer(config: ZephyrTransferConfig): Promise<ZephyrPreparedTransfer> {
+    const wallet = this.full("KEYS_ONLY_TX");
+    const request = checkTransferConfig(config);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    this.prepared = undefined;
+    const prepared = await this.call("build", () => wallet.prepareTransferChecked(request));
+    this.prepared = { token: prepared.token, hashes: Object.freeze(prepared.build.txs.map((t) => t.hash)) };
+    return prepared;
+  }
+
+  /** As buildConversion, but the built transaction is kept in the wallet's one slot under a new token (see prepareTransfer). */
+  async prepareConversion(config: ZephyrConversionConfig): Promise<ZephyrPreparedConversion> {
+    const wallet = this.full("KEYS_ONLY_TX");
+    const request = checkConversionConfig(config);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    this.prepared = undefined;
+    const prepared = await this.call("build", () => wallet.prepareConversionChecked(request));
+    this.prepared = { token: prepared.token, hashes: Object.freeze([prepared.build.hash]) };
+    return prepared;
+  }
+
+  /**
+   * Relay exactly the kept build that token names, as it was described (common/ZephyrRelay.ts). The daemon is given
+   * each kept transaction in one submit request (POST /sendrawtransaction to the wallet's configured daemon); the
+   * bridge checks before the request that the transaction hashes to the described hash and fails closed otherwise.
+   * Resolves when at least one transaction was accepted in this call (for one transaction: it was accepted); rejects
+   * with the failure's pair otherwise: TX_REJECTED (the daemon refused it), RELAY_UNKNOWN (sent, no usable answer: the
+   * transaction may have reached the network), DAEMON_ERROR/DAEMON_BUSY or DAEMON_UNREACHABLE (not processed, not
+   * sent), INVALID_CONFIG/RELAY_TOKEN_VOID, TX_NOT_POSSIBLE/PRICING_RECORD_AGE. After acceptance the wallet records the
+   * outgoing transaction as unconfirmed and its spent outputs: save the wallet bytes then.
+   */
+  async relayPrepared(token: string): Promise<ZephyrRelayResult> {
+    const wallet = this.full("KEYS_ONLY_TX");
+    const t = checkRelayToken(token);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    const hashes = this.prepared !== undefined && this.prepared.token === t ? this.prepared.hashes : undefined;
+    return this.call("relay", () => wallet.relayPreparedChecked(t, hashes));
+  }
+
+  /** Void the kept build that token names (wiped and released inside the module); false when it named none. */
+  async discardPrepared(token: string): Promise<boolean> {
+    const wallet = this.full("KEYS_ONLY_TX");
+    const t = checkRelayToken(token);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    if (this.prepared !== undefined && this.prepared.token === t) this.prepared = undefined;
+    return this.call("relay", () => wallet.discardPreparedChecked(t));
   }
 
   // ----------------------- representative unsupported calls -----------------------

@@ -23,7 +23,9 @@ export type ZephyrWalletErrorCode =
   | "MALFORMED_MESSAGE"
   | "NATIVE_ERROR"
   | "DAEMON_ERROR"
-  | "TX_NOT_POSSIBLE";
+  | "TX_NOT_POSSIBLE"
+  | "TX_REJECTED"
+  | "RELAY_UNKNOWN";
 
 export const ZEPHYR_WALLET_ERROR_CODES: readonly ZephyrWalletErrorCode[] = [
   "UNSUPPORTED_CAPABILITY",
@@ -36,7 +38,9 @@ export const ZEPHYR_WALLET_ERROR_CODES: readonly ZephyrWalletErrorCode[] = [
   "MALFORMED_MESSAGE",
   "NATIVE_ERROR",
   "DAEMON_ERROR",
-  "TX_NOT_POSSIBLE"
+  "TX_NOT_POSSIBLE",
+  "TX_REJECTED",
+  "RELAY_UNKNOWN"
 ];
 
 /** Fixed message per code; no message text is ever taken from a native or remote source. */
@@ -51,7 +55,9 @@ export const ZEPHYR_WALLET_ERROR_MESSAGES: Readonly<Record<ZephyrWalletErrorCode
   MALFORMED_MESSAGE: "Malformed worker message",
   NATIVE_ERROR: "Native wallet operation failed",
   DAEMON_ERROR: "Daemon request failed",
-  TX_NOT_POSSIBLE: "Transaction not possible"
+  TX_NOT_POSSIBLE: "Transaction not possible",
+  TX_REJECTED: "Transaction rejected by the daemon",
+  RELAY_UNKNOWN: "Relay outcome unknown"
 };
 
 /**
@@ -138,14 +144,27 @@ export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // pair, the pricing record is missing, unusable or could not be read, the conversion would need more than one
   // transaction, or the converted amount would be zero
   "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT",
-  // the transport refuses every request that would submit or relay a transaction or a block (no relay in this version)
-  "RELAY_REQUEST"
+  // the transport refuses every request that would submit or relay a transaction or a block
+  // (UNSUPPORTED_CAPABILITY/RELAY_REQUEST), except the one submit request of a relay call (below)
+  "RELAY_REQUEST",
+  // relaying a prepared build (common/ZephyrRelay.ts). Before any request: INVALID_CONFIG/RELAY_TOKEN for a value that
+  // is not a token, INVALID_CONFIG/RELAY_TOKEN_VOID for an unknown, used or void token, TX_NOT_POSSIBLE/PRICING_RECORD_AGE
+  // for a conversion whose pricing record has aged by the wallet's height, NATIVE_ERROR/RELAY_HASH_MISMATCH when a kept
+  // transaction is not the described one. The daemon's refusal: TX_REJECTED with the first flag of its reply
+  // (LOW_RING_SIZE, DOUBLE_SPEND, INVALID_INPUT, INVALID_OUTPUT, TOO_BIG, OVERSPEND, FEE_TOO_LOW, TOO_FEW_OUTPUTS,
+  // TX_EXTRA_TOO_BIG, SANITY_CHECK_FAILED, NOT_RELAYED) or REJECTED without one. Not processed: DAEMON_ERROR/DAEMON_BUSY,
+  // DAEMON_UNREACHABLE (connection refused, nothing sent). Sent without a usable answer: RELAY_UNKNOWN/NO_ANSWER,
+  // HTTP_STATUS, ANSWER_UNREADABLE. NATIVE_ERROR/RELAY_REQUEST (the transport refused the submit request),
+  // RELAY_FAILED (the commit failed before any request), RELAY_RECORD_FAILED (accepted, but the wallet could not record it)
+  "RELAY_TOKEN", "RELAY_TOKEN_VOID", "PRICING_RECORD_AGE", "RELAY_HASH_MISMATCH", "RELAY_FAILED", "RELAY_RECORD_FAILED",
+  "LOW_RING_SIZE", "DOUBLE_SPEND", "INVALID_INPUT", "INVALID_OUTPUT", "TOO_BIG", "OVERSPEND", "FEE_TOO_LOW", "TOO_FEW_OUTPUTS",
+  "TX_EXTRA_TOO_BIG", "SANITY_CHECK_FAILED", "NOT_RELAYED", "REJECTED", "DAEMON_BUSY", "NO_ANSWER", "HTTP_STATUS", "ANSWER_UNREADABLE"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];
 
 /** Context of a native failure, used to choose a stable code. */
-export type ZephyrNativeErrorContext = "create" | "restore" | "open" | "changePassword" | "address" | "close" | "daemon" | "sync" | "build" | "other";
+export type ZephyrNativeErrorContext = "create" | "restore" | "open" | "changePassword" | "address" | "close" | "daemon" | "sync" | "build" | "relay" | "other";
 
 /**
  * Fixed identifiers the native bridge can report (src/main/cpp/zephyr_wasm_bridge.cpp, fixed error
@@ -173,7 +192,11 @@ export const BRIDGE_ERROR_IDENTIFIERS = [
   "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS", "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE",
   "ADDRESS_NETWORK", "NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE", "TX_BUILD_FAILED",
   // building conversions without relay
-  "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT"
+  "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT",
+  // relaying a prepared build
+  "RELAY_TOKEN", "RELAY_TOKEN_VOID", "PRICING_RECORD_AGE", "RELAY_HASH_MISMATCH", "RELAY_REQUEST", "RELAY_FAILED", "RELAY_RECORD_FAILED",
+  "LOW_RING_SIZE", "DOUBLE_SPEND", "INVALID_INPUT", "INVALID_OUTPUT", "TOO_BIG", "OVERSPEND", "FEE_TOO_LOW", "TOO_FEW_OUTPUTS",
+  "TX_EXTRA_TOO_BIG", "SANITY_CHECK_FAILED", "NOT_RELAYED", "REJECTED", "DAEMON_BUSY", "NO_ANSWER", "HTTP_STATUS", "ANSWER_UNREADABLE"
 ] as const;
 
 export type ZephyrBridgeErrorIdentifier = typeof BRIDGE_ERROR_IDENTIFIERS[number];
@@ -189,13 +212,18 @@ const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIG
   "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS"]);
 /** Transaction builds the wallet's funds or the chain cannot satisfy */
 const BRIDGE_TX_NOT_POSSIBLE: ReadonlySet<string> = new Set(["NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE",
-  "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT"]);
+  "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT", "PRICING_RECORD_AGE"]);
+/** The daemon answered a relay's submit request and refused the transaction */
+const BRIDGE_TX_REJECTED: ReadonlySet<string> = new Set(["LOW_RING_SIZE", "DOUBLE_SPEND", "INVALID_INPUT", "INVALID_OUTPUT", "TOO_BIG", "OVERSPEND", "FEE_TOO_LOW",
+  "TOO_FEW_OUTPUTS", "TX_EXTRA_TOO_BIG", "SANITY_CHECK_FAILED", "NOT_RELAYED", "REJECTED"]);
+/** A relay's submit request was sent and no usable answer came: the transaction may or may not have reached the network */
+const BRIDGE_RELAY_UNKNOWN: ReadonlySet<string> = new Set(["NO_ANSWER", "HTTP_STATUS", "ANSWER_UNREADABLE"]);
 const BRIDGE_INVALID_CONFIG: ReadonlySet<string> = new Set(["NETWORK_TYPE", "CREATE_MODE", "SEED_LANGUAGE", "SEED_AND_KEYS", "CORE_UNKNOWN_LANGUAGE", "CORE_LOOKAHEAD"]);
 const BRIDGE_INVALID_RECOVERY: ReadonlySet<string> = new Set(["SEED_EMPTY", "KEYS_MISSING"]);
 /** Daemon results keep DAEMON_ERROR and argument checks INVALID_CONFIG in every context */
-const BRIDGE_DAEMON: ReadonlySet<string> = new Set(["DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED"]);
+const BRIDGE_DAEMON: ReadonlySet<string> = new Set(["DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED", "DAEMON_BUSY"]);
 const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS", "SUBADDRESS_INDICES", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND",
-  "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE", "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION"]);
+  "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE", "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RELAY_TOKEN", "RELAY_TOKEN_VOID"]);
 
 function isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic {
   return typeof value === "string" && (ZEPHYR_WALLET_ERROR_DIAGNOSTICS as readonly string[]).includes(value);
@@ -275,6 +303,8 @@ export default class ZephyrWalletError extends Error {
     if (BRIDGE_DAEMON.has(identifier)) return new ZephyrWalletError("DAEMON_ERROR", identifier);
     if (BRIDGE_INVALID_ARGUMENT.has(identifier)) return new ZephyrWalletError("INVALID_CONFIG", identifier);
     if (BRIDGE_TX_NOT_POSSIBLE.has(identifier)) return new ZephyrWalletError("TX_NOT_POSSIBLE", identifier);
+    if (BRIDGE_TX_REJECTED.has(identifier)) return new ZephyrWalletError("TX_REJECTED", identifier);
+    if (BRIDGE_RELAY_UNKNOWN.has(identifier)) return new ZephyrWalletError("RELAY_UNKNOWN", identifier);
     if (identifier === "ADDRESS_NETWORK") return new ZephyrWalletError("INVALID_ADDRESS", identifier);
     return ZephyrWalletError.contextError(context, identifier);
   }

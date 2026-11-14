@@ -1452,6 +1452,227 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     notes.push("requests per failing mount: " + Object.entries(answered).map(([k, v]) => k + " " + v).join("; "));
   }, 1200000);
 
+  // ------------------------------------------------------------------ N27, N28: funded relay to the local sink (inputs from outside the public tree)
+  /** Per-asset balances and unlocked balances of the wallet's first two accounts (bigint maps as text). */
+  async function balancesOf(w: F.ZephyrWallet): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const a of [0, 1]) {
+      const b = await w.getBalance(a) as ReadonlyMap<number, ReadonlyMap<string, bigint>>;
+      const u = await w.getUnlockedBalance(a) as ReadonlyMap<number, ReadonlyMap<string, bigint>>;
+      for (const asset of ["ZPH", "ZSD", "ZRS", "ZYS"]) {
+        let bal = BigInt(0), un = BigInt(0);
+        for (const m of b.values()) bal += m.get(asset) ?? BigInt(0);
+        for (const m of u.values()) un += m.get(asset) ?? BigInt(0);
+        out[a + " " + asset] = bal.toString() + "/" + un.toString();
+      }
+    }
+    return out;
+  }
+  const sinkBase = (mode: string) => (t.root as string) + "/sink/" + mode;
+  /** The forwarder's sink count, and whether any submit request was forwarded upstream (never). */
+  async function sinkState(): Promise<{ requests: number; bodyLengths: number[]; forwardedSubmits: number }> {
+    const st = await new Promise<{ sink: { requests: number; bodyLengths: number[] }; routes: Record<string, { count: number }> }>((resolve, reject) => {
+      http.get((t.root as string) + "/__stats", (res) => { const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c)); res.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); } catch (e) { reject(e); } }); }).on("error", reject);
+    });
+    const forwardedSubmits = Object.entries(st.routes).filter(([k]) => /sendrawtransaction|send_raw_transaction|relay_tx|submit_block/i.test(k)).reduce((n, [, v]) => n + v.count, 0);
+    return { requests: st.sink.requests, bodyLengths: st.sink.bodyLengths, forwardedSubmits };
+  }
+  const randomFieldsOfConversion = (b: F.ZephyrConversionBuild) => JSON.stringify({ ...b, hash: "-", weight: "-", fee: "-", change: "-", totalDebited: "-", feePlusChange: (b.fee + b.change).toString() }, (k, x) => (typeof x === "bigint" ? x.toString() : x));
+
+  await check("N27", "Funded relay to the local sink on fresh copies, Node.js direct and proxied: per V2 asset a same-asset transfer to account 1, a two-destination transfer from account 1, and each conversion the chain allows now (0.1 of the source asset, destinations only the wallet's own addresses); the prepared description equals a build's except the fields random by nature; the accepting sink receives exactly one submit request and nothing is forwarded upstream; afterwards the history lists the unconfirmed outgoing transaction with the described hash, amount and fee, the source account's balance fell by the debited total (less what the core counts back for a pending transfer to the account's own addresses) and its unlocked balance by the spent inputs, the saved bytes reopen to the same state, a sync and a pool refresh leave it pending; a refusing sink (double spend) voids the token and leaves the wallet unchanged; a dropped connection and a late answer are unknown outcomes that leave the wallet unchanged and keep the token, whose retry sends the same bytes and is accepted", async (notes) => {
+    const funded = opts.funded;
+    if (funded === undefined) throw new CheckNotRun("no funded wallet supplied (FUNDED_WALLET_IN and FUNDED_EXPECT)");
+    if (t.base === undefined || t.root === undefined) throw new CheckFailure("no target");
+    if (opts.env !== "node-direct") throw new CheckNotRun("Node.js direct runs only (the proxied part runs from here)");
+    const start = fundedAfterBuilds ?? funded.wallet;
+    const unit = BigInt("1000000000000");
+    const tenth = unit / BigInt(10);
+    const results: Record<string, unknown> = {};
+    let relays = 0, sent = 0;
+    const openCopy = (mode: string, proxied: boolean) => F.openWalletData({ networkType: 0, password: start.password, keysData: new Uint8Array(start.keys), cacheData: new Uint8Array(start.cache), server: sinkBase(mode), proxyToWorker: proxied });
+    // which conversions the chain allows now (the pinned rule on the node's state at the copy's height)
+    const probe = await openCopy("accept", false);
+    let primary = "", account1 = "";
+    const conversions: Array<[string, string]> = [];
+    try {
+      primary = await probe.getPrimaryAddress();
+      account1 = await probe.getAddress(1, 0);
+      const state = await chainState(await probe.getHeight());
+      for (const [a, b] of [["ZPH", "ZSD"], ["ZSD", "ZPH"], ["ZPH", "ZRS"], ["ZRS", "ZPH"], ["ZSD", "ZYS"], ["ZYS", "ZSD"]] as Array<[string, string]>) if (reserveRule(a, b, tenth, state.pr, state.supply, state.history).allowed) conversions.push([a, b]);
+    } finally { await probe.close(); }
+    const own = (a: string) => a === primary || a === account1;
+    type Plan = { name: string; transfer?: F.ZephyrTransferConfig; conversion?: F.ZephyrConversionConfig; proxied: boolean };
+    const plans: Plan[] = [];
+    for (const asset of ["ZPH", "ZSD", "ZRS", "ZYS"]) plans.push({ name: asset + " account 0 to account 1", transfer: { asset, destinations: [{ address: account1, amount: tenth }], accountIndex: 0 }, proxied: false });
+    plans.push({ name: "ZPH account 1, two destinations", transfer: { asset: "ZPH", destinations: [{ address: primary, amount: tenth / BigInt(2) }, { address: account1, amount: tenth / BigInt(2) }], accountIndex: 1 }, proxied: false });
+    for (const [a, b] of conversions) plans.push({ name: a + " to " + b, conversion: { sourceAsset: a, destinationAsset: b, destination: { address: primary, amount: tenth }, accountIndex: 0 }, proxied: false });
+    plans.push({ ...plans[0], name: plans[0].name + ", proxied", proxied: true });
+    if (conversions.length > 0) plans.push({ ...plans[5], name: plans[5].name + ", proxied", proxied: true });
+    let synced = false;
+    for (const plan of plans) {
+      for (const d of plan.transfer ? plan.transfer.destinations : [plan.conversion!.destination]) expect(own(d.address) && d.amount <= unit, plan.name + ": destinations are the wallet's own addresses, amounts at most 1 unit");
+      const w = await openCopy("accept", plan.proxied);
+      try {
+        const state0 = await walletState(w);
+        const bal0 = await balancesOf(w);
+        let token: string, hash: string, debited: bigint, spent: bigint, asset: string, account: number, fee: bigint, row: Record<string, unknown>;
+        // the core counts a pending transfer to an address of the sending account back into that account's balance (in
+        // the source asset; wallet2::balance_per_subaddress, "add transfers to same wallet")
+        const sameAccount = (a: string, acc: number) => (acc === 0 && a === primary) || (acc === 1 && a === account1);
+        let selfAmount = BigInt(0);
+        if (plan.transfer) {
+          const built = await w.buildTransfer(plan.transfer);
+          const p = await w.prepareTransfer(plan.transfer);
+          expect(p.build.txs.length === 1 && withoutRandom(p.build) === withoutRandom(built) && randomWithinBounds(built, p.build), plan.name + ": the prepared description equals a build's except the random fields");
+          const tx = p.build.txs[0];
+          token = p.token; hash = tx.hash; debited = tx.totalDebited; spent = tx.totalDebited + tx.change; asset = tx.sourceAsset; account = plan.transfer.accountIndex; fee = tx.fee;
+          for (const d of plan.transfer.destinations) if (sameAccount(d.address, account)) selfAmount += d.amount;
+          row = { hash, asset, amount: tx.amount.toString(), fee: tx.fee.toString(), change: tx.change.toString(), weight: tx.weight, inputs: tx.inputs, outputs: tx.outputs };
+        } else {
+          const c = plan.conversion!;
+          const built = await w.buildConversion(c);
+          const p = await w.prepareConversion(c);
+          expect(randomFieldsOfConversion(p.build) === randomFieldsOfConversion(built), plan.name + ": the prepared description equals a build's except the random fields");
+          token = p.token; hash = p.build.hash; debited = p.build.totalDebited; spent = p.build.totalDebited + p.build.change; asset = p.build.sourceAsset; account = c.accountIndex; fee = p.build.fee;
+          if (sameAccount(c.destination.address, account)) selfAmount += c.destination.amount;
+          row = { hash, asset, destinationAsset: p.build.destinationAsset, burnt: p.build.amountBurnt.toString(), minted: p.build.amountMinted.toString(), fee: p.build.fee.toString(), change: p.build.change.toString(), pricingRecordHeight: p.build.pricingRecordHeight };
+        }
+        expect((await walletState(w)) === state0, plan.name + ": a prepare changes nothing in the wallet");
+        const s0 = await sinkState();
+        const r = await w.relayPrepared(token);
+        relays++;
+        const s1 = await sinkState();
+        sent += s1.requests - s0.requests;
+        expect(r.complete && r.txs.length === 1 && r.txs[0].hash === hash && r.txs[0].outcome === "accepted" && !r.txs[0].notRelayed && r.txs[0].code === undefined, plan.name + ": accepted by the sink as described");
+        expect(s1.requests - s0.requests === 1 && s1.forwardedSubmits === 0, plan.name + ": exactly one submit request at the sink, none forwarded");
+        await expectCode(w.relayPrepared(token), "INVALID_CONFIG", plan.name + ": the relayed token again", notes, "RELAY_TOKEN_VOID");
+        const tx = await w.getTx(hash);
+        expect(!tx.isConfirmed && !tx.isFailed && tx.outgoingTransfer !== undefined && tx.fee === fee && tx.outgoingTransfer.asset === asset, plan.name + ": the history lists the unconfirmed outgoing transaction with the described fee and asset");
+        const bal1 = await balancesOf(w);
+        const [b0, u0] = bal0[account + " " + asset].split("/").map((x) => BigInt(x));
+        const [b1, u1] = bal1[account + " " + asset].split("/").map((x) => BigInt(x));
+        expect(b0 - b1 === debited - selfAmount && u0 - u1 === spent, plan.name + ": the balance fell by the debited total less the pending amount to the account's own addresses, and the unlocked balance by the spent inputs (" + (b0 - b1) + "/" + (debited - selfAmount) + ", " + (u0 - u1) + "/" + spent + ")");
+        row.balanceFall = (b0 - b1).toString(); row.unlockedFall = (u0 - u1).toString(); row.toOwnAccount = selfAmount.toString();
+        for (const k of Object.keys(bal0)) if (k !== account + " " + asset) expect(bal0[k] === bal1[k], plan.name + ": " + k + " unchanged");
+        const stateAfter = await walletState(w);
+        const data = await w.getData();
+        const o = await F.openWalletData({ networkType: 0, password: start.password, keysData: new Uint8Array(data.keys), cacheData: new Uint8Array(data.cache), proxyToWorker: false });
+        try { expect((await walletState(o)) === stateAfter, plan.name + ": the saved bytes reopen to the state after the relay"); } finally { await o.close(); }
+        row.outgoingState = { isConfirmed: tx.isConfirmed, inPool: tx.inPool, isFailed: tx.isFailed, confirmations: tx.confirmations };
+        if (!synced && !plan.proxied) {
+          // the sink's acceptance never reaches the chain: a sync and a pool refresh leave the transaction pending
+          synced = true;
+          const dh = await w.getDaemonHeight();
+          await sync("N27", w, "a copy after a relay to the sink", "real", undefined, dh - (await w.getHeight()));
+          const afterSync = await w.getTx(hash);
+          await w.refreshPool();
+          const afterPool = await w.getTx(hash);
+          row.afterSync = { isConfirmed: afterSync.isConfirmed, inPool: afterSync.inPool, isFailed: afterSync.isFailed };
+          row.afterPoolRefresh = { isConfirmed: afterPool.isConfirmed, inPool: afterPool.inPool, isFailed: afterPool.isFailed };
+          expect(!afterSync.isConfirmed && !afterPool.isConfirmed, plan.name + ": still unconfirmed after a sync and a pool refresh");
+          notes.push("after a sync: " + JSON.stringify(row.afterSync) + "; after a pool refresh: " + JSON.stringify(row.afterPoolRefresh));
+        }
+        results[plan.name] = row;
+      } finally {
+        await w.close();
+      }
+    }
+    // failure modes on the ZPH transfer and on the first allowed conversion, each on a fresh copy
+    const failures: Record<string, string> = {};
+    const fail = async (label: string, plan: Plan, modes: string[], want: string[]) => {
+      const w = await openCopy(modes[0], false);
+      try {
+        const state0 = await walletState(w);
+        const token = plan.transfer ? (await w.prepareTransfer(plan.transfer)).token : (await w.prepareConversion(plan.conversion!)).token;
+        const lengths: number[] = [];
+        for (let i = 0; i < modes.length; i++) {
+          if (i > 0) await w.setDaemonConnection(sinkBase(modes[i]));
+          const s0 = await sinkState();
+          let got: string;
+          try { const r = await w.relayPrepared(token); got = r.txs[0].outcome; } catch (err) { got = codeOf(err) + diagnosticOf(err); const text = errorTexts(err).join(" "); expect(!text.includes(opts.marker), label + ": no node text"); }
+          relays++;
+          const s1 = await sinkState();
+          sent += s1.requests - s0.requests;
+          lengths.push(...s1.bodyLengths.slice(s0.bodyLengths.length));
+          const submits = want[i] === "INVALID_CONFIG/RELAY_TOKEN_VOID" ? 0 : 1;
+          expect(s1.requests - s0.requests === submits && s1.forwardedSubmits === 0, label + " " + modes[i] + ": " + submits + " submit request at the sink, none forwarded");
+          expect(got === want[i], label + " " + modes[i] + ": " + got + ", expected " + want[i]);
+          if (got !== "accepted") expect((await walletState(w)) === state0, label + " " + modes[i] + ": the wallet is unchanged");
+          failures[label + " " + modes[i]] = got;
+        }
+        expect(lengths.length > 0 && lengths.every((x) => x === lengths[0]), label + ": every attempt sent a body of the same length");
+        const last = want[want.length - 1];
+        const kept = last.startsWith("RELAY_UNKNOWN/") || last === "DAEMON_ERROR/DAEMON_BUSY";
+        expect((await w.discardPrepared(token)) === kept, label + ": the token is " + (kept ? "kept" : "void") + " after the last attempt");
+      } finally { await w.close(); }
+    };
+    await fail("transfer refusal", plans[0], ["reject-double_spend", "accept"], ["TX_REJECTED/DOUBLE_SPEND", "INVALID_CONFIG/RELAY_TOKEN_VOID"]);
+    await fail("transfer dropped connection", plans[0], ["drop", "accept"], ["RELAY_UNKNOWN/NO_ANSWER", "accepted"]);
+    await fail("transfer late answer", plans[0], ["late"], ["RELAY_UNKNOWN/NO_ANSWER"]);
+    if (conversions.length > 0) {
+      await fail("conversion refusal", plans[5], ["reject-fee_too_low"], ["TX_REJECTED/FEE_TOO_LOW"]);
+      await fail("conversion dropped connection", plans[5], ["drop", "accept"], ["RELAY_UNKNOWN/NO_ANSWER", "accepted"]);
+    }
+    const s = await sinkState();
+    report.measurements.N27 = { relays: results, failures, conversionsAllowed: conversions.map((c) => c.join(" to ")), relayCalls: relays, sinkRequestsOfThisCheck: sent, forwardedSubmits: s.forwardedSubmits };
+    notes.push(plans.length + " relays accepted by the sink, " + Object.keys(failures).length + " failure-mode calls; conversions allowed now: " + conversions.map((c) => c.join(" to ")).join(", "));
+  }, 2400000);
+
+  await check("N28", "Funded relay failure paths in the test module: after a warm-up, a whole cycle (prepare, a failed relay, the token void) returns the allocator to its level, up to a constant residue per failure, for a relay the sink refuses and one to an unreachable daemon (refused connection), each with a real kept transaction; a relay with a void token allocates nothing that stays", async (notes) => {
+    const synced = opts.fundedSynced;
+    if (synced === undefined) throw new CheckNotRun("no synced funded copy supplied (a run with the test module after N22)");
+    if (t.root === undefined || t.closed === undefined) throw new CheckFailure("no target");
+    const module = LibraryUtils.getWasmModule() as { test_heap_in_use?: () => number } | undefined;
+    if (module === undefined || typeof module.test_heap_in_use !== "function") throw new CheckFailure("not the test module");
+    const heap = () => (module.test_heap_in_use as () => number)();
+    const w = await F.openWalletData({ networkType: 0, password: synced.password, keysData: new Uint8Array(synced.keys), cacheData: new Uint8Array(synced.cache), server: sinkBase("reject-double_spend"), proxyToWorker: false });
+    const deltas: Record<string, number[]> = {};
+    try {
+      const account1 = await w.getAddress(1, 0);
+      const cfg: F.ZephyrTransferConfig = { asset: "ZPH", destinations: [{ address: account1, amount: BigInt("100000000000") }], accountIndex: 0 };
+      const path = async (label: string, server: string, want: string) => {
+        await w.setDaemonConnection(server);
+        // one whole cycle from a stable level: prepare (kept), relay (fails), the token void (by the refusal, or by a
+        // discard when the failure keeps it); what stays afterwards is the relay's residue
+        const once = async () => {
+          await w.setDaemonConnection(sinkBase("reject-double_spend"));
+          const h0 = heap();
+          const p = await w.prepareTransfer(cfg); // the prepare reads through the sink mount's forwarding
+          await w.setDaemonConnection(server);
+          let got: string;
+          try { await w.relayPrepared(p.token); got = "accepted"; } catch (err) { got = codeOf(err) + diagnosticOf(err); }
+          expect(got === want, label + ": " + got);
+          if (got !== "TX_REJECTED/DOUBLE_SPEND") await w.discardPrepared(p.token);
+          await w.setDaemonConnection(sinkBase("reject-double_spend"));
+          return heap() - h0;
+        };
+        for (let i = 0; i < 2; i++) await once();
+        deltas[label] = [];
+        for (let i = 0; i < 3; i++) deltas[label].push(await once());
+      };
+      await path("refused by the sink", sinkBase("reject-double_spend"), "TX_REJECTED/DOUBLE_SPEND");
+      await path("unreachable daemon", t.closed, "DAEMON_ERROR/DAEMON_UNREACHABLE");
+      // a void token: the relay call itself allocates nothing that stays
+      await w.setDaemonConnection(sinkBase("reject-double_spend"));
+      const p = await w.prepareTransfer(cfg);
+      await w.discardPrepared(p.token);
+      const voids: number[] = [];
+      for (let i = 0; i < 5; i++) { const h0 = heap(); try { await w.relayPrepared(p.token); } catch (err) { /* RELAY_TOKEN_VOID */ } voids.push(heap() - h0); }
+      deltas["void token"] = voids;
+    } finally {
+      await w.close();
+    }
+    report.measurements.N28 = { deltas };
+    notes.push("allocator growth per cycle (prepare, failed relay, void): " + Object.entries(deltas).map(([k, v]) => k + " " + v.join(",")).join("; "));
+    // a typed core failure leaves its exception's residue per failure (cause not established); the daemon's refusal
+    // (tools::error::tx_rejected) carries a copy of the transaction, whose size varies by a few bytes from build to build
+    for (const [k, v] of Object.entries(deltas)) {
+      const bound = k === "refused by the sink" ? 4096 : 512;
+      expect(Math.max(...v) - Math.min(...v) <= 32 && Math.min(...v) >= 0 && Math.max(...v) <= bound, k + ": the same residue per cycle, at most " + bound + " bytes (" + v.join(",") + ")");
+    }
+    expect(deltas["void token"].every((d) => d === 0), "a void token allocates nothing that stays");
+  }, 1200000);
+
   const entryGuard = await Internal.getNetworkGuardReport();
   report.networkGuard = combinedGuard(entryGuard, GUARD_LEDGER);
   report.workerAccounting = LibraryUtils.getWorkerAccounting();

@@ -24,7 +24,7 @@ namespace zephyr_wasm_bridge
 
   // Retained bindings report failures with the fixed error protocol of zephyr_wasm_bridge.cpp
   // ({"error":"<IDENTIFIER>"} or -1); no native exception text reaches JavaScript.
-  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC, ERROR_CONTEXT_ADDRESS_INDEX, ERROR_CONTEXT_BUILD, ERROR_CONTEXT_CONVERSION };
+  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC, ERROR_CONTEXT_ADDRESS_INDEX, ERROR_CONTEXT_BUILD, ERROR_CONTEXT_CONVERSION, ERROR_CONTEXT_RELAY };
   const char* classify_current_exception(int context); // only inside a catch handler
   const char* probe_password_state(int handle, const string& old_password, const string& new_password);
 
@@ -93,6 +93,14 @@ namespace zephyr_wasm_bridge
   // full wallet; never relays (m_relay is fixed to false) and returns no byte of the built transaction
   void build_conversion(int handle, const string& source_asset, const string& destination_asset, const string& address, const string& amount, uint32_t account_idx,
                         const string& subaddress_indices, uint32_t priority, emscripten::val callback);
+  // as build_txs and build_conversion, but the built transactions are kept inside the module in the wallet's one slot
+  // under a new token (the previous kept build is voided); nothing is relayed here
+  void prepare_txs(int handle, const string& asset, const string& addresses, const string& amounts, uint32_t account_idx, const string& subaddress_indices, uint32_t priority, uint32_t max_destinations, emscripten::val callback);
+  void prepare_conversion(int handle, const string& source_asset, const string& destination_asset, const string& address, const string& amount, uint32_t account_idx,
+                          const string& subaddress_indices, uint32_t priority, emscripten::val callback);
+  // the one way to relay: exactly the kept build that token names (the only caller of the core's commit); and its discard
+  void relay_prepared(int handle, const string& token, emscripten::val callback);
+  void discard_prepared(int handle, const string& token, emscripten::val callback);
   string get_version(int handle);
   string get_seed(int handle);
   string get_seed_language(int handle);

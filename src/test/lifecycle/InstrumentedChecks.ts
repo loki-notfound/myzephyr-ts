@@ -1147,6 +1147,63 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await w.close();
   });
 
+  await check("T23", "Kept builds in the test module (a synthetic kept transaction, no request): a prepare returns a token and the description; without a daemon a relay rejects with DAEMON_NOT_CONNECTED before any request; the token is void after a discard, a newer prepare (also a failed one), a password change, a hash mismatch (injected), an aged conversion (injected height) and a fourth relay call; a void token rejects with RELAY_TOKEN_VOID; every void returns the allocator to its level; nothing is recorded", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    const own = await w.getPrimaryAddress();
+    const tcfg: F.ZephyrTransferConfig = { asset: "ZPH", destinations: [{ address: own, amount: BigInt("100000000") }], accountIndex: 0 };
+    const ccfg: F.ZephyrConversionConfig = { sourceAsset: "ZPH", destinationAsset: "ZRS", destination: { address: own, amount: BigInt("100000000") }, accountIndex: 0 };
+    const synthetic = async (): Promise<F.ZephyrPreparedTransfer> => { await hooks.resetCounters(); await hooks.arm({ fail: { "prepare.synthetic": 1 } }); return w.prepareTransfer(tcfg); };
+    const voidCode = async (token: string, what: string) => expectCode(w.relayPrepared(token), "INVALID_CONFIG", what, notes, "RELAY_TOKEN_VOID");
+    const p1 = await synthetic();
+    expect(/^[0-9a-f]{32}$/.test(p1.token) && p1.build.txs.length === 1 && /^[0-9a-f]{64}$/.test(p1.build.txs[0].hash), "a token and the description");
+    expect((await hooks.state()).events.includes("injected:prepare.synthetic"), "the synthetic hook fired");
+    await expectCode(w.relayPrepared(p1.token), "DAEMON_ERROR", "relay without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    expect((await w.discardPrepared(p1.token)) === true, "discard of the kept build is true");
+    await voidCode(p1.token, "relay after a discard");
+    expect((await w.discardPrepared(p1.token)) === false, "a second discard is false");
+    const p2 = await synthetic();
+    const p3 = await synthetic();
+    expect(p2.token !== p3.token, "every prepare has a new token");
+    await voidCode(p2.token, "relay of a token a newer prepare replaced");
+    await hooks.resetCounters();
+    await expectCode(w.prepareTransfer(tcfg), "TX_NOT_POSSIBLE", "a prepare without funds", notes, "NOT_ENOUGH_MONEY");
+    await voidCode(p3.token, "relay of a token a failed prepare replaced");
+    const p4 = await synthetic();
+    for (let i = 0; i < 3; i++) await expectCode(w.relayPrepared(p4.token), "DAEMON_ERROR", "relay call " + (i + 1) + " without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await voidCode(p4.token, "a fourth relay call");
+    const p5 = await synthetic();
+    await hooks.arm({ fail: { "relay.hash": 1 } });
+    await expectCode(w.relayPrepared(p5.token), "NATIVE_ERROR", "a kept transaction that is not the described one (injected)", notes, "RELAY_HASH_MISMATCH");
+    await voidCode(p5.token, "relay after a hash mismatch");
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "prepare.synthetic": 1 } });
+    const c1 = await w.prepareConversion(ccfg);
+    expect(/^[0-9a-f]{32}$/.test(c1.token) && c1.build.pricingRecordHeight > 0, "a prepared conversion");
+    await expectCode(w.relayPrepared(c1.token), "DAEMON_ERROR", "a conversion within the pricing record bound, without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await hooks.arm({ fail: { "relay.aged": 1 } });
+    await expectCode(w.relayPrepared(c1.token), "TX_NOT_POSSIBLE", "a conversion whose pricing record has aged (injected height)", notes, "PRICING_RECORD_AGE");
+    await voidCode(c1.token, "relay after an aged conversion");
+    await hooks.resetCounters();
+    const p6 = await synthetic();
+    await w.changePassword(pw, pw + "x");
+    await voidCode(p6.token, "relay after a password change");
+    await w.changePassword(pw + "x", pw);
+    // allocation: a prepare and its discard, and a prepare voided by the next prepare, return the allocator to its level
+    const heap = async () => (await hooks.state()).heapInUse;
+    for (let i = 0; i < 2; i++) { const p = await synthetic(); await w.discardPrepared(p.token); }
+    const deltas: number[] = [];
+    for (let i = 0; i < 5; i++) { const h0 = await heap(); const p = await synthetic(); await w.discardPrepared(p.token); deltas.push((await heap()) - h0); }
+    const voided: number[] = [];
+    for (let i = 0; i < 3; i++) { const h0 = await heap(); const p = await synthetic(); await hooks.arm({ fail: { "relay.hash": 1 } }); try { await w.relayPrepared(p.token); } catch (err) { /* RELAY_HASH_MISMATCH */ } voided.push((await heap()) - h0); }
+    notes.push("allocator growth of 5 prepares with a discard: " + deltas.join(",") + "; of 3 prepares voided by a hash mismatch: " + voided.join(","));
+    expect(deltas.every((d) => d === 0), "a discarded kept build is released completely");
+    expect(voided.every((d) => d === voided[0]), "a kept build voided by a failure changes the allocator by the same amount each time (" + voided.join(",") + ")");
+    expect((await w.getTxs()).length === 0, "nothing recorded");
+    await w.close();
+    await expectCode(w.relayPrepared(p6.token), "WALLET_CLOSED", "relay after close", notes);
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

@@ -89,9 +89,12 @@ host.
 
 runs, with no network access:
 
-* the lifecycle suite (checks `C01`-`C32`) with the release module and the instrumented suite
-  (`T00`-`T19`) with the test module, in Node.js directly and through wallet workers, under a
-  preloaded monitor that blocks every connection and records unexpected file writes;
+* the lifecycle suite (checks `C01`-`C39`) with the release module and the instrumented suite
+  (`T00`-`T23`) with the test module, in Node.js directly and through wallet workers, under a
+  preloaded monitor that blocks every connection and records unexpected file writes (among them `C38`
+  and `C39`: the relay calls' rejections before dispatch and the strict decoding of their results and
+  worker messages; `T23`: the life of a kept build with a synthetic transaction, its void causes and
+  the allocator);
 * the module loading cases in Node.js, directly and through workers: a missing `zephyr.wasm`,
   a file that is not WebAssembly, a module of another program or build, a changed byte and a
   runtime without Web Crypto reject with fixed diagnostics before any worker starts, and a failed
@@ -105,7 +108,16 @@ runs, with no network access:
   first server's constructed pool daemons (an empty pool, two pool transactions that do not parse,
   a node status with a marker text), against which `refreshPool` must send exactly the pool hashes
   request and then the transactions request, skip what does not parse, keep the node's text out of
-  its error and leave the history empty;
+  its error and leave the history empty; `S02` (main thread): the transport passes a submit request
+  only with the id of an open relay scope, as POST to exactly that scope's address, once, and refuses
+  every other form before sending;
+* `S03`: the relay checks with the test module in the main thread against the first server's
+  constructed sink daemons (`/sink/<mode>`, answered by `src/test/network/relaySink.cjs`): a wallet
+  without funds keeps a synthetic transaction (a test-module hook; it spends nothing and no chain
+  would accept it) and relays it to an accepting sink, to one refusing with each reason of the daemon's
+  reply, to a busy one, one answering HTTP 500, an unreadable answer, a dropped connection and a late
+  answer, and to a closed port; every outcome must have its fixed pair, every relay call exactly one
+  submit request (none for a void token), a retry the same bytes, and no error the sink's node text;
 * the same two suites and the module loading cases in headless Chromium, in a wallet worker,
   with every non-loopback request sent to a closed proxy port and under the page policy of
   `docs/DEPLOYMENT.md`, and the redirect checks in the page and in a wallet worker (the policy then
@@ -172,7 +184,26 @@ through forwarder mounts that answer the circulating supply or the pricing recor
 error or HTTP 500 carrying node text, and requires `DAEMON_ERROR`/`DAEMON_RESPONSE` without that text, then
 a working build through the plain forwarder. The transport check `S01` (offline,
 in the redirect runners' main thread and page) shows that the transport refuses every submit and
-relay request before sending it.
+relay request before sending it outside a relay call, `S02` and `S03` the one way a relay passes.
+
+Relay is tested against a local sink only; this suite relays nothing to the network. Before the runs,
+`src/test/network/sinkSelfTest.cjs` starts the forwarder against a counting loopback upstream and
+sends every submit and relay form to every mount: the plain mounts refuse them, the `/sink/<mode>`
+mounts answer them, and the upstream must receive none of them. `N27` (Node.js direct, after `N26`,
+from the bytes `N22` holds, fresh copies, the wallet connected to a sink mount that forwards only the
+read allowlist) prepares and relays, per V2 asset, a same-asset transfer to the wallet's own second
+account, a two-destination transfer from that account back, each conversion the chain allows at that
+moment, and two of them in a worker (0.1 of the source asset, only the wallet's own addresses): the
+prepared description must equal a build's except the fields random by nature, the accepting sink must
+receive exactly one submit request and the upstream none, and afterwards the history must list the
+unconfirmed outgoing transaction with the described hash, fee and asset, the source account's balance
+must have fallen by the debited total (less what the core counts back for a pending transfer to the
+account's own addresses) and its unlocked balance by the spent inputs, the saved bytes
+must reopen to the same state, and a sync and a pool refresh must leave it pending. Then a refusing
+sink (the token void, the wallet unchanged), a dropped connection and a late answer (unknown outcomes,
+the wallet unchanged, the token kept; its retry sends the same bytes and is accepted). `N28` follows
+`N25` in the test module's run and measures the allocator around a relay the sink refuses, a relay to
+an unreachable daemon and a relay with a void token.
 
 `N19` (every run) counts the requests at the forwarder and in the request allowlist while the
 history calls run: there must be none. `N21` (every run) calls `refreshPool` twice through the

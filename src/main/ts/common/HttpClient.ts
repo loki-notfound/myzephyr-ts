@@ -30,13 +30,48 @@ export default class HttpClient {
   static ALLOWED_REQUESTS = 0;
   static ALLOWED_REQUEST_SUMMARY: Record<string, number> = Object.create(null); // "METHOD /endpoint rpc-method" -> count
   /**
-   * No relay: a request to a daemon endpoint or JSON-RPC method that submits or relays a transaction or
-   * a block is refused before anything is sent, also on a configured route and also when the core itself
-   * would send it (wallet2's commit path), and counted here. This version of the SDK never relays.
+   * One way only: a request to a daemon endpoint or JSON-RPC method that submits or relays a transaction
+   * or a block is refused before anything is sent, also on a configured route, and counted here, with one
+   * exception: the one submit request of a relay call. The bridge's relay_prepared opens a scope (from
+   * inside the module) around its one call of the core's commit; the module's HTTP client of that wallet
+   * attaches the scope's id to the submit request only after checking that it carries exactly the kept
+   * transaction. A request passes only with the id of an open scope, as POST to exactly that wallet's
+   * configured route plus /sendrawtransaction, without a JSON-RPC method, at most once per scope.
+   * /send_raw_transaction, relay_tx, submit_block and every other submit or relay request stay refused.
+   * Nothing of a passed request's body is read or recorded here.
    */
   static readonly RELAY_ENDPOINTS: readonly string[] = ["/sendrawtransaction", "/send_raw_transaction"];
   static readonly RELAY_METHODS: readonly string[] = ["relay_tx", "submit_block", "submitblock", "send_raw_transaction", "sendrawtransaction"];
   static REFUSED_RELAY_REQUESTS = 0;
+  static PASSED_RELAY_REQUESTS = 0;
+  protected static RELAY_SCOPES = new Map<string, { uri: string; remaining: number }>();
+
+  /** Open the scope of one permitted submit request to uri (called from inside the module only). */
+  static openRelayScope(scope: unknown, uri: unknown, count: unknown): void {
+    if (typeof scope !== "string" || !/^[0-9a-f]{32}$/.test(scope) || typeof uri !== "string" || count !== 1) return;
+    HttpClient.RELAY_SCOPES.set(scope, { uri, remaining: 1 });
+  }
+
+  /** Close a scope opened by openRelayScope (called from inside the module only). */
+  static closeRelayScope(scope: unknown): void {
+    if (typeof scope === "string") HttpClient.RELAY_SCOPES.delete(scope);
+  }
+
+  /** Whether this submit request is the one an open scope permits; uses the scope up when it is. */
+  protected static passRelay(request: any, endpoint: string | undefined, rpcMethod: string | undefined, httpMethod: string): boolean {
+    const id = request?.relayScope;
+    if (typeof id !== "string") return false;
+    const scope = HttpClient.RELAY_SCOPES.get(id);
+    if (scope === undefined || scope.remaining < 1) return false;
+    if (httpMethod !== "POST" || rpcMethod !== undefined || endpoint !== "/sendrawtransaction") return false;
+    try {
+      if (typeof request.uri !== "string" || new URL(request.uri).href !== new URL(scope.uri).href) return false;
+    } catch (err) {
+      return false;
+    }
+    scope.remaining--;
+    return true;
+  }
   protected static DAEMON_ROUTES = new Map<string, { origin: string; basePath: string; count: number }>();
 
   /** Allow requests to a daemon route (one registration per wallet that uses it). */
@@ -71,6 +106,13 @@ export default class HttpClient {
     }
     if ((endpoint !== undefined && HttpClient.RELAY_ENDPOINTS.includes(endpoint.toLowerCase())) || (rpcMatch !== null && HttpClient.RELAY_METHODS.includes(rpcMatch[1].toLowerCase()))
         || (typeof request?.uri === "string" && HttpClient.RELAY_ENDPOINTS.some((e) => request.uri.split("?")[0].toLowerCase().endsWith(e)))) {
+      if (HttpClient.passRelay(request, endpoint, rpcMatch ? rpcMatch[1] : undefined, httpMethod)) {
+        HttpClient.PASSED_RELAY_REQUESTS++;
+        HttpClient.ALLOWED_REQUESTS++;
+        const passed = httpMethod + " " + endpoint + " relay";
+        HttpClient.ALLOWED_REQUEST_SUMMARY[passed] = (HttpClient.ALLOWED_REQUEST_SUMMARY[passed] ?? 0) + 1;
+        return;
+      }
       HttpClient.REFUSED_RELAY_REQUESTS++;
       HttpClient.BLOCKED_REQUESTS++;
       const key = httpMethod + " relay";
@@ -128,6 +170,7 @@ export default class HttpClient {
    * @param {string} [request.password] - must be empty or absent: credentials are rejected (DAEMON_CREDENTIALS)
    * @param {object} [request.headers] - headers to add to the request (optional)
    * @param {string} [request.proxyUri] - must be empty or absent: proxies are rejected (DAEMON_PROXY)
+   * @param {string} [request.relayScope] - the id of an open relay scope (set by the module for the one submit request of a relay call)
    * @param {boolean} [request.resolveWithFullResponse] - return full response if true, else body only (default false)
    * @param {boolean} [request.rejectUnauthorized] - whether or not to reject self-signed certificates (default true)
    * @param {object} [request.cancelToken] - token to cancel a queued or active request (optional)

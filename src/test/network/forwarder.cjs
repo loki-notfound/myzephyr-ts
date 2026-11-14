@@ -13,7 +13,9 @@
  *           request delayed), "/fake/status", "/fake/malformed", "/fake/nodestatus" (local fake
  *           daemons whose failures carry a marker text), "/fail/supply-rpc", "/fail/supply-http",
  *           "/fail/history-rpc", "/fail/history-http" (forward, but answer the circulating supply or the
- *           pricing record history locally with a JSON-RPC error or HTTP 500 carrying the marker text); with --page also the static consumer
+ *           pricing record history locally with a JSON-RPC error or HTTP 500 carrying the marker text),
+ *           "/sink/<mode>" (forward the read allowlist; every submit or relay request is answered locally by
+ *           relaySink.cjs in that mode and never forwarded: counts and body lengths only); with --page also the static consumer
  *           (index.html, bundles, nested asset directories) under an explicit CSP, POST /result and
  *           POST /csp-report; with --app instead of --page the consumer's pages come from a local
  *           development server (a loopback origin), relayed with the same CSP, websocket upgrades
@@ -41,10 +43,14 @@ const crypto = require("crypto");
 
 const args = process.argv.slice(2);
 const arg = (n, d) => { const i = args.indexOf("--" + n); return i >= 0 ? args[i + 1] : d; };
-// the upstream must be one of the configured test daemons (testEndpoints.cjs)
-const PERMITTED_UPSTREAMS = require("./testEndpoints.cjs").requireTestEndpoints().all.map((e) => e.url);
+// the upstream must be one of the configured test daemons (testEndpoints.cjs); only the sink's own test (--selftest,
+// sinkSelfTest.cjs) runs it against a counting loopback server instead
+const SELFTEST = args.includes("--selftest");
 const UPSTREAM = arg("upstream");
-if (!PERMITTED_UPSTREAMS.includes(UPSTREAM)) { process.stderr.write("upstream is not a configured test daemon\n"); process.exit(2); }
+if (SELFTEST ? !/^http:\/\/127\.0\.0\.1:[0-9]{1,5}$/.test(String(UPSTREAM)) : !require("./testEndpoints.cjs").requireTestEndpoints().all.map((e) => e.url).includes(UPSTREAM)) {
+  process.stderr.write("upstream is not a configured test daemon\n"); process.exit(2);
+}
+const sink = require("./relaySink.cjs");
 const OUT = path.resolve(arg("out"));
 const PAGE = arg("page") ? path.resolve(arg("page")) : undefined;
 const SEED = arg("seed") ? path.resolve(arg("seed")) : undefined;
@@ -77,10 +83,12 @@ const RELAY_METHODS = new Set(["relay_tx", "submit_block", "submitblock", "send_
 // record history, which the core reads for every transaction it constructs
 const FAIL_MOUNTS = { "/fail/supply-rpc": ["get_circulating_supply", "rpc"], "/fail/supply-http": ["get_circulating_supply", "http"],
   "/fail/history-rpc": ["get_pricing_record_history", "rpc"], "/fail/history-http": ["get_pricing_record_history", "http"] };
+// "/sink/<mode>" (any mode of relaySink.cjs): forwards the read allowlist like "/rpc" and answers every submit or relay
+// request itself by that mode; such a request is never forwarded (there is no code path that forwards one)
 const MOUNTS = ["/fail/history-http", "/fail/history-rpc", "/fail/supply-http", "/fail/supply-rpc", "/fake/nodestatus", "/fake/malformed", "/fake/status", "/rpc", "/slow"]; // longest first; "" is the root
 
 const stats = { started: new Date().toISOString(), upstream: UPSTREAM, routes: {}, denied: {}, binDigests: [], maxConcurrentUpstream: 0, upstreamRequests: 0,
-  upstreamErrors: 0, pageRequests: [], cspReports: [], preflights: {}, relayRequests: 0 };
+  upstreamErrors: 0, pageRequests: [], cspReports: [], preflights: {}, relayRequests: 0, sink: sink.newStats() };
 let active = 0;
 const waiters = [];
 const acquire = () => new Promise((resolve) => { if (active < MAX_UPSTREAM) { active++; stats.maxConcurrentUpstream = Math.max(stats.maxConcurrentUpstream, active); resolve(); } else waiters.push(resolve); });
@@ -148,12 +156,14 @@ function fake(kind, endpoint, method, body, res, extraHeaders) {
 }
 
 function splitMount(pathname) {
+  const m = /^(\/sink\/[a-z_-]{1,40})(\/.*)$/.exec(pathname);
+  if (m !== null) return { mount: m[1], endpoint: m[2] };
   for (const m of MOUNTS) if (pathname === m || pathname.startsWith(m + "/")) return { mount: m, endpoint: pathname.substring(m.length) };
   return { mount: "", endpoint: pathname };
 }
 
 function deny(listener, endpoint, method, res, headers) {
-  if (RELAY_PATHS.has(endpoint.toLowerCase()) || RELAY_METHODS.has(String(method).toLowerCase())) stats.relayRequests++;
+  if (RELAY_PATHS.has(endpoint.toLowerCase()) || RELAY_METHODS.has(String(method).toLowerCase()) || sink.isSubmit(endpoint, method)) stats.relayRequests++;
   const k = listener + " " + endpoint + " " + method;
   stats.denied[k] = (stats.denied[k] || 0) + 1;
   res.writeHead(403, headers); res.end();
@@ -256,6 +266,10 @@ function handler(listener) {
         } else { res.writeHead(404, headers); res.end(); }
         stats.pageRequests.push({ method: req.method, path: url.pathname.startsWith("/seed/") ? "/seed/*" : url.pathname, status, bytes: body.length });
         return;
+      }
+      if (mount.startsWith("/sink/") && sink.isSubmit(endpoint, endpoint === "/json_rpc" ? rpcMethod(endpoint, body) : "-")) {
+        // answered here by the mode; never forwarded
+        return sink.answer(mount.substring(6), body, req, res, stats.sink, MARKER, cors);
       }
       if (!ALLOWED_PATHS.has(endpoint) || (req.method !== "POST" && req.method !== "GET")) return deny(listener, endpoint, "-", res, cors);
       const method = rpcMethod(endpoint, body);

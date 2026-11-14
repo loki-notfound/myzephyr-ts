@@ -10,7 +10,7 @@ import { setWorkerDistPath, terminateWorker } from "../../../main/ts/index";
 import { RedirectReport, RedirectServerStats, runRedirectChecks } from "../RedirectChecks";
 import { runHistoryRequestCheck } from "../HistoryRequestCheck";
 import { runPoolRefreshCheck } from "../PoolRefreshCheck";
-import { runRelayRefusalCheck } from "../RelayRefusalCheck";
+import { runRelayRefusalCheck, runScopedPassCheck } from "../RelayRefusalCheck";
 
 async function run(): Promise<void> {
   const violations: string[] = [];
@@ -26,7 +26,9 @@ async function run(): Promise<void> {
       const h = await runHistoryRequestCheck(mode, { first: targets.first, stats });
       const p = await runPoolRefreshCheck(mode, { first: targets.first, stats, marker: targets.marker });
       const s = mode === "direct" ? await runRelayRefusalCheck({ first: targets.first, stats }) : undefined;
-      reports.push(Object.assign({}, r, { checks: r.checks.concat([h.check, p.check], s === undefined ? [] : [s.check]),
+      const sp = mode === "direct" ? await runScopedPassCheck({ first: targets.first, stats }) : undefined;
+      reports.push(Object.assign({}, r, { checks: r.checks.concat([h.check, p.check], s === undefined ? [] : [s.check], sp === undefined ? [] : [sp.check]),
+        scopedPass: sp === undefined ? undefined : { outcomes: sp.outcomes, daemonSubmits: sp.daemonSubmits },
         relay: s === undefined ? undefined : { refused: s.refused, attempts: s.attempts, daemonRequestsDuringAttempts: s.daemonRequestsDuringAttempts, controlRequests: s.controlRequests }, history: { requestsBeforeHistory: h.requestsBeforeHistory, requestsDuringHistory: h.requestsDuringHistory, historyCalls: h.historyCalls },
         pool: { steps: p.steps, poolTxRequests: p.poolTxRequests } }));
     }

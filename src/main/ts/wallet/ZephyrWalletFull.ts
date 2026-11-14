@@ -42,6 +42,8 @@ import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAdd
 import { ZephyrAccountBalances, ZephyrAssetBalances, fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalances";
 import { MAX_DESTINATIONS, ZephyrTransferBuild, ZephyrTransferRequest, checkTransferRequest, fromBuildDto, parseBridgeBuild } from "../common/ZephyrTransfer";
 import { ZephyrConversionBuild, ZephyrConversionRequest, checkConversionRequest, fromConversionDto, parseBridgeConversion } from "../common/ZephyrConversion";
+import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult, checkRelayToken, fromPreparedConversionDto, fromPreparedTransferDto, fromRelayDto, parseBridgeDiscard,
+  parseBridgePreparedConversion, parseBridgePreparedTransfer, parseBridgeRelay } from "../common/ZephyrRelay";
 import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, ZephyrWalletTx, checkSelection, fromPoolRefreshDto, fromTxsDto, parseBridgeTxs, parsePoolRefresh } from "../common/ZephyrHistory";
 import { ZephyrAccount, ZephyrAddressIndex, ZephyrSubaddress, fromAccountDto, fromAccountsDto, fromAddressIndexDto, fromSubaddressDto, fromSubaddressesDto, parseBridgeAccount, parseBridgeAccounts, parseBridgeAddressIndex, parseBridgeSubaddress, parseBridgeSubaddresses } from "../common/ZephyrAccounts";
 import { configFields, toCoreConfigJson, validateCreateConfig, validateOpenConfig } from "./model/ZephyrWalletCoreConfig";
@@ -1000,6 +1002,68 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       return new Promise<ZephyrConversionBuild>((resolve, reject) => {
         this.module.build_conversion(this.cppAddress, r.sourceAsset, r.destinationAsset, r.address, r.amount, r.accountIndex, r.subaddressIndices.join(","), r.priority, (result: unknown) => {
           try { resolve(parseBridgeConversion(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /**
+   * As buildTransferChecked, but the built transactions stay in the wallet's one slot inside the module (bridge
+   * prepare_txs; the previous kept build is voided); the result carries the slot's new token.
+   */
+  async prepareTransferChecked(request: ZephyrTransferRequest): Promise<ZephyrPreparedTransfer> {
+    const r = checkTransferRequest(request?.asset, request?.addresses, request?.amounts, request?.accountIndex, request?.subaddressIndices, request?.priority);
+    if (this.getWalletProxy()) return this.getWalletProxy().prepareTransferChecked(r);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<ZephyrPreparedTransfer>((resolve, reject) => {
+        this.module.prepare_txs(this.cppAddress, r.asset, r.addresses.join(","), r.amounts.join(","), r.accountIndex, r.subaddressIndices.join(","), r.priority, MAX_DESTINATIONS, (result: unknown) => {
+          try { resolve(parseBridgePreparedTransfer(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /** As buildConversionChecked, but the built transaction stays in the wallet's one slot (bridge prepare_conversion). */
+  async prepareConversionChecked(request: ZephyrConversionRequest): Promise<ZephyrPreparedConversion> {
+    const r = checkConversionRequest(request?.sourceAsset, request?.destinationAsset, request?.address, request?.amount, request?.accountIndex, request?.subaddressIndices, request?.priority);
+    if (this.getWalletProxy()) return this.getWalletProxy().prepareConversionChecked(r);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<ZephyrPreparedConversion>((resolve, reject) => {
+        this.module.prepare_conversion(this.cppAddress, r.sourceAsset, r.destinationAsset, r.address, r.amount, r.accountIndex, r.subaddressIndices.join(","), r.priority, (result: unknown) => {
+          try { resolve(parseBridgePreparedConversion(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /**
+   * Relay exactly the kept build that token names (bridge relay_prepared, the one relay binding). hashes: the
+   * prepared build's hashes when the caller knows them; the result must name exactly these.
+   */
+  async relayPreparedChecked(token: string, hashes?: readonly string[]): Promise<ZephyrRelayResult> {
+    const t = checkRelayToken(token);
+    if (this.getWalletProxy()) return this.getWalletProxy().relayPreparedChecked(t, hashes);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<ZephyrRelayResult>((resolve, reject) => {
+        this.module.relay_prepared(this.cppAddress, t, (result: unknown) => {
+          try { resolve(parseBridgeRelay(ZephyrWalletError.checkBridgeResult("relay", result), hashes)); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /** Void the kept build that token names (bridge discard_prepared); false when it named none. */
+  async discardPreparedChecked(token: string): Promise<boolean> {
+    const t = checkRelayToken(token);
+    if (this.getWalletProxy()) return this.getWalletProxy().discardPreparedChecked(t);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<boolean>((resolve, reject) => {
+        this.module.discard_prepared(this.cppAddress, t, (result: unknown) => {
+          try { resolve(parseBridgeDiscard(ZephyrWalletError.checkBridgeResult("relay", result))); } catch (err) { reject(err); }
         });
       });
     });
@@ -2411,6 +2475,25 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   async buildConversionChecked(request: ZephyrConversionRequest): Promise<ZephyrConversionBuild> {
     return fromConversionDto(await this.invokeWorker("buildConversion", [request.sourceAsset, request.destinationAsset, request.address, request.amount, request.accountIndex,
       request.subaddressIndices.slice(), request.priority]), request);
+  }
+
+  async prepareTransferChecked(request: ZephyrTransferRequest): Promise<ZephyrPreparedTransfer> {
+    return fromPreparedTransferDto(await this.invokeWorker("prepareTransfer", [request.asset, request.addresses.slice(), request.amounts.slice(), request.accountIndex, request.subaddressIndices.slice(), request.priority]), request);
+  }
+
+  async prepareConversionChecked(request: ZephyrConversionRequest): Promise<ZephyrPreparedConversion> {
+    return fromPreparedConversionDto(await this.invokeWorker("prepareConversion", [request.sourceAsset, request.destinationAsset, request.address, request.amount, request.accountIndex,
+      request.subaddressIndices.slice(), request.priority]), request);
+  }
+
+  async relayPreparedChecked(token: string, hashes?: readonly string[]): Promise<ZephyrRelayResult> {
+    return fromRelayDto(await this.invokeWorker("relayPrepared", [token]), hashes);
+  }
+
+  async discardPreparedChecked(token: string): Promise<boolean> {
+    const result = await this.invokeWorker("discardPrepared", [token]);
+    if (typeof result !== "boolean") throw new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE");
+    return result;
   }
 
   async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }

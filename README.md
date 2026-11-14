@@ -15,9 +15,10 @@ The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not
 ## Status
 
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
-the read-only history of transactions and transfers, an explicit pool refresh, and building same-asset
-transactions and conversions without relay to inspect them (below). Sending (relaying) transactions or
-conversions and listeners are not supported yet. Read
+the read-only history of transactions and transfers, an explicit pool refresh, building same-asset
+transactions and conversions to inspect them, and relaying a prepared transaction or conversion in two
+explicit steps (below). Relay is proven against a local sink only so far, not yet on the network.
+Sweeps and listeners are not supported. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 
 ## Core and pinned sources
@@ -76,6 +77,11 @@ The package entry (`src/main/ts/index.ts`) exports:
   `getSubaddresses`, `getSubaddress`, `createSubaddress`, `setSubaddressLabel` and
   `getAddressIndex`; results are read-only plain objects with the balance maps by asset (see
   below);
+* building and relaying for full wallets: `buildTransfer` and `buildConversion` (build, describe, discard),
+  `prepareTransfer` and `prepareConversion` (build, describe, keep under a token), `relayPrepared` and
+  `discardPrepared`, with the types `ZephyrTransferConfig`, `ZephyrTransferBuild`, `ZephyrBuiltTx`,
+  `ZephyrConversionConfig`, `ZephyrConversionBuild`, `ZephyrPreparedTransfer`, `ZephyrPreparedConversion`,
+  `ZephyrRelayResult`, `ZephyrRelayedTx` and `ZephyrRelayOutcome` (below);
 * `validateAddress`, `ZephyrWalletError` (a fixed code and an optional fixed diagnostic; no
   native or daemon text, no secrets), `setWorkerDistPath`, `setWasmModuleUrl` and
   `terminateWorker`;
@@ -249,10 +255,11 @@ and proxy requirements.
 
 `buildTransfer(config)` builds the transactions of a same-asset transfer, describes them and
 discards them. The core builds and signs them inside the WebAssembly module; nothing is relayed and
-nothing is stored: there is no relay call in this version, the bridge passes the core's relay flag as
-the constant `false`, the transport refuses every request to the daemon's submit and relay endpoints
+nothing is stored: the bridge passes the core's relay flag as the constant `false` in every build, the
+transport refuses every request to the daemon's submit and relay endpoints outside a relay call
 (`UNSUPPORTED_CAPABILITY`/`RELAY_REQUEST`), and no byte of a built transaction (hex, signed set, key
-images, transaction key) leaves the module. Full wallets with spend keys only: keys-only and
+images, transaction key) leaves the module. To relay, prepare the same configuration and relay its token
+(below, "Relaying a prepared transaction"). Full wallets with spend keys only: keys-only and
 view-only wallets reject with `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_TX` or `VIEW_ONLY_TX`.
 
 The configuration (`ZephyrTransferConfig`, a plain object of own data properties; unknown fields
@@ -343,19 +350,93 @@ const c = await wallet.buildConversion({ sourceAsset: "ZPH", destinationAsset: "
 console.log(c.amountBurnt, c.amountMinted, c.fee, c.feeAsset, c.pricingRecordHeight);
 ```
 
+### Relaying a prepared transaction
+
+Relay is two explicit steps. `prepareTransfer(config)` and `prepareConversion(config)` take the
+configurations of `buildTransfer` and `buildConversion`, run the same checks and requests and return the
+same description, but keep the built transactions inside the WebAssembly module instead of discarding
+them, together with an opaque `token` (32 lowercase hexadecimal characters):
+`{ token, build }` (`ZephyrPreparedTransfer`, `ZephyrPreparedConversion`). `relayPrepared(token)` then
+relays exactly what that token names, as it was described; `discardPrepared(token)` voids it (`true`, or
+`false` when the token named nothing). `buildTransfer` and `buildConversion` keep discarding what they build.
+
+* One kept build per wallet. It is void, wiped and released inside the module, after it was relayed
+  completely, after the daemon refused it, after `discardPrepared`, `close`, a password change, a newer
+  prepare (also one that fails), a sync after which the wallet's height differs from the height at the
+  build by more than 10 blocks, a conversion whose pricing record has aged, and after three relay calls.
+  A forced stop ends the worker that holds it. It is never part of the wallet bytes. A void or unknown
+  token rejects with `INVALID_CONFIG`/`RELAY_TOKEN_VOID` before any request; a value that is not a token
+  with `INVALID_CONFIG`/`RELAY_TOKEN`.
+* What is relayed is what was described: before the request the module checks that the kept transaction
+  hashes to the described hash (`NATIVE_ERROR`/`RELAY_HASH_MISMATCH` otherwise, the token is void), and its
+  transport passes the submit request only after checking the hash of the transaction it carries.
+* A conversion is accepted by the chain only while its pricing record is at most 10 blocks old. When the
+  wallet's own height shows that it has aged, `relayPrepared` rejects with
+  `TX_NOT_POSSIBLE`/`PRICING_RECORD_AGE` before any request and the token is void; prepare it again.
+* The request: one `POST <daemon>/sendrawtransaction` per kept transaction to the wallet's configured
+  daemon, with the body `{"client":"","tx_as_hex":"<the transaction>"}` exactly as the core sends it (its
+  do-not-relay flag is false and its sanity-check flag true, both left out as the defaults the daemon
+  applies). It reveals the transaction itself (what the chain will show) and that this client sent it.
+  Every other submit or relay request (`/send_raw_transaction`, `relay_tx`, `submit_block`, ...) stays
+  refused by the transport.
+
+`relayPrepared` resolves when at least one transaction was accepted in that call; for one transaction
+(conversions always, transfers nearly always) resolving means accepted. The result (`ZephyrRelayResult`)
+has per kept transaction its described `hash`, the `outcome` (`accepted`, `rejected`, `unknown`,
+`notSent`), `notRelayed` (accepted, but the daemon kept it without relaying it) and, on the entry that
+failed, `code` and `diagnostic`; `complete` is true when every transaction is accepted. When nothing was
+accepted it rejects:
+
+* `TX_REJECTED`: the daemon refused the transaction, with the first reason of its reply (`LOW_RING_SIZE`,
+  `DOUBLE_SPEND`, `INVALID_INPUT`, `INVALID_OUTPUT`, `TOO_BIG`, `OVERSPEND`, `FEE_TOO_LOW`,
+  `TOO_FEW_OUTPUTS`, `TX_EXTRA_TOO_BIG`, `SANITY_CHECK_FAILED`, `NOT_RELAYED`) or `REJECTED`; the token is
+  void. Sync, then prepare again (for a double spend the outputs may be spent elsewhere).
+* `DAEMON_ERROR`/`DAEMON_BUSY` (the daemon did not process it) or `DAEMON_UNREACHABLE` (the connection was
+  refused, nothing was sent): the token stays; relay it again later or discard it.
+* `RELAY_UNKNOWN`/`NO_ANSWER`, `HTTP_STATUS`, `ANSWER_UNREADABLE`: the request was sent and no usable answer
+  came, so the transaction may have reached the network. This is never reported as not sent. The token
+  stays: relaying it again sends exactly the same transaction (a daemon that already has it answers that it
+  kept it without relaying it, and the wallet then records it). Otherwise discard it, call `refreshPool()`
+  and sync before building again: the wallet has not recorded the transaction and would select the same
+  outputs.
+* `NATIVE_ERROR`/`RELAY_REQUEST` (the transport refused the submit request) and `RELAY_FAILED` (the core's
+  commit failed before any request): nothing was sent, the token is void.
+
+After acceptance the core records the transaction as the wallet's own: an unconfirmed outgoing
+transaction in the history (`isConfirmed` false), its transaction key, and the spent outputs. The source
+account's balance falls by the debited total (amount and fee; the change counts while pending) and its
+unlocked balance by the spent inputs. While it is pending the core counts an amount sent to an address of
+the same account back into that account's balance (in the source asset, also for a conversion to such an
+address, whose source-asset balance then falls only by the fee until the transaction is confirmed). This lives in the wallet's cache: save the wallet bytes (`getData`)
+after `relayPrepared` resolves; bytes saved before reopen without the record, with the outputs unspent,
+until a sync sees the transaction in a block. A transaction that never reaches the pool stays pending; the
+core marks it failed (and its outputs unspent again) only after 500 seconds and a refresh that reads the
+pool. If the core accepted the daemon's answer but could not record the transaction, the accepted entry
+carries `NATIVE_ERROR`/`RELAY_RECORD_FAILED`: the daemon has it; sync.
+
+```typescript
+const p = await wallet.prepareTransfer({ asset: "ZPH", destinations: [{ address, amount: 100000000000n }], accountIndex: 0 });
+console.log(p.build.txs[0].hash, p.build.txs[0].fee);          // inspect, then relay exactly this
+const r = await wallet.relayPrepared(p.token);                 // rejects unless accepted
+const saved = await wallet.getData();                          // keep the wallet's record of it
+```
+
+Not yet proven on the network: that the chain accepts what this SDK relays, the fee it is charged, and
+the amount a conversion delivers. The relay is proven against a local sink that plays the daemon
+(docs/LIMITATIONS.md); a funded test on mainnet follows before any release.
+
 ## Not ported
 
 Everything else inherited from monero-ts stays in the source as unported classes under
 `src/main/ts/` and is not exported by the package: the daemon and wallet RPC clients, the
 connection manager, background synchronization, listeners, the inherited query-based history,
-the inherited transaction creation, relay and sweeps, outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
+the inherited transaction creation, its relay and sweeps, outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
 most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
 inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and
 `ZephyrSubaddress`). The
 inherited Monero test suite and its root entry point are not part of this repository's tree; the
-tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`. Relaying
-transactions and conversions needs further work and its own tests with funded wallets.
+tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`.
 
 ## Building and testing
 

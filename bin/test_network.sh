@@ -43,6 +43,14 @@
 # N26 (after N22, from its bytes, no sync) builds a same-asset transfer and a conversion through forwarder mounts
 # that answer the circulating supply or the pricing record history with a JSON-RPC error or HTTP 500 (node text
 # included): each must reject with DAEMON_ERROR/DAEMON_RESPONSE without that text.
+# Relay is proven against a local sink only: the forwarder's /sink/<mode> mounts forward the read allowlist and
+# answer every submit or relay request themselves (src/test/network/relaySink.cjs); no such request is ever
+# forwarded, which the sink self-test shows first with a counting loopback upstream (sinkSelfTest.cjs, no daemon).
+# N27 (after N26, from N22's bytes, fresh copies) prepares, relays to the accepting sink and inspects per V2 asset a
+# same-asset transfer to the wallet's own account 1, a two-destination transfer from account 1, each conversion the
+# chain allows now, two of them proxied (0.1 of the source asset, only the wallet's own addresses); then a refusing
+# sink, a dropped connection and a late answer. N28 follows N25 in the test module's run: the allocator after a
+# refused relay, an unreachable daemon and a void token. Nothing is relayed to the network by these checks.
 #
 # Environment (optional): CHROMIUM=<browser binary> (default: chromium); DIRECT_CHECKS, WORKER_CHECKS
 # and BROWSER_CHECKS select a subset of the checks per run (checks after N02 that reopen the measured
@@ -58,7 +66,7 @@ CHROMIUM=${CHROMIUM:-chromium}
 OUT=$ROOT/build/test-results/network; SEED=$ROOT/build/test-wallets/network-seed
 rm -rf "$OUT" "$SEED"; mkdir -p "$OUT" "$(dirname "$SEED")"; chmod 700 "$OUT" "$(dirname "$SEED")"
 MARKER=MARKERnodetext
-DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20,N22,N24,N26}
+DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20,N22,N24,N26,N27}
 WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16,N19,N21}
 BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16,N19,N21}
 FUNDED_ARGS=()
@@ -71,6 +79,8 @@ if [ -n "${FUNDED_WALLET_IN:-}" ] || [ -n "${FUNDED_EXPECT:-}" ]; then
   [[ ",$DIRECT_CHECKS," != *",N22,"* ]] || FUNDED_ARGS+=(--funded-build-out "$FUNDED_BUILD")
 fi
 UPSTREAM=$(node -e 'console.log(require(process.argv[1]).requireTestEndpoints().upstream.url)' "$ROOT/src/test/network/testEndpoints.cjs")
+log "the forwarder's sink alone: no submit or relay request reaches a counting upstream"
+node "$ROOT/src/test/network/sinkSelfTest.cjs" --out "$OUT/sink-selftest.json" || die "the forwarder's sink self-test failed"
 
 NOT_RUN=$OUT/not-run.txt; : > "$NOT_RUN"
 report_status() { # report.json requested-checks label: every requested check is in the report and passed or was not run
@@ -119,7 +129,7 @@ else
   node_run worker "$WORKER_CHECKS"
 fi
 if [ -n "${FUNDED_BUILD:-}" ] && [ -s "$FUNDED_BUILD/keys.bin" ]; then
-  RUNNAME=alloc node_run direct N23,N25 --test-module "$ROOT/dist/zephyr.test.js" --funded-synced "$FUNDED_BUILD"
+  RUNNAME=alloc node_run direct N23,N25,N28 --test-module "$ROOT/dist/zephyr.test.js" --funded-synced "$FUNDED_BUILD"
   rm -rf "$FUNDED_BUILD"
 fi
 

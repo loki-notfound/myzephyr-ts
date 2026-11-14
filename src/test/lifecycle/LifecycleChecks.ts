@@ -16,6 +16,7 @@ import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
 import * as History from "../../main/ts/common/ZephyrHistory";
 import * as Transfer from "../../main/ts/common/ZephyrTransfer";
 import * as Conversion from "../../main/ts/common/ZephyrConversion";
+import * as Relay from "../../main/ts/common/ZephyrRelay";
 
 export type CheckStatus = "pass" | "fail" | "not-run";
 
@@ -1845,6 +1846,114 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       try { (Conversion.checkConversionRequest as (...a: unknown[]) => unknown)(...args); notes.push("request accepted: " + label); expect(false, "request accepted"); } catch (err) { expect(codeOf(err) + diagnosticOf(err) === "INVALID_CONFIG/" + diag, "request " + label + " rejected with " + diag); }
     }
     notes.push(cases.length + " deviations rejected by the bridge parser and by the worker DTO parser, " + requests.length + " worker requests rejected");
+  });
+
+  await check("C38", "Relaying offline: prepareTransfer and prepareConversion take the build calls' configurations and checks (a wallet without funds rejects without a token and without a request); relayPrepared and discardPrepared reject a value that is not a token before any native call, an unknown token with RELAY_TOKEN_VOID (discard: false); keys-only and view-only wallets reject; closed wallets reject", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    const own = await w.getPrimaryAddress();
+    const one = BigInt("1000000000000");
+    const transfer: F.ZephyrTransferConfig = { asset: "ZPH", destinations: [{ address: own, amount: one }], accountIndex: 0 };
+    const conversion: F.ZephyrConversionConfig = { sourceAsset: "ZPH", destinationAsset: "ZRS", destination: { address: own, amount: one }, accountIndex: 0 };
+    const unknown = "0123456789abcdef0123456789abcdef";
+    const notTokens: unknown[] = [undefined, null, 7, "", "0123456789ABCDEF0123456789ABCDEF", unknown + "0", unknown.substring(1), "g".repeat(32), { token: unknown }];
+    const native = await countNativeCalls(async () => {
+      for (const t of notTokens) {
+        await expectCode(w.relayPrepared(t as string), "INVALID_CONFIG", "relayPrepared with " + JSON.stringify(t), notes, "RELAY_TOKEN");
+        await expectCode(w.discardPrepared(t as string), "INVALID_CONFIG", "discardPrepared with " + JSON.stringify(t), notes, "RELAY_TOKEN");
+      }
+      await expectCode((w.relayPrepared as (...a: unknown[]) => Promise<unknown>)(unknown, {}), "INVALID_CONFIG", "relayPrepared with a second argument", notes, "FIELD_TYPE");
+      await expectCode(w.prepareTransfer({ ...transfer, relay: true } as F.ZephyrTransferConfig), "INVALID_CONFIG", "prepareTransfer with a relay field", notes, "UNKNOWN_FIELD");
+      await expectCode(w.prepareTransfer({ ...transfer, destinationAsset: "ZRS" }), "UNSUPPORTED_CAPABILITY", "prepareTransfer with a destination asset", notes, "CONVERSION");
+      await expectCode(w.prepareConversion({ ...conversion, destinationAsset: "ZPH" }), "INVALID_CONFIG", "prepareConversion with the same asset", notes, "CONVERSION_PAIR");
+      await expectCode(w.prepareConversion({ ...conversion, destination: { address: own, amount: BigInt(1) } }), "INVALID_CONFIG", "prepareConversion with five decimals", notes, "AMOUNT_PRECISION");
+    });
+    if (!proxy) expect(native === 0, "no native export called by the rejections before dispatch, got " + native);
+    await expectCode(w.relayPrepared(unknown), "INVALID_CONFIG", "relayPrepared with an unknown token", notes, "RELAY_TOKEN_VOID");
+    expect((await w.discardPrepared(unknown)) === false, "discardPrepared of an unknown token is false");
+    await expectCode(w.prepareTransfer(transfer), "TX_NOT_POSSIBLE", "prepareTransfer without funds", notes, "NOT_ENOUGH_MONEY");
+    await expectCode(w.prepareConversion(conversion), "TX_NOT_POSSIBLE", "prepareConversion without funds", notes, "NOT_ENOUGH_MONEY");
+    await expectCode(w.relayPrepared(unknown), "INVALID_CONFIG", "relayPrepared after a failed prepare", notes, "RELAY_TOKEN_VOID");
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy });
+    await expectCode(k.prepareTransfer(transfer), "UNSUPPORTED_CAPABILITY", "keys-only prepareTransfer", notes, "KEYS_ONLY_TX");
+    await expectCode(k.relayPrepared(unknown), "UNSUPPORTED_CAPABILITY", "keys-only relayPrepared", notes, "KEYS_ONLY_TX");
+    await expectCode(k.discardPrepared(unknown), "UNSUPPORTED_CAPABILITY", "keys-only discardPrepared", notes, "KEYS_ONLY_TX");
+    await k.close();
+    const v = await F.restoreWalletFromKeys({ networkType: 0, password: pw, primaryAddress: address, privateViewKey: privView, proxyToWorker: proxy });
+    await expectCode(v.prepareTransfer({ ...transfer, destinations: [{ address, amount: one }] }), "UNSUPPORTED_CAPABILITY", "view-only prepareTransfer", notes, "VIEW_ONLY_TX");
+    await expectCode(v.prepareConversion({ ...conversion, destination: { address, amount: one } }), "UNSUPPORTED_CAPABILITY", "view-only prepareConversion", notes, "VIEW_ONLY_TX");
+    await expectCode(v.relayPrepared(unknown), "UNSUPPORTED_CAPABILITY", "view-only relayPrepared", notes, "VIEW_ONLY_TX");
+    await v.close();
+    expect((await w.getTxs()).length === 0, "nothing was recorded");
+    await w.close();
+    await expectCode(w.relayPrepared(unknown), "WALLET_CLOSED", "relayPrepared after close", notes);
+    await expectCode(w.prepareTransfer(transfer), "WALLET_CLOSED", "prepareTransfer after close", notes);
+    notes.push(notTokens.length + " values that are not tokens rejected by relayPrepared and discardPrepared before dispatch");
+  });
+
+  await check("C39", "Relay decoding: the bridge's prepared results and relay results and their worker DTOs are accepted exactly, every deviation rejects with a fixed code; DTOs round-trip; a relay result must name the prepared hashes; the worker's relay token is validated again", async (notes) => {
+    const addr = address;
+    const h = (n: number) => n.toString(16).padStart(64, "0");
+    const token = "00112233445566778899aabbccddeeff";
+    const tRequest = Transfer.checkTransferConfig({ asset: "ZPH", destinations: [{ address: addr, amount: BigInt("100000000000") }], accountIndex: 0 });
+    const tx = { hash: h(1), sourceAsset: "ZPH", destinationAsset: "ZPH", amount: "100000000000", fee: "308000000", feeAsset: "ZPH", totalDebited: "100308000000", change: "1", ringSize: 16, inputs: 1, outputs: 2,
+      weight: "1540", unlockTime: "0", destinations: [{ address: addr, amount: "100000000000" }] };
+    const prepared = Relay.parseBridgePreparedTransfer(JSON.stringify({ token, build: { txs: [tx] } }), tRequest);
+    expect(Object.isFrozen(prepared) && prepared.token === token && prepared.build.txs[0].hash === h(1), "a prepared transfer decoded");
+    const show = (v: unknown) => JSON.stringify(v, (k, x) => (typeof x === "bigint" ? "n" + x.toString() : x));
+    expect(show(Relay.fromPreparedTransferDto(JSON.parse(JSON.stringify(Relay.toPreparedTransferDto(prepared))), tRequest)) === show(prepared), "prepared transfer DTO round trip");
+    const cRequest = Conversion.checkConversionConfig({ sourceAsset: "ZSD", destinationAsset: "ZYS", destination: { address: addr, amount: BigInt("500000000000") }, accountIndex: 0 });
+    const ctx = { hash: h(2), sourceAsset: "ZSD", destinationAsset: "ZYS", destination: { address: addr, amount: "500000000000" }, amountBurnt: "500000000000", amountMinted: "432100000000",
+      fee: "308000000", feeAsset: "ZSD", totalDebited: "500308000000", change: "9499692000000", ringSize: 16, inputs: 1, outputs: 4, weight: "2290", unlockTime: "0", pricingRecordHeight: "906500" };
+    const pc = Relay.parseBridgePreparedConversion(JSON.stringify({ token, build: { tx: ctx } }), cRequest);
+    expect(pc.token === token && pc.build.amountMinted === BigInt("432100000000"), "a prepared conversion decoded");
+    expect(show(Relay.fromPreparedConversionDto(JSON.parse(JSON.stringify(Relay.toPreparedConversionDto(pc))), cRequest)) === show(pc), "prepared conversion DTO round trip");
+    let rejected = 0, total = 0;
+    const prep: Array<[string, unknown]> = [["no token", { build: { txs: [tx] } }], ["upper-case token", { token: token.toUpperCase(), build: { txs: [tx] } }], ["short token", { token: token.substring(2), build: { txs: [tx] } }],
+      ["extra field", { token, build: { txs: [tx] }, hex: "00" }], ["build changed", { token, build: { txs: [{ ...tx, amount: "1" }] } }], ["token as a number", { token: 7, build: { txs: [tx] } }]];
+    for (const [label, value] of prep) {
+      total += 2;
+      try { Relay.parseBridgePreparedTransfer(JSON.stringify(value), tRequest); notes.push("bridge accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") rejected++; else notes.push("bridge " + label + ": " + codeOf(err)); }
+      try { Relay.fromPreparedTransferDto(value, tRequest); notes.push("dto accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "MALFORMED_MESSAGE/MESSAGE_SHAPE") rejected++; else notes.push("dto " + label + ": " + codeOf(err)); }
+    }
+    const ok = { txs: [{ hash: h(1), outcome: "accepted", notRelayed: false }], complete: true };
+    const r = Relay.parseBridgeRelay(JSON.stringify(ok), [h(1)]);
+    expect(Object.isFrozen(r) && r.complete && r.txs[0].outcome === "accepted" && r.txs[0].code === undefined, "a relay result decoded");
+    expect(show(Relay.fromRelayDto(JSON.parse(JSON.stringify(Relay.toRelayDto(r))), [h(1)])) === show(r), "relay DTO round trip");
+    const split = { txs: [{ hash: h(1), outcome: "accepted", notRelayed: true }, { hash: h(2), outcome: "rejected", notRelayed: false, error: "DOUBLE_SPEND" }, { hash: h(3), outcome: "notSent", notRelayed: false }], complete: false };
+    const rs = Relay.parseBridgeRelay(JSON.stringify(split));
+    expect(rs.txs[1].code === "TX_REJECTED" && rs.txs[1].diagnostic === "DOUBLE_SPEND" && rs.txs[0].notRelayed && !rs.complete, "a partial relay result decoded with the failed entry's pair");
+    expect(show(Relay.fromRelayDto(JSON.parse(JSON.stringify(Relay.toRelayDto(rs))))) === show(rs), "partial relay DTO round trip");
+    const recordFailed = Relay.parseBridgeRelay(JSON.stringify({ txs: [{ hash: h(1), outcome: "accepted", notRelayed: false, error: "RELAY_RECORD_FAILED" }], complete: true }));
+    expect(recordFailed.txs[0].code === "NATIVE_ERROR" && recordFailed.txs[0].diagnostic === "RELAY_RECORD_FAILED", "an accepted entry may carry the record failure");
+    const rel: Array<[string, unknown, string[] | undefined]> = [
+      ["nothing accepted", { txs: [{ hash: h(1), outcome: "unknown", notRelayed: false, error: "NO_ANSWER" }], complete: false }, undefined],
+      ["complete wrong", { txs: [{ hash: h(1), outcome: "accepted", notRelayed: false }], complete: false }, undefined],
+      ["another hash than prepared", ok, [h(9)]], ["more entries than prepared", ok, [h(1), h(2)]],
+      ["unknown outcome", { txs: [{ hash: h(1), outcome: "sent", notRelayed: false }], complete: true }, undefined],
+      ["notRelayed on a rejected entry", { txs: [{ hash: h(1), outcome: "accepted", notRelayed: false }, { hash: h(2), outcome: "rejected", notRelayed: true, error: "REJECTED" }], complete: false }, undefined],
+      ["a rejected entry without a reason", { txs: [{ hash: h(1), outcome: "accepted", notRelayed: false }, { hash: h(2), outcome: "rejected", notRelayed: false }], complete: false }, undefined],
+      ["a duplicate hash", { txs: [{ hash: h(1), outcome: "accepted", notRelayed: false }, { hash: h(1), outcome: "accepted", notRelayed: false }], complete: true }, undefined],
+      ["an extra field", { txs: [{ hash: h(1), outcome: "accepted", notRelayed: false, hex: "00" }], complete: true }, undefined],
+      ["an extra top-level field", { ...ok, height: 1 }, undefined], ["no entries", { txs: [], complete: true }, undefined],
+      ["notRelayed as text", { txs: [{ hash: h(1), outcome: "accepted", notRelayed: "false" }], complete: true }, undefined]];
+    for (const [label, value, hashes] of rel) {
+      total++;
+      try { Relay.parseBridgeRelay(JSON.stringify(value), hashes); notes.push("bridge accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") rejected++; else notes.push("bridge " + label + ": " + codeOf(err)); }
+      if (label.startsWith("a rejected entry") || label.startsWith("notRelayed on")) continue; // shapes with a bridge identifier
+      total++;
+      try { Relay.fromRelayDto(value, hashes); notes.push("dto accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "MALFORMED_MESSAGE/MESSAGE_SHAPE") rejected++; else notes.push("dto " + label + ": " + codeOf(err)); }
+    }
+    // the bridge shape names a failure by identifier, the DTO by code and diagnostic; neither accepts the other's
+    total += 3;
+    try { Relay.parseBridgeRelay(JSON.stringify({ txs: [{ hash: h(1), outcome: "accepted", notRelayed: false, code: "NATIVE_ERROR" }], complete: true })); notes.push("bridge accepted a code"); } catch (err) { if (codeOf(err) === "NATIVE_ERROR") rejected++; }
+    try { Relay.parseBridgeRelay(JSON.stringify({ txs: [{ hash: h(1), outcome: "accepted", notRelayed: false, error: "NOT_AN_IDENTIFIER" }], complete: true })); notes.push("bridge accepted an unknown identifier"); } catch (err) { if (codeOf(err) === "NATIVE_ERROR") rejected++; }
+    try { Relay.fromRelayDto({ txs: [{ hash: h(1), outcome: "accepted", notRelayed: false, error: "RELAY_RECORD_FAILED" }], complete: true }); notes.push("dto accepted an identifier"); } catch (err) { if (codeOf(err) === "MALFORMED_MESSAGE") rejected++; }
+    expect(rejected === total, "every deviation rejected (" + rejected + " of " + total + ")");
+    for (const text of ["", "[]", "{bad", "true"]) { try { Relay.parseBridgeRelay(text); expect(false, "text accepted"); } catch (err) { expect(codeOf(err) === "NATIVE_ERROR", "malformed text rejected"); } }
+    expect(Relay.parseBridgeDiscard("true") === true && Relay.parseBridgeDiscard("false") === false, "discard results decoded");
+    try { Relay.parseBridgeDiscard("1"); expect(false, "discard result accepted"); } catch (err) { expect(codeOf(err) === "NATIVE_ERROR", "a malformed discard result rejected"); }
+    for (const t of ["", token.toUpperCase(), 7]) { try { Relay.checkRelayToken(t); expect(false, "token accepted"); } catch (err) { expect(codeOf(err) + diagnosticOf(err) === "INVALID_CONFIG/RELAY_TOKEN", "worker token " + String(t) + " rejected"); } }
+    notes.push(total + " deviations rejected by the bridge and worker parsers");
   });
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close

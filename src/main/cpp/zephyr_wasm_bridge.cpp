@@ -18,6 +18,9 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "rapidjson/writer.h"
 #include "rapidjson/stringbuffer.h"
+#include "serialization/binary_archive.h"
+#include "cryptonote_config.h"
+#include <sstream>
 
 using namespace std;
 using namespace zephyr_wasm_bridge;
@@ -338,6 +341,7 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
       case ERROR_CONTEXT_DAEMON: return match_core_message(DAEMON_MESSAGE_RULES, e.what(), "DAEMON_RESPONSE");
       case ERROR_CONTEXT_SYNC: return match_core_message(DAEMON_MESSAGE_RULES, e.what(), "SYNC_FAILED");
       case ERROR_CONTEXT_BUILD: return match_core_message(BUILD_DAEMON_MESSAGE_RULES, e.what(), "TX_BUILD_FAILED");
+      case ERROR_CONTEXT_RELAY: return "RELAY_FAILED"; // the relay's own failures are classified from the transport's record
       case ERROR_CONTEXT_CONVERSION: {
         // the conversion messages first (reserve ratio, pricing record, pair, destinations, precision, split, zero
         // converted amount), then the build's daemon messages; any other text is TX_BUILD_FAILED
@@ -347,7 +351,7 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
       default: return "CORE_UNCLASSIFIED";
     }
   } catch (...) {
-    return context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : context == ERROR_CONTEXT_BUFFER ? "NATIVE_BUFFER_FAILED" : context == ERROR_CONTEXT_SYNC ? "SYNC_FAILED" : context == ERROR_CONTEXT_DAEMON ? "DAEMON_RESPONSE" : build_context(context) ? "TX_BUILD_FAILED" : "CORE_UNCLASSIFIED";
+    return context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : context == ERROR_CONTEXT_BUFFER ? "NATIVE_BUFFER_FAILED" : context == ERROR_CONTEXT_SYNC ? "SYNC_FAILED" : context == ERROR_CONTEXT_DAEMON ? "DAEMON_RESPONSE" : build_context(context) ? "TX_BUILD_FAILED" : context == ERROR_CONTEXT_RELAY ? "RELAY_FAILED" : "CORE_UNCLASSIFIED";
   }
 }
 
@@ -377,6 +381,64 @@ const char* zephyr_wasm_bridge::probe_password_state(int handle, const string& o
 // core receives the origin, and reads the transport's last failure kind to classify daemon errors.
 namespace {
   std::map<int, std::shared_ptr<epee::net_utils::http::http_client_wasm_route>> WALLET_ROUTES;
+
+  // ---- kept builds (prepare_txs, prepare_conversion; relay_prepared) ----
+  // One slot per wallet handle: the transactions of the wallet's last prepare, kept inside the module only until
+  // they are relayed or the slot becomes void. Each holds the core's serialized pending transaction (the
+  // transaction, its secret transaction key and the selected outputs), which never leaves the module.
+  struct kept_tx {
+    std::string hash;                    // as described to the caller
+    std::string metadata;                // the core's serialized pending_tx (hex); wiped when the slot becomes void
+    uint64_t pricing_record_height = 0;  // the transaction's own field (conversions)
+    bool accepted = false;               // the daemon accepted it (a relay call of this slot)
+  };
+  struct kept_build {
+    std::string token;                   // 32 lowercase hex from the core's random generator
+    uint64_t height = 0;                 // the wallet's height when built
+    bool conversion = false;
+    int attempts = 0;                    // relay calls made with this token
+    std::vector<kept_tx> txs;
+  };
+  std::map<int, kept_build> KEPT_BUILDS;
+  const uint64_t KEPT_HEIGHT_BOUND = 10; // a sync that moves the wallet's height further than this voids the slot
+  const int KEPT_MAX_ATTEMPTS = 3;       // relay calls per token
+
+  void wipe_text(std::string& text) {
+    std::fill(text.begin(), text.end(), '\0');
+    text.clear();
+    text.shrink_to_fit();
+  }
+
+  // void the wallet's kept build (if any): wipe and release every kept transaction
+  void void_kept(int handle) {
+    auto it = KEPT_BUILDS.find(handle);
+    if (it == KEPT_BUILDS.end()) return;
+    for (auto& t : it->second.txs) wipe_text(t.metadata);
+    KEPT_BUILDS.erase(it);
+  }
+
+  // a sync that moved the wallet's height by more than the bound (either direction) voids its kept build
+  void void_kept_after_sync(int handle, uint64_t height) {
+    auto it = KEPT_BUILDS.find(handle);
+    if (it == KEPT_BUILDS.end()) return;
+    uint64_t built = it->second.height;
+    if ((height > built ? height - built : built - height) > KEPT_HEIGHT_BOUND) void_kept(handle);
+  }
+
+  bool is_token_text(const string& text) {
+    if (text.size() != 32) return false;
+    for (char c : text) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    return true;
+  }
+
+  string new_token() {
+    uint8_t bytes[16];
+    crypto::generate_random_bytes_thread_safe(sizeof(bytes), bytes);
+    static const char* HEX = "0123456789abcdef";
+    string out;
+    for (uint8_t b : bytes) { out += HEX[b >> 4]; out += HEX[b & 15]; }
+    return out;
+  }
 
   std::shared_ptr<epee::net_utils::http::http_client_wasm_route> route_of(int handle) {
     auto it = WALLET_ROUTES.find(handle);
@@ -939,6 +1001,7 @@ void zephyr_wasm_bridge::set_daemon_connection(int handle, const string& uri, co
     if (!valid_daemon_origin(uri) || !valid_base_path(base_path) || (uri.empty() && !base_path.empty())) throw bridge_failure("DAEMON_ADDRESS");
     std::shared_ptr<epee::net_utils::http::http_client_wasm_route> route = route_of(handle);
     route->base_path = base_path;
+    route->origin = uri;
     route->last_failure = 0;
     monero_wallet* wallet = (monero_wallet*) handle;
     wallet->set_daemon_connection(uri, "", ""); // no credentials: the SDK rejects them before this call
@@ -1017,6 +1080,7 @@ void zephyr_wasm_bridge::sync(int handle, const string& start_height, emscripten
     ZEPHYR_TS_TEST_THROW("error.sync", start_height);
     monero_wallet* wallet = (monero_wallet*) handle;
     monero_sync_result sync_result = start_height.empty() ? wallet->sync() : wallet->sync(parse_height(start_height));
+    void_kept_after_sync(handle, wallet->get_height());
     test_barrier("sync.after");
     result = string("{\"numBlocksFetched\":\"") + decimal(sync_result.m_num_blocks_fetched) + "\",\"receivedMoney\":" + (sync_result.m_received_money ? "true" : "false") + "}";
   } catch (...) {
@@ -1890,71 +1954,58 @@ namespace {
 #endif
 }
 
-// {"txs":[{"hash","sourceAsset","destinationAsset","amount","fee","feeAsset","totalDebited","change","ringSize",
-// "inputs","outputs","weight","unlockTime"[,"destinations":[{"address","amount"},..]]},..]}: the transactions the
-// core built for a same-asset transfer of asset from account_idx (and subaddress_indices "" or "i,j,..."), with
-// priority 0..3, discarded inside the module. addresses "a1,a2,..." and amounts "n1,n2,..." name the
-// destinations (at most max_destinations). Nothing is relayed: m_relay is the constant false (fix_relay_false).
-void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string& addresses, const string& amounts, uint32_t account_idx, const string& subaddress_indices,
-                                   uint32_t priority, uint32_t max_destinations, emscripten::val callback) {
-  string result;
-  std::vector<std::shared_ptr<monero_tx_wallet>> txs;
-  monero_tx_config config;
-  try {
-    if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
-    monero_wallet* wallet = (monero_wallet*) handle;
-    if (wallet->is_view_only()) throw bridge_failure("VIEW_ONLY_TX");
-    if (wallet->is_multisig()) throw bridge_failure("MULTISIG");
-    if (!is_core_asset_type(asset)) throw bridge_failure("ASSET_TYPE");
-    if (!is_v2_asset(asset)) throw bridge_failure("TX_ASSET");
-    if (priority > 3) throw bridge_failure("TX_PRIORITY");
-    std::vector<std::string> destination_addresses = parse_destination_addresses(addresses, max_destinations);
-    std::vector<uint64_t> destination_amounts = parse_destination_amounts(amounts, destination_addresses.size());
-    std::vector<uint32_t> indices = parse_indices(subaddress_indices, 1000);
-    require_account(wallet, account_idx);
-    if (!indices.empty()) {
-      size_t count = subaddresses_of(wallet, account_idx).size();
-      for (uint32_t i : indices) if ((size_t) i >= count) throw bridge_failure("SUBADDRESS_NOT_FOUND");
+namespace {
+#if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)
+  // test-only: a synthetic kept transaction (hook prepare.synthetic) for the offline relay checks against constructed
+  // daemons: a minimal transaction (version 2, one coinbase-style input, no output, no signatures) that the transport's
+  // hash check parses. It spends nothing of the wallet and no chain would accept it. Inlined into the binding (a
+  // test-only function cannot be on the exception whitelist); absent from the release module.
+  __attribute__((always_inline)) inline bool test_synthetic_kept(kept_tx& out, uint64_t pricing_record_height) {
+    if (!test_inject("prepare.synthetic")) return false;
+    tools::wallet2::pending_tx ptx;
+    ptx.tx.version = 2;
+    ptx.tx.unlock_time = 0;
+    cryptonote::txin_gen in;
+    in.height = 1;
+    ptx.tx.vin.push_back(in);
+    ptx.tx.rct_signatures.type = rct::RCTTypeNull;
+    ptx.tx.pricing_record_height = pricing_record_height;
+    ptx.tx.invalidate_hashes();
+    out.hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
+    out.pricing_record_height = pricing_record_height;
+    std::ostringstream oss;
+    binary_archive<true> ar(oss);
+    if (!::serialization::serialize(ar, ptx)) throw bridge_failure("UNEXPECTED_RESULT");
+    out.metadata = epee::string_tools::buff_to_hex_nodelimer(oss.str());
+    return true;
+  }
+#else
+  inline bool test_synthetic_kept(kept_tx&, uint64_t) { return false; }
+#endif
+
+  // the hash of a kept transaction, read from the core's serialized pending transaction (as the core's relay_txs reads
+  // it); "" when it does not parse. The bytes are wiped after use.
+  string kept_tx_hash(const string& metadata) {
+    cryptonote::blobdata blob;
+    if (!epee::string_tools::parse_hexstr_to_binbuff(metadata, blob)) return string();
+    bool ok = false;
+    string hash;
+    {
+      tools::wallet2::pending_tx ptx;
+      try {
+        binary_archive<false> ar{epee::strspan<std::uint8_t>(blob)};
+        ok = ::serialization::serialize(ar, ptx);
+      } catch (...) {
+        ok = false;
+      }
+      if (ok) hash = epee::string_tools::pod_to_hex(cryptonote::get_transaction_hash(ptx.tx));
     }
-    monero_network_type network = wallet->get_network_type();
-    for (const auto& a : destination_addresses) check_destination_address(a, network);
-    ZEPHYR_TS_TEST_THROW("error.build", addresses + " " + amounts);
-    test_throw_build("build.core", addresses + " " + amounts); // test module only: the core's typed build failures
-    // a necessary condition from the core's own balance of this asset in the selected outputs (no request)
-    uint64_t needed = 0, unlocked = 0, balance = 0;
-    for (uint64_t v : destination_amounts) needed += v;
-    if (indices.empty()) {
-      unlocked = wallet->get_unlocked_balance(asset, account_idx);
-      balance = wallet->get_balance(asset, account_idx);
-    } else {
-      for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(asset, account_idx, i); balance += wallet->get_balance(asset, account_idx, i); }
-    }
-    if (needed > balance) throw bridge_failure("NOT_ENOUGH_MONEY");
-    if (needed > unlocked) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
-    config.m_account_index = account_idx;
-    config.m_subaddress_indices = indices;
-    config.source_currency = asset;
-    config.destination_currency = asset;
-    config.m_priority = (monero_tx_priority) priority;
-    config.m_can_split = true;
-    fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
-    for (size_t i = 0; i < destination_addresses.size(); i++) {
-      std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
-      d->m_address = destination_addresses[i];
-      d->m_amount = destination_amounts[i];
-      d->m_asset_type = asset;
-      config.m_destinations.push_back(d);
-    }
-    txs = wallet->create_txs(config);
-    test_barrier("build.after");
-    if (txs.empty() || txs.size() > 64) throw bridge_failure("UNEXPECTED_RESULT");
-    std::vector<built_description> described;
-    for (const auto& tx : txs) {
-      if (!tx) throw bridge_failure("UNEXPECTED_RESULT");
-      built_description d = describe_built_tx(*tx, asset);
-      if (d.source_asset != asset || d.destination_asset != asset || d.amount_burnt != 0 || d.amount_minted != 0 || d.pricing_record_height != 0) throw bridge_failure("UNEXPECTED_RESULT");
-      described.push_back(d);
-    }
+    std::fill(blob.begin(), blob.end(), '\0');
+    return ok ? hash : string();
+  }
+
+  // the JSON of a transfer's descriptions ({"txs":[...]}, the result of build_txs)
+  string transfer_json(const std::vector<built_description>& described, const std::vector<std::string>& destination_addresses, const std::vector<uint64_t>& destination_amounts) {
     rapidjson::StringBuffer buffer;
     json_writer w(buffer);
     w.StartObject();
@@ -1990,86 +2041,11 @@ void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string
     }
     w.EndArray();
     w.EndObject();
-    release_built(txs);
-    config.m_destinations.clear();
-    result = string(buffer.GetString(), buffer.GetSize());
-  } catch (...) {
-    const char* identifier = daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_BUILD));
-    release_built(txs);
-    config.m_destinations.clear();
-    result = bridge_error(identifier);
+    return string(buffer.GetString(), buffer.GetSize());
   }
-  callback(result);
-}
 
-// {"tx":{"hash","sourceAsset","destinationAsset","destination":{"address","amount"},"amountBurnt","amountMinted","fee","feeAsset",
-// "totalDebited","change","ringSize","inputs","outputs","weight","unlockTime","pricingRecordHeight"}}: the one transaction the core
-// built for a conversion of amount (in source_asset, a multiple of 10^8 atomic units) from account_idx (and subaddress_indices
-// "" or "i,j,...") to one address, with priority 0..3, discarded inside the module. The pair must be one of the six V2
-// conversions. amountBurnt, amountMinted and pricingRecordHeight are the built transaction's own fields; nothing is
-// computed here from a rate. Nothing is relayed: m_relay is the constant false (fix_relay_false).
-void zephyr_wasm_bridge::build_conversion(int handle, const string& source_asset, const string& destination_asset, const string& address, const string& amount,
-                                          uint32_t account_idx, const string& subaddress_indices, uint32_t priority, emscripten::val callback) {
-  string result;
-  std::vector<std::shared_ptr<monero_tx_wallet>> txs;
-  monero_tx_config config;
-  try {
-    if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
-    monero_wallet* wallet = (monero_wallet*) handle;
-    if (wallet->is_view_only()) throw bridge_failure("VIEW_ONLY_TX");
-    if (wallet->is_multisig()) throw bridge_failure("MULTISIG");
-    if (!is_core_asset_type(source_asset) || !is_core_asset_type(destination_asset)) throw bridge_failure("ASSET_TYPE");
-    if (!is_v2_asset(source_asset) || !is_v2_asset(destination_asset)) throw bridge_failure("TX_ASSET");
-    cryptonote::transaction_type tx_type;
-    if (!cryptonote::get_tx_type(source_asset, destination_asset, tx_type)) throw bridge_failure("CONVERSION_PAIR");
-    using tt = cryptonote::transaction_type;
-    if (tx_type != tt::MINT_STABLE && tx_type != tt::REDEEM_STABLE && tx_type != tt::MINT_RESERVE && tx_type != tt::REDEEM_RESERVE && tx_type != tt::MINT_YIELD && tx_type != tt::REDEEM_YIELD) throw bridge_failure("CONVERSION_PAIR");
-    if (priority > 3) throw bridge_failure("TX_PRIORITY");
-    std::vector<std::string> destination_addresses = parse_destination_addresses(address, 1);
-    std::vector<uint64_t> destination_amounts = parse_destination_amounts(amount, 1);
-    if (destination_amounts[0] % 100000000 != 0) throw bridge_failure("AMOUNT_PRECISION"); // at most four decimals (wallet2)
-    std::vector<uint32_t> indices = parse_indices(subaddress_indices, 1000);
-    require_account(wallet, account_idx);
-    if (!indices.empty()) {
-      size_t count = subaddresses_of(wallet, account_idx).size();
-      for (uint32_t i : indices) if ((size_t) i >= count) throw bridge_failure("SUBADDRESS_NOT_FOUND");
-    }
-    check_destination_address(destination_addresses[0], wallet->get_network_type());
-    ZEPHYR_TS_TEST_THROW("error.conversion", address + " " + amount);
-    test_throw_build("conversion.core", address + " " + amount); // test module only: the core's typed and conversion failures
-    // a necessary condition from the core's own balance of the source asset in the selected outputs (no request)
-    uint64_t unlocked = 0, balance = 0;
-    if (indices.empty()) {
-      unlocked = wallet->get_unlocked_balance(source_asset, account_idx);
-      balance = wallet->get_balance(source_asset, account_idx);
-    } else {
-      for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(source_asset, account_idx, i); balance += wallet->get_balance(source_asset, account_idx, i); }
-    }
-    if (destination_amounts[0] > balance) throw bridge_failure("NOT_ENOUGH_MONEY");
-    if (destination_amounts[0] > unlocked) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
-    config.m_account_index = account_idx;
-    config.m_subaddress_indices = indices;
-    config.source_currency = source_asset;
-    config.destination_currency = destination_asset;
-    config.m_priority = (monero_tx_priority) priority;
-    config.m_can_split = false; // a conversion is one transaction (the core refuses to split one)
-    fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
-    std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
-    d->m_address = destination_addresses[0];
-    d->m_amount = destination_amounts[0];
-    d->m_asset_type = destination_asset;
-    config.m_destinations.push_back(d);
-    txs = wallet->create_txs(config);
-    test_barrier("conversion.after");
-    if (txs.size() != 1 || !txs[0]) throw bridge_failure("UNEXPECTED_RESULT");
-    const monero_tx_wallet& tx = *txs[0];
-    built_description b = describe_built_tx(tx, source_asset);
-    // the transaction's own fields against the request and against what the core reported for it
-    if (b.source_asset != source_asset || b.destination_asset != destination_asset) throw bridge_failure("UNEXPECTED_RESULT");
-    if (b.amount_burnt != destination_amounts[0] || b.amount != b.amount_burnt || b.amount_minted == 0 || b.pricing_record_height == 0) throw bridge_failure("UNEXPECTED_RESULT");
-    if (tx.m_incoming_transfers.size() != 1 || !tx.m_incoming_transfers[0] || !tx.m_incoming_transfers[0]->m_amount || tx.m_incoming_transfers[0]->m_asset_type != destination_asset
-        || *tx.m_incoming_transfers[0]->m_amount != b.amount_minted) throw bridge_failure("UNEXPECTED_RESULT");
-    if (b.amount_burnt + b.fee < b.amount_burnt) throw bridge_failure("UNEXPECTED_RESULT");
+  // the JSON of a conversion's description ({"tx":{...}}, the result of build_conversion)
+  string conversion_json(const built_description& b, const std::string& address, uint64_t amount) {
     rapidjson::StringBuffer buffer;
     json_writer w(buffer);
     w.StartObject();
@@ -2080,8 +2056,8 @@ void zephyr_wasm_bridge::build_conversion(int handle, const string& source_asset
     w.Key("destinationAsset"); write_string(w, b.destination_asset);
     w.Key("destination");
     w.StartObject();
-    w.Key("address"); write_string(w, destination_addresses[0]);
-    w.Key("amount"); write_string(w, decimal(destination_amounts[0]));
+    w.Key("address"); write_string(w, address);
+    w.Key("amount"); write_string(w, decimal(amount));
     w.EndObject();
     w.Key("amountBurnt"); write_string(w, decimal(b.amount_burnt));
     w.Key("amountMinted"); write_string(w, decimal(b.amount_minted));
@@ -2097,14 +2073,449 @@ void zephyr_wasm_bridge::build_conversion(int handle, const string& source_asset
     w.Key("pricingRecordHeight"); write_string(w, decimal(b.pricing_record_height));
     w.EndObject();
     w.EndObject();
-    release_built(txs);
-    config.m_destinations.clear();
+    return string(buffer.GetString(), buffer.GetSize());
+  }
+
+  // a prepare's result: the token and the description of the build
+  string prepared_json(const string& token, const string& build) {
+    return string("{\"token\":\"") + token + "\",\"build\":" + build + "}";
+  }
+
+  // The same-asset build of build_txs and prepare_txs. keep false: the built transactions are described, wiped and
+  // released (build_txs). keep true: the wallet's previous kept build is voided first; the built transactions are
+  // described and kept in the wallet's slot under a new token (prepare_txs). Nothing is relayed: m_relay is the
+  // constant false (fix_relay_false).
+  string transfer_result(int handle, const string& asset, const string& addresses, const string& amounts, uint32_t account_idx, const string& subaddress_indices,
+                         uint32_t priority, uint32_t max_destinations, bool keep) {
+    string result;
+    std::vector<std::shared_ptr<monero_tx_wallet>> txs;
+    monero_tx_config config;
+    kept_build kept;
+    try {
+      if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
+      if (keep) void_kept(handle); // a prepare voids the wallet's previous kept build when it starts
+      monero_wallet* wallet = (monero_wallet*) handle;
+      if (wallet->is_view_only()) throw bridge_failure("VIEW_ONLY_TX");
+      if (wallet->is_multisig()) throw bridge_failure("MULTISIG");
+      if (!is_core_asset_type(asset)) throw bridge_failure("ASSET_TYPE");
+      if (!is_v2_asset(asset)) throw bridge_failure("TX_ASSET");
+      if (priority > 3) throw bridge_failure("TX_PRIORITY");
+      std::vector<std::string> destination_addresses = parse_destination_addresses(addresses, max_destinations);
+      std::vector<uint64_t> destination_amounts = parse_destination_amounts(amounts, destination_addresses.size());
+      std::vector<uint32_t> indices = parse_indices(subaddress_indices, 1000);
+      require_account(wallet, account_idx);
+      if (!indices.empty()) {
+        size_t count = subaddresses_of(wallet, account_idx).size();
+        for (uint32_t i : indices) if ((size_t) i >= count) throw bridge_failure("SUBADDRESS_NOT_FOUND");
+      }
+      monero_network_type network = wallet->get_network_type();
+      for (const auto& a : destination_addresses) check_destination_address(a, network);
+      ZEPHYR_TS_TEST_THROW("error.build", addresses + " " + amounts);
+      uint64_t needed = 0;
+      for (uint64_t v : destination_amounts) needed += v;
+      std::vector<built_description> described;
+      kept_tx synthetic;
+      if (keep && test_synthetic_kept(synthetic, 0)) { // test module only: a synthetic kept transaction, no build
+        built_description d = built_description();
+        d.hash = synthetic.hash;
+        d.source_asset = asset;
+        d.destination_asset = asset;
+        d.amount = needed;
+        d.fee = 1;
+        d.weight = 1;
+        d.inputs = 1;
+        d.outputs = destination_addresses.size() + 1;
+        d.ring_size = 16;
+        described.push_back(d);
+        kept.txs.push_back(std::move(synthetic));
+      } else {
+        test_throw_build("build.core", addresses + " " + amounts); // test module only: the core's typed build failures
+        // a necessary condition from the core's own balance of this asset in the selected outputs (no request)
+        uint64_t unlocked = 0, balance = 0;
+        if (indices.empty()) {
+          unlocked = wallet->get_unlocked_balance(asset, account_idx);
+          balance = wallet->get_balance(asset, account_idx);
+        } else {
+          for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(asset, account_idx, i); balance += wallet->get_balance(asset, account_idx, i); }
+        }
+        if (needed > balance) throw bridge_failure("NOT_ENOUGH_MONEY");
+        if (needed > unlocked) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
+        config.m_account_index = account_idx;
+        config.m_subaddress_indices = indices;
+        config.source_currency = asset;
+        config.destination_currency = asset;
+        config.m_priority = (monero_tx_priority) priority;
+        config.m_can_split = true;
+        fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
+        for (size_t i = 0; i < destination_addresses.size(); i++) {
+          std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
+          d->m_address = destination_addresses[i];
+          d->m_amount = destination_amounts[i];
+          d->m_asset_type = asset;
+          config.m_destinations.push_back(d);
+        }
+        txs = wallet->create_txs(config);
+        test_barrier("build.after");
+        if (txs.empty() || txs.size() > 64) throw bridge_failure("UNEXPECTED_RESULT");
+        for (const auto& tx : txs) {
+          if (!tx) throw bridge_failure("UNEXPECTED_RESULT");
+          built_description d = describe_built_tx(*tx, asset);
+          if (d.source_asset != asset || d.destination_asset != asset || d.amount_burnt != 0 || d.amount_minted != 0 || d.pricing_record_height != 0) throw bridge_failure("UNEXPECTED_RESULT");
+          described.push_back(d);
+        }
+        if (keep) {
+          for (size_t i = 0; i < txs.size(); i++) {
+            if (!txs[i]->m_metadata || txs[i]->m_metadata->empty()) throw bridge_failure("UNEXPECTED_RESULT");
+            kept_tx k;
+            k.hash = described[i].hash;
+            k.metadata = std::move(*txs[i]->m_metadata); // the serialized pending transaction stays in the module
+            kept.txs.push_back(std::move(k));
+          }
+        }
+      }
+      string build = transfer_json(described, destination_addresses, destination_amounts);
+      release_built(txs);
+      config.m_destinations.clear();
+      if (keep) {
+        kept.token = new_token();
+        kept.height = wallet->get_height();
+        kept.conversion = false;
+        result = prepared_json(kept.token, build);
+        KEPT_BUILDS[handle] = std::move(kept);
+      } else {
+        result = build;
+      }
+    } catch (...) {
+      const char* identifier = daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_BUILD));
+      release_built(txs);
+      config.m_destinations.clear();
+      for (auto& t : kept.txs) wipe_text(t.metadata);
+      result = bridge_error(identifier);
+    }
+    return result;
+  }
+
+  // The conversion build of build_conversion and prepare_conversion; keep as for transfer_result. The pair must be one
+  // of the six V2 conversions. amountBurnt, amountMinted and pricingRecordHeight are the built transaction's own
+  // fields; nothing is computed here from a rate. Nothing is relayed: m_relay is the constant false (fix_relay_false).
+  string conversion_result(int handle, const string& source_asset, const string& destination_asset, const string& address, const string& amount,
+                           uint32_t account_idx, const string& subaddress_indices, uint32_t priority, bool keep) {
+    string result;
+    std::vector<std::shared_ptr<monero_tx_wallet>> txs;
+    monero_tx_config config;
+    kept_build kept;
+    try {
+      if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
+      if (keep) void_kept(handle); // a prepare voids the wallet's previous kept build when it starts
+      monero_wallet* wallet = (monero_wallet*) handle;
+      if (wallet->is_view_only()) throw bridge_failure("VIEW_ONLY_TX");
+      if (wallet->is_multisig()) throw bridge_failure("MULTISIG");
+      if (!is_core_asset_type(source_asset) || !is_core_asset_type(destination_asset)) throw bridge_failure("ASSET_TYPE");
+      if (!is_v2_asset(source_asset) || !is_v2_asset(destination_asset)) throw bridge_failure("TX_ASSET");
+      cryptonote::transaction_type tx_type;
+      if (!cryptonote::get_tx_type(source_asset, destination_asset, tx_type)) throw bridge_failure("CONVERSION_PAIR");
+      using tt = cryptonote::transaction_type;
+      if (tx_type != tt::MINT_STABLE && tx_type != tt::REDEEM_STABLE && tx_type != tt::MINT_RESERVE && tx_type != tt::REDEEM_RESERVE && tx_type != tt::MINT_YIELD && tx_type != tt::REDEEM_YIELD) throw bridge_failure("CONVERSION_PAIR");
+      if (priority > 3) throw bridge_failure("TX_PRIORITY");
+      std::vector<std::string> destination_addresses = parse_destination_addresses(address, 1);
+      std::vector<uint64_t> destination_amounts = parse_destination_amounts(amount, 1);
+      if (destination_amounts[0] % 100000000 != 0) throw bridge_failure("AMOUNT_PRECISION"); // at most four decimals (wallet2)
+      std::vector<uint32_t> indices = parse_indices(subaddress_indices, 1000);
+      require_account(wallet, account_idx);
+      if (!indices.empty()) {
+        size_t count = subaddresses_of(wallet, account_idx).size();
+        for (uint32_t i : indices) if ((size_t) i >= count) throw bridge_failure("SUBADDRESS_NOT_FOUND");
+      }
+      check_destination_address(destination_addresses[0], wallet->get_network_type());
+      ZEPHYR_TS_TEST_THROW("error.conversion", address + " " + amount);
+      built_description b;
+      kept_tx synthetic;
+      uint64_t synthetic_height = wallet->get_height();
+      if (keep && test_synthetic_kept(synthetic, synthetic_height > 1 ? synthetic_height - 1 : 1)) { // test module only
+        b = built_description();
+        b.hash = synthetic.hash;
+        b.source_asset = source_asset;
+        b.destination_asset = destination_asset;
+        b.amount = b.amount_burnt = destination_amounts[0];
+        b.amount_minted = 1;
+        b.pricing_record_height = synthetic.pricing_record_height;
+        b.fee = 1;
+        b.weight = 1;
+        b.inputs = 1;
+        b.outputs = 4;
+        b.ring_size = 16;
+        kept.txs.push_back(std::move(synthetic));
+      } else {
+        test_throw_build("conversion.core", address + " " + amount); // test module only: the core's typed and conversion failures
+        // a necessary condition from the core's own balance of the source asset in the selected outputs (no request)
+        uint64_t unlocked = 0, balance = 0;
+        if (indices.empty()) {
+          unlocked = wallet->get_unlocked_balance(source_asset, account_idx);
+          balance = wallet->get_balance(source_asset, account_idx);
+        } else {
+          for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(source_asset, account_idx, i); balance += wallet->get_balance(source_asset, account_idx, i); }
+        }
+        if (destination_amounts[0] > balance) throw bridge_failure("NOT_ENOUGH_MONEY");
+        if (destination_amounts[0] > unlocked) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
+        config.m_account_index = account_idx;
+        config.m_subaddress_indices = indices;
+        config.source_currency = source_asset;
+        config.destination_currency = destination_asset;
+        config.m_priority = (monero_tx_priority) priority;
+        config.m_can_split = false; // a conversion is one transaction (the core refuses to split one)
+        fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
+        std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
+        d->m_address = destination_addresses[0];
+        d->m_amount = destination_amounts[0];
+        d->m_asset_type = destination_asset;
+        config.m_destinations.push_back(d);
+        txs = wallet->create_txs(config);
+        test_barrier("conversion.after");
+        if (txs.size() != 1 || !txs[0]) throw bridge_failure("UNEXPECTED_RESULT");
+        const monero_tx_wallet& tx = *txs[0];
+        b = describe_built_tx(tx, source_asset);
+        // the transaction's own fields against the request and against what the core reported for it
+        if (b.source_asset != source_asset || b.destination_asset != destination_asset) throw bridge_failure("UNEXPECTED_RESULT");
+        if (b.amount_burnt != destination_amounts[0] || b.amount != b.amount_burnt || b.amount_minted == 0 || b.pricing_record_height == 0) throw bridge_failure("UNEXPECTED_RESULT");
+        if (tx.m_incoming_transfers.size() != 1 || !tx.m_incoming_transfers[0] || !tx.m_incoming_transfers[0]->m_amount || tx.m_incoming_transfers[0]->m_asset_type != destination_asset
+            || *tx.m_incoming_transfers[0]->m_amount != b.amount_minted) throw bridge_failure("UNEXPECTED_RESULT");
+        if (keep) {
+          if (!txs[0]->m_metadata || txs[0]->m_metadata->empty()) throw bridge_failure("UNEXPECTED_RESULT");
+          kept_tx k;
+          k.hash = b.hash;
+          k.pricing_record_height = b.pricing_record_height;
+          k.metadata = std::move(*txs[0]->m_metadata); // the serialized pending transaction stays in the module
+          kept.txs.push_back(std::move(k));
+        }
+      }
+      if (b.amount_burnt + b.fee < b.amount_burnt) throw bridge_failure("UNEXPECTED_RESULT");
+      string build = conversion_json(b, destination_addresses[0], destination_amounts[0]);
+      release_built(txs);
+      config.m_destinations.clear();
+      if (keep) {
+        kept.token = new_token();
+        kept.height = wallet->get_height();
+        kept.conversion = true;
+        result = prepared_json(kept.token, build);
+        KEPT_BUILDS[handle] = std::move(kept);
+      } else {
+        result = build;
+      }
+    } catch (...) {
+      const char* identifier = daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_CONVERSION));
+      release_built(txs);
+      config.m_destinations.clear();
+      for (auto& t : kept.txs) wipe_text(t.metadata);
+      result = bridge_error(identifier);
+    }
+    return result;
+  }
+
+  // ---- relay of a kept build ----
+
+  // The outcome of one commit, from whether the core's commit threw and from the transport's record of the one submit
+  // request (http_client_wasm_relay). Returns the identifier of a failure (nullptr when accepted without one); sets the
+  // outcome, the daemon's not-relayed flag and whether the slot stays usable for a retry.
+  const char* relay_outcome(bool threw, const epee::net_utils::http::http_client_wasm_relay& r, const char*& outcome, bool& not_relayed, bool& retry) {
+    using namespace epee::net_utils::http;
+    not_relayed = (r.flags & RELAY_FLAG_NOT_RELAYED) != 0;
+    retry = false;
+    bool answered_ok = r.stage == RELAY_STAGE_ANSWERED && r.http_status == 200 && r.status == RELAY_STATUS_OK;
+    if (!threw) { outcome = "accepted"; return nullptr; } // the core recorded it: it saw the daemon's OK
+    if (answered_ok) { outcome = "accepted"; return "RELAY_RECORD_FAILED"; } // accepted, then the core's own record failed
+    not_relayed = false;
+    if (r.stage == RELAY_STAGE_NONE) { outcome = "notSent"; return "RELAY_FAILED"; }   // the commit failed before any request
+    if (r.stage == RELAY_STAGE_REFUSED) { outcome = "notSent"; return "RELAY_REQUEST"; } // the transport refused the submit request
+    retry = true;
+    if (r.stage == RELAY_STAGE_NOT_SENT) { outcome = "notSent"; return "DAEMON_UNREACHABLE"; }
+    if (r.stage == RELAY_STAGE_NO_ANSWER) { outcome = "unknown"; return "NO_ANSWER"; }
+    if (r.http_status != 200) { outcome = "unknown"; return "HTTP_STATUS"; }
+    if (r.status == RELAY_STATUS_UNREADABLE || r.status == RELAY_STATUS_NONE) { outcome = "unknown"; return "ANSWER_UNREADABLE"; }
+    if (r.status == RELAY_STATUS_BUSY) { outcome = "notSent"; return "DAEMON_BUSY"; }
+    retry = false;
+    outcome = "rejected";
+    const std::pair<unsigned, const char*> REASONS[] = {{RELAY_FLAG_LOW_MIXIN, "LOW_RING_SIZE"}, {RELAY_FLAG_DOUBLE_SPEND, "DOUBLE_SPEND"}, {RELAY_FLAG_INVALID_INPUT, "INVALID_INPUT"},
+      {RELAY_FLAG_INVALID_OUTPUT, "INVALID_OUTPUT"}, {RELAY_FLAG_TOO_BIG, "TOO_BIG"}, {RELAY_FLAG_OVERSPEND, "OVERSPEND"}, {RELAY_FLAG_FEE_TOO_LOW, "FEE_TOO_LOW"},
+      {RELAY_FLAG_TOO_FEW_OUTPUTS, "TOO_FEW_OUTPUTS"}, {RELAY_FLAG_TX_EXTRA_TOO_BIG, "TX_EXTRA_TOO_BIG"}, {RELAY_FLAG_SANITY_CHECK_FAILED, "SANITY_CHECK_FAILED"},
+      {RELAY_FLAG_NOT_RELAYED, "NOT_RELAYED"}};
+    for (const auto& reason : REASONS) if (r.flags & reason.first) return reason.second;
+    return "REJECTED";
+  }
+}
+
+// {"txs":[{"hash","sourceAsset","destinationAsset","amount","fee","feeAsset","totalDebited","change","ringSize",
+// "inputs","outputs","weight","unlockTime"[,"destinations":[{"address","amount"},..]]},..]}: the transactions the
+// core built for a same-asset transfer of asset from account_idx (and subaddress_indices "" or "i,j,..."), with
+// priority 0..3, discarded inside the module. addresses "a1,a2,..." and amounts "n1,n2,..." name the
+// destinations (at most max_destinations). Nothing is relayed: m_relay is the constant false (fix_relay_false).
+void zephyr_wasm_bridge::build_txs(int handle, const string& asset, const string& addresses, const string& amounts, uint32_t account_idx, const string& subaddress_indices,
+                                   uint32_t priority, uint32_t max_destinations, emscripten::val callback) {
+  string result;
+  try {
+    result = transfer_result(handle, asset, addresses, amounts, account_idx, subaddress_indices, priority, max_destinations, false); // reports its own failures; this handler is a backstop
+  } catch (...) {
+    result = bridge_error(classify_current_exception(ERROR_CONTEXT_BUILD));
+  }
+  callback(result);
+}
+
+// {"token":"<32 hex>","build":<the result of build_txs>}: as build_txs, but the built transactions are kept in the
+// wallet's one slot (replacing and voiding its previous kept build) for relay_prepared. Nothing is relayed here.
+void zephyr_wasm_bridge::prepare_txs(int handle, const string& asset, const string& addresses, const string& amounts, uint32_t account_idx, const string& subaddress_indices,
+                                     uint32_t priority, uint32_t max_destinations, emscripten::val callback) {
+  string result;
+  try {
+    result = transfer_result(handle, asset, addresses, amounts, account_idx, subaddress_indices, priority, max_destinations, true); // reports its own failures; this handler is a backstop
+  } catch (...) {
+    result = bridge_error(classify_current_exception(ERROR_CONTEXT_BUILD));
+  }
+  callback(result);
+}
+
+// {"tx":{"hash","sourceAsset","destinationAsset","destination":{"address","amount"},"amountBurnt","amountMinted","fee","feeAsset",
+// "totalDebited","change","ringSize","inputs","outputs","weight","unlockTime","pricingRecordHeight"}}: the one transaction the core
+// built for a conversion of amount (in source_asset, a multiple of 10^8 atomic units) from account_idx (and subaddress_indices
+// "" or "i,j,...") to one address, with priority 0..3, discarded inside the module. The pair must be one of the six V2
+// conversions. amountBurnt, amountMinted and pricingRecordHeight are the built transaction's own fields; nothing is
+// computed here from a rate. Nothing is relayed: m_relay is the constant false (fix_relay_false).
+void zephyr_wasm_bridge::build_conversion(int handle, const string& source_asset, const string& destination_asset, const string& address, const string& amount,
+                                          uint32_t account_idx, const string& subaddress_indices, uint32_t priority, emscripten::val callback) {
+  string result;
+  try {
+    result = conversion_result(handle, source_asset, destination_asset, address, amount, account_idx, subaddress_indices, priority, false); // reports its own failures; this handler is a backstop
+  } catch (...) {
+    result = bridge_error(classify_current_exception(ERROR_CONTEXT_CONVERSION));
+  }
+  callback(result);
+}
+
+// {"token":"<32 hex>","build":<the result of build_conversion>}: as build_conversion, but the built transaction is kept in
+// the wallet's one slot (replacing and voiding its previous kept build) for relay_prepared. Nothing is relayed here.
+void zephyr_wasm_bridge::prepare_conversion(int handle, const string& source_asset, const string& destination_asset, const string& address, const string& amount,
+                                            uint32_t account_idx, const string& subaddress_indices, uint32_t priority, emscripten::val callback) {
+  string result;
+  try {
+    result = conversion_result(handle, source_asset, destination_asset, address, amount, account_idx, subaddress_indices, priority, true); // reports its own failures; this handler is a backstop
+  } catch (...) {
+    result = bridge_error(classify_current_exception(ERROR_CONTEXT_CONVERSION));
+  }
+  callback(result);
+}
+
+// The one way to relay: the kept build that token names, exactly as described. The only caller of the core's commit
+// (monero_wallet_full::relay_txs, one kept transaction per call). Before any request: the token must name the wallet's
+// kept build (RELAY_TOKEN_VOID), a conversion's pricing record must not have aged by the wallet's own height
+// (PRICING_RECORD_AGE, the chain's PRICING_RECORD_VALID_BLOCKS), every kept transaction must hash to its described hash
+// (RELAY_HASH_MISMATCH; fails closed) and a daemon must be configured. Per kept transaction not yet accepted, in order,
+// the wallet's transport is armed for exactly one submit request of exactly that transaction, the core commits, and
+// the outcome is read from the transport's record of that request (relay_outcome); the first one not accepted stops the
+// loop. Result: {"txs":[{"hash","outcome","notRelayed"[,"error"]},..],"complete":bool} when at least one transaction was
+// accepted by this call, else {"error":"<IDENTIFIER>"}. The slot is void after it is complete, after a refusal and
+// after a failure that is not retryable; it stays (for a retry of exactly the same bytes) after a busy daemon, a refused
+// connection or an unknown outcome, at most KEPT_MAX_ATTEMPTS calls in all.
+void zephyr_wasm_bridge::relay_prepared(int handle, const string& token, emscripten::val callback) {
+  string result;
+  try {
+    if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
+    monero_wallet* wallet = (monero_wallet*) handle;
+    if (wallet->is_view_only()) throw bridge_failure("VIEW_ONLY_TX");
+    if (wallet->is_multisig()) throw bridge_failure("MULTISIG");
+    if (!is_token_text(token)) throw bridge_failure("RELAY_TOKEN");
+    auto it = KEPT_BUILDS.find(handle);
+    if (it == KEPT_BUILDS.end() || it->second.token != token) throw bridge_failure("RELAY_TOKEN_VOID");
+    if (it->second.attempts >= KEPT_MAX_ATTEMPTS || it->second.txs.empty()) { void_kept(handle); throw bridge_failure("RELAY_TOKEN_VOID"); }
+    it->second.attempts++;
+    if (it->second.conversion) {
+      uint64_t height = wallet->get_height();
+      uint64_t pr = it->second.txs[0].pricing_record_height;
+      if (test_inject("relay.aged")) height = pr + PRICING_RECORD_VALID_BLOCKS; // test module only: the first aged height
+      // the pool keeps a conversion while height - pricing_record_height + 1 <= PRICING_RECORD_VALID_BLOCKS (tx_pool.cpp)
+      if (height + 1 > pr + PRICING_RECORD_VALID_BLOCKS) { void_kept(handle); throw bridge_failure("PRICING_RECORD_AGE"); }
+    }
+    for (const auto& t : it->second.txs) {
+      if (t.accepted) continue;
+      string hash = kept_tx_hash(t.metadata);
+      if (test_inject("relay.hash")) hash = string(64, '0'); // test module only: a kept transaction that is not the described one
+      if (hash != t.hash) { void_kept(handle); throw bridge_failure("RELAY_HASH_MISMATCH"); }
+    }
+    std::shared_ptr<http_client_wasm_route> route = route_of(handle);
+    if (route->origin.empty()) throw bridge_failure("DAEMON_NOT_CONNECTED");
+    const string uri = route->origin + route->base_path + "/sendrawtransaction";
+    struct relayed { string hash; const char* outcome; bool not_relayed; const char* error; };
+    std::vector<relayed> entries;
+    const char* first_failure = nullptr;
+    bool accepted_now = false, keep_slot = true;
+    for (auto& t : it->second.txs) {
+      if (t.accepted) { entries.push_back({t.hash, "accepted", false, nullptr}); continue; }
+      if (first_failure != nullptr) { entries.push_back({t.hash, "notSent", false, nullptr}); continue; }
+      // arm the transport for exactly one submit request of exactly this transaction, commit, disarm
+      route->relay = http_client_wasm_relay();
+      route->relay.expected_hash = t.hash;
+      route->relay.scope = new_token();
+      route->relay.remaining = 1;
+      http_client_wasm_relay_scope(route->relay.scope, uri, 1);
+      bool threw = false;
+      std::vector<std::string> hashes;
+      {
+        std::vector<std::string> metadatas(1, t.metadata);
+        try {
+          hashes = wallet->relay_txs(metadatas);
+        } catch (...) {
+          threw = true; // the exception's text is not read: the transport's record says what happened
+        }
+        for (auto& m : metadatas) wipe_text(m);
+      }
+      http_client_wasm_relay_scope(route->relay.scope, "", 0);
+      http_client_wasm_relay record = route->relay;
+      route->relay = http_client_wasm_relay();
+      if (!threw && (hashes.size() != 1 || hashes[0] != t.hash)) throw bridge_failure("UNEXPECTED_RESULT");
+      const char* outcome = "notSent";
+      bool not_relayed = false, retry = false;
+      const char* error = relay_outcome(threw, record, outcome, not_relayed, retry);
+      entries.push_back({t.hash, outcome, not_relayed, error});
+      if (strcmp(outcome, "accepted") == 0) { t.accepted = true; accepted_now = true; continue; }
+      first_failure = error;
+      if (!retry) keep_slot = false;
+    }
+    bool complete = true;
+    for (const auto& t : it->second.txs) if (!t.accepted) complete = false;
+    if (complete || !keep_slot) void_kept(handle);
+    if (!accepted_now && first_failure != nullptr) throw bridge_failure(first_failure);
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    w.StartObject();
+    w.Key("txs");
+    w.StartArray();
+    for (const auto& e : entries) {
+      w.StartObject();
+      w.Key("hash"); write_string(w, e.hash);
+      w.Key("outcome"); write_string(w, e.outcome);
+      w.Key("notRelayed"); w.Bool(e.not_relayed);
+      if (e.error != nullptr) { w.Key("error"); write_string(w, e.error); }
+      w.EndObject();
+    }
+    w.EndArray();
+    w.Key("complete"); w.Bool(complete);
+    w.EndObject();
     result = string(buffer.GetString(), buffer.GetSize());
   } catch (...) {
-    const char* identifier = daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_CONVERSION));
-    release_built(txs);
-    config.m_destinations.clear();
-    result = bridge_error(identifier);
+    result = bridge_error(classify_current_exception(ERROR_CONTEXT_RELAY));
+  }
+  callback(result);
+}
+
+// "true" when token named the wallet's kept build, which is now void (wiped and released); "false" when it named none
+void zephyr_wasm_bridge::discard_prepared(int handle, const string& token, emscripten::val callback) {
+  string result;
+  try {
+    if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
+    if (!is_token_text(token)) throw bridge_failure("RELAY_TOKEN");
+    auto it = KEPT_BUILDS.find(handle);
+    bool found = it != KEPT_BUILDS.end() && it->second.token == token;
+    if (found) void_kept(handle);
+    result = found ? "true" : "false";
+  } catch (...) {
+    result = bridge_error(classify_current_exception(ERROR_CONTEXT_RELAY));
   }
   callback(result);
 }
@@ -2984,6 +3395,7 @@ void zephyr_wasm_bridge::change_wallet_password(int handle, const string& old_pa
   string error;
   bool verified = false;
   try {
+    void_kept(handle); // a password change (attempted) voids the kept build
     test_barrier("change_password"); // test-only synchronization point while the handle is in use
     ZEPHYR_TS_TEST_THROW("change_password", old_password + " " + new_password); // test-only operation failure before verification
 #if defined BUILD_WALLET_FULL
@@ -3024,6 +3436,7 @@ void zephyr_wasm_bridge::close(int handle, bool save, int listener_handle, emscr
     if (listener_handle != 0) throw bridge_failure("LISTENER"); // set_listener is not bound in this build
     if (save) throw bridge_failure("SAVE_ON_CLOSE"); // saving is handled outside WebAssembly
     ZEPHYR_TS_TEST_THROW("close.native", "close"); // test-only; the handle stays valid
+    void_kept(handle); // the kept build is wiped before the wallet goes
     wallet->close(save); // drain native work before deleting the wallet
     delete wallet;
     WALLET_ROUTES.erase(handle); // no-op for keys-only wallets
