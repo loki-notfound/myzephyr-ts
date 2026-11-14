@@ -40,6 +40,9 @@
 # exactly that outcome, recomputes the minted amount from the pricing record the transaction names, and repeats the
 # six in a worker. N25 follows N23 in the test module's run: the allocator must return to its level after every
 # built conversion and after every conversion the reserve rule refuses.
+# N26 (after N22, from its bytes, no sync) builds a same-asset transfer and a conversion through forwarder mounts
+# that answer the circulating supply or the pricing record history with a JSON-RPC error or HTTP 500 (node text
+# included): each must reject with DAEMON_ERROR/DAEMON_RESPONSE without that text.
 #
 # Environment (optional): CHROMIUM=<browser binary> (default: chromium); DIRECT_CHECKS, WORKER_CHECKS
 # and BROWSER_CHECKS select a subset of the checks per run (checks after N02 that reopen the measured
@@ -55,7 +58,7 @@ CHROMIUM=${CHROMIUM:-chromium}
 OUT=$ROOT/build/test-results/network; SEED=$ROOT/build/test-wallets/network-seed
 rm -rf "$OUT" "$SEED"; mkdir -p "$OUT" "$(dirname "$SEED")"; chmod 700 "$OUT" "$(dirname "$SEED")"
 MARKER=MARKERnodetext
-DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20,N22,N24}
+DIRECT_CHECKS=${DIRECT_CHECKS:-N01,N02,N03,N04,N08,N09,N10,N11,N14,N15,N16,N17,N18,N19,N21,N20,N22,N24,N26}
 WORKER_CHECKS=${WORKER_CHECKS:-N01,N05,N08,N10,N11,N12,N13,N18,N15,N16,N19,N21}
 BROWSER_CHECKS=${BROWSER_CHECKS:-N01,N02,N05,N06,N07,N08,N10,N11,N18,N14,N15,N16,N19,N21}
 FUNDED_ARGS=()

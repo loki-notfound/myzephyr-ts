@@ -282,7 +282,9 @@ history (it reads them for every transaction it constructs), and the output dist
 members (`/get_output_distribution.bin`, `/get_outs.bin`); it sends no key image and no address.
 Failures of the core's build: `TX_NOT_POSSIBLE`/`NOT_ENOUGH_UNLOCKED`, `NOT_ENOUGH_MONEY`,
 `NOT_ENOUGH_FOR_FEE`, `NOT_ENOUGH_OUTS_TO_MIX`, `TX_TOO_LARGE`; daemon failures as the other daemon
-calls (`DAEMON_ERROR`); any other failure `NATIVE_ERROR`/`TX_BUILD_FAILED`.
+calls (`DAEMON_ERROR`), including a failed read of the circulating supply or of the pricing record history
+(`DAEMON_RESPONSE` when the daemon answered with an error, `DAEMON_UNREACHABLE` when no answer came); any
+other failure `NATIVE_ERROR`/`TX_BUILD_FAILED`.
 
 The result (`ZephyrTransferBuild`) is `{ txs, multipleTxs }`; each `ZephyrBuiltTx` carries `hash`,
 `sourceAsset` and `destinationAsset` (read from the built transaction), `destinations` (when one
@@ -330,8 +332,8 @@ The result (`ZephyrConversionBuild`) carries `hash`, `sourceAsset` and `destinat
 built transaction), `destination` (the caller's), `amountBurnt` and `amountMinted` (the transaction's own
 fields: what is taken in the source asset and what the destination output carries in the destination
 asset), `fee` and `feeAsset` (the source asset), `totalDebited` (`amountBurnt` and `fee`), `change`,
-`ringSize`, `inputs`, `outputs` (four: the destination, the change and two zero outputs the core adds to
-every conversion), `weight`, `unlockTime` and `pricingRecordHeight` (the block whose
+`ringSize`, `inputs`, `outputs` (four: the destination, the change and two outputs of zero amount the core
+adds to every conversion, one in each asset; docs/LIMITATIONS.md), `weight`, `unlockTime` and `pricingRecordHeight` (the block whose
 pricing record sets the rate). The SDK computes no rate: the rate and its conversion fee follow from that
 pricing record by the core's formula (docs/LIMITATIONS.md).
 

@@ -183,8 +183,12 @@ that wallet's worker.
   the converter less, minus a conversion fee of 0.1 % (ZSD and ZYS pairs) or 1 % (ZRS pairs); the yield
   pairs use the chain's own ZYS price. Observed on mainnet on 2026-11-13: the minted amount equalled
   that formula exactly for every pair that built.
-* A conversion transaction has four outputs: the destination, the change and two outputs of zero that
-  the core adds (one per asset) so that the minted output cannot be singled out.
+* A conversion transaction has four outputs: the destination, the change and two outputs of zero amount
+  that the core adds to random addresses, one in the source asset and one in the destination asset
+  (zephyr `wallet2.cpp`, `transfer_selected_rct`). The SDK makes no claim about their purpose; the
+  core's own comment there gives one (the amount-burnt verification uses the sum of the change outputs'
+  masks, and the minted amount is not tied to the destination output), which this project has not
+  verified.
 * Fees are in the source asset: the core computes the fee in ZPH (200 atomic units per byte of weight
   observed, as for a transfer) and converts it into the source asset with the moving-average price
   (ZSD, ZRS) or the ZYS price. Observed with one input and a weight of about 2,290: 0.000458 ZPH for

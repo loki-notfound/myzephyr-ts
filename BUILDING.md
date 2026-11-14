@@ -167,7 +167,10 @@ history), derives with the pinned core's reserve rule whether the pair builds or
 requires exactly that outcome (a description, or `TX_NOT_POSSIBLE`/`RESERVE_RATIO`); it recomputes the
 minted amount with the core's formula from the pricing record the transaction names and requires it to
 be equal, repeats the six in a worker, and requires balances, history and the reopened bytes to be
-unchanged. The transport check `S01` (offline,
+unchanged. `N26` (after `N22`, from its bytes, no sync) builds a same-asset transfer and a conversion
+through forwarder mounts that answer the circulating supply or the pricing record history with a JSON-RPC
+error or HTTP 500 carrying node text, and requires `DAEMON_ERROR`/`DAEMON_RESPONSE` without that text, then
+a working build through the plain forwarder. The transport check `S01` (offline,
 in the redirect runners' main thread and page) shows that the transport refuses every submit and
 relay request before sending it.
 

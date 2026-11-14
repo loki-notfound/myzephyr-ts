@@ -47,7 +47,7 @@ EM_JS(int, zephyr_ts_test_inject, (const char* point), {
   if (h.fail && h.fail[name] > 0) {
     h.fail[name]--; h.events.push("injected:" + name);
     var kind = h.kind && h.kind[name] ? h.kind[name] : 1;
-    return (kind >= 1 && kind <= 5) || (kind >= 11 && kind <= 19) || (kind >= 21 && kind <= 35) ? kind : 1;
+    return (kind >= 1 && kind <= 5) || (kind >= 11 && kind <= 19) || (kind >= 21 && kind <= 37) ? kind : 1;
   }
   return 0;
 });
@@ -210,11 +210,15 @@ namespace {
   // END CORE MESSAGE TABLE
 
   // BEGIN CORE MESSAGE TABLE (daemon context of builds)
-  // fixed messages of the pinned core's build path for failed daemon requests (wallet2::use_fork_rules);
-  // any other text of a build failure is never compared beyond these entries (TX_BUILD_FAILED)
+  // fixed messages of the pinned core's build path for failed daemon requests (wallet2::use_fork_rules; the
+  // circulating supply and the pricing record history, which wallet2 reads for every transaction it constructs:
+  // like a missing connection, refined by the transport's last failure in daemon_failure); any other text of a
+  // build failure is never compared beyond these entries (TX_BUILD_FAILED)
   const core_message_rule BUILD_DAEMON_MESSAGE_RULES[] = {
     {"Failed to get height", "DAEMON_RESPONSE"},
     {"Failed to get earliest fork height", "DAEMON_RESPONSE"},
+    {"Failed to get circulating supply", "DAEMON_UNREACHABLE"},
+    {"Failed to get pricing record history", "DAEMON_UNREACHABLE"},
     {"Wallet is not connected to daemon", "DAEMON_NOT_CONNECTED"},
     {"Failed to connect to daemon", "DAEMON_UNREACHABLE"}
   };
@@ -1844,7 +1848,8 @@ namespace {
   // test-only: a typed failure of the core's build path at the armed point (h.kind[name]): 11 not enough
   // unlocked money, 12 not enough money, 13 not enough for the fee, 14 not enough outputs to mix, 15 too
   // large, 16 no connection to the daemon, 17 a busy daemon, 18 a failed ring member request carrying a
-  // node status with the destinations; 21 to 34 the conversion messages of the core (the reserve ratio ones with
+  // node status with the destinations; 36, 37 failed reads of the circulating supply and of the pricing record
+  // history; 21 to 35 the conversion messages of the core (the reserve ratio ones with
   // computed ratios in their text); any other kind an untyped failure whose text carries the destinations. Inlined
   // into the binding: a test-only function cannot be on the exception whitelist, so its own frame would skip the
   // cleanups of the exception's temporaries; inlined, the throw happens in the binding's whitelisted frame
@@ -1875,6 +1880,8 @@ namespace {
       case 33: throw std::runtime_error("not a valid tx type");
       case 34: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to convert needed_money to ZSD (from ZYS)");
       case 35: throw std::runtime_error("Transaction would be too large.  Try create_txs()");
+      case 36: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to get circulating supply");
+      case 37: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to get pricing record history");
       default: throw std::runtime_error(std::string("injected build failure: ") + inputs);
     }
   }

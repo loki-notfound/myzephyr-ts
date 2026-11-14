@@ -11,7 +11,9 @@
  * Listeners (each a separate origin for the browser):
  *   daemon  mounts "" (forward), "/rpc" (forward under a base path), "/slow" (forward, each binary
  *           request delayed), "/fake/status", "/fake/malformed", "/fake/nodestatus" (local fake
- *           daemons whose failures carry a marker text); with --page also the static consumer
+ *           daemons whose failures carry a marker text), "/fail/supply-rpc", "/fail/supply-http",
+ *           "/fail/history-rpc", "/fail/history-http" (forward, but answer the circulating supply or the
+ *           pricing record history locally with a JSON-RPC error or HTTP 500 carrying the marker text); with --page also the static consumer
  *           (index.html, bundles, nested asset directories) under an explicit CSP, POST /result and
  *           POST /csp-report; with --app instead of --page the consumer's pages come from a local
  *           development server (a loopback origin), relayed with the same CSP, websocket upgrades
@@ -70,7 +72,12 @@ const ALLOWED_METHODS = new Set(["get_version", "get_info", "getinfo", "get_bloc
 // allowlist, and counted separately (a run must show zero)
 const RELAY_PATHS = new Set(["/sendrawtransaction", "/send_raw_transaction", "/start_mining", "/stop_mining"]);
 const RELAY_METHODS = new Set(["relay_tx", "submit_block", "submitblock", "send_raw_transaction", "sendrawtransaction"]);
-const MOUNTS = ["/fake/nodestatus", "/fake/malformed", "/fake/status", "/rpc", "/slow"]; // longest first; "" is the root
+// forwarding mounts that answer one read of a transaction build locally with a failure (a JSON-RPC error or HTTP 500,
+// each carrying the marker text) and forward every other allowed request: the circulating supply and the pricing
+// record history, which the core reads for every transaction it constructs
+const FAIL_MOUNTS = { "/fail/supply-rpc": ["get_circulating_supply", "rpc"], "/fail/supply-http": ["get_circulating_supply", "http"],
+  "/fail/history-rpc": ["get_pricing_record_history", "rpc"], "/fail/history-http": ["get_pricing_record_history", "http"] };
+const MOUNTS = ["/fail/history-http", "/fail/history-rpc", "/fail/supply-http", "/fail/supply-rpc", "/fake/nodestatus", "/fake/malformed", "/fake/status", "/rpc", "/slow"]; // longest first; "" is the root
 
 const stats = { started: new Date().toISOString(), upstream: UPSTREAM, routes: {}, denied: {}, binDigests: [], maxConcurrentUpstream: 0, upstreamRequests: 0,
   upstreamErrors: 0, pageRequests: [], cspReports: [], preflights: {}, relayRequests: 0 };
@@ -253,6 +260,15 @@ function handler(listener) {
       if (!ALLOWED_PATHS.has(endpoint) || (req.method !== "POST" && req.method !== "GET")) return deny(listener, endpoint, "-", res, cors);
       const method = rpcMethod(endpoint, body);
       if (endpoint === "/json_rpc" && !ALLOWED_METHODS.has(method)) return deny(listener, endpoint, method, res, cors);
+      if (FAIL_MOUNTS[mount] !== undefined && FAIL_MOUNTS[mount][0] === method) {
+        let id = "0";
+        try { const j = JSON.parse(body.toString("utf8")); if (typeof j.id === "string" || typeof j.id === "number") id = j.id; } catch (e) { /* not JSON */ }
+        const http500 = FAIL_MOUNTS[mount][1] === "http";
+        const p = Buffer.from(http500 ? MARKER + " status body" : JSON.stringify({ jsonrpc: "2.0", id, error: { code: -1, message: MARKER + " rpc error" } }));
+        res.writeHead(http500 ? 500 : 200, Object.assign({ "content-type": http500 ? "text/plain" : "application/json", "content-length": p.length }, cors)); res.end(p);
+        record(listener + " " + mount + " " + endpoint + " " + method, body.length, p.length, 0, "fail");
+        return;
+      }
       if (mount.startsWith("/fake/")) {
         const n = fake(mount.substring(6), endpoint, method, body, res, cors);
         record(listener + " " + mount + " " + endpoint + " " + method, body.length, n, 0, "fake");

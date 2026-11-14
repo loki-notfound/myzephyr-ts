@@ -1087,7 +1087,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await w.close();
   });
 
-  await check("T22", "Conversion failures of the core map to fixed pairs (failures injected in the test module): the reserve ratio messages with their computed ratios, a missing or unusable pricing record, a conversion that would need splitting, a zero converted amount, more than one destination, more than four decimals, an invalid pair; the build's typed failures; an untyped failure never carries the destination; rejected conversions leave the allocator unchanged", async (notes) => {
+  await check("T22", "Conversion failures of the core map to fixed pairs (failures injected in the test module): the reserve ratio messages with their computed ratios, a missing or unusable pricing record, a conversion that would need splitting, a zero converted amount, more than one destination, more than four decimals, an invalid pair; the build's typed failures; a failed read of the circulating supply or the pricing record history (conversions and same-asset builds); an untyped failure never carries the destination; rejected conversions leave the allocator unchanged", async (notes) => {
     const w = await open();
     await hooks.target(w);
     const own = await w.getPrimaryAddress();
@@ -1097,7 +1097,8 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
       [29, "TX_NOT_POSSIBLE", "CONVERSION_AMOUNT"], [34, "TX_NOT_POSSIBLE", "CONVERSION_AMOUNT"], [30, "INVALID_CONFIG", "CONVERSION_DESTINATIONS"], [31, "INVALID_CONFIG", "AMOUNT_PRECISION"],
       [32, "INVALID_CONFIG", "CONVERSION_PAIR"], [33, "INVALID_CONFIG", "CONVERSION_PAIR"],
       [11, "TX_NOT_POSSIBLE", "NOT_ENOUGH_UNLOCKED"], [12, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"], [13, "TX_NOT_POSSIBLE", "NOT_ENOUGH_FOR_FEE"], [14, "TX_NOT_POSSIBLE", "NOT_ENOUGH_OUTS_TO_MIX"],
-      [15, "TX_NOT_POSSIBLE", "TX_TOO_LARGE"], [16, "DAEMON_ERROR", "DAEMON_RESPONSE"], [17, "DAEMON_ERROR", "DAEMON_RESPONSE"], [18, "DAEMON_ERROR", "DAEMON_RESPONSE"], [19, "NATIVE_ERROR", "TX_BUILD_FAILED"]];
+      [15, "TX_NOT_POSSIBLE", "TX_TOO_LARGE"], [16, "DAEMON_ERROR", "DAEMON_RESPONSE"], [17, "DAEMON_ERROR", "DAEMON_RESPONSE"], [18, "DAEMON_ERROR", "DAEMON_RESPONSE"], [19, "NATIVE_ERROR", "TX_BUILD_FAILED"],
+      [36, "DAEMON_ERROR", "DAEMON_RESPONSE"], [37, "DAEMON_ERROR", "DAEMON_RESPONSE"]];
     // the injected reserve ratio messages carry the ratios 1.612345678901, 1.598765432109 and 1.587654321098 (a stack in a
     // browser carries the page's loopback address, so the check looks for these digits, not for any decimal number)
     for (const [kind, code, diag] of pairs) {
@@ -1116,6 +1117,14 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await hooks.arm({ fail: { "build.core": 1 }, kind: { "build.core": 21 } });
     await expectCode(w.buildTransfer({ asset: "ZPH", destinations: [{ address: own, amount: BigInt(1) }], accountIndex: 0 }), "NATIVE_ERROR", "a reserve ratio message in a same-asset build", notes, "TX_BUILD_FAILED");
     await hooks.resetCounters();
+    // a failed read of the circulating supply or of the pricing record history is a daemon error in a same-asset build
+    // as well (no request was answered here, so the transport's last failure is not "no answer": DAEMON_RESPONSE)
+    for (const kind of [36, 37]) {
+      await hooks.arm({ fail: { "build.core": 1 }, kind: { "build.core": kind } });
+      const err = await expectCode(w.buildTransfer({ asset: "ZPH", destinations: [{ address: own, amount: BigInt(1) }], accountIndex: 0 }), "DAEMON_ERROR", "injected build read failure kind " + kind, notes, "DAEMON_RESPONSE");
+      expect(!/circulating|history|pricing/i.test(scanText(err) + scanText(err.toEnvelope())), "kind " + kind + ": no core text in the error");
+      await hooks.resetCounters();
+    }
     const heap = async () => (await hooks.state()).heapInUse;
     for (let i = 0; i < 2; i++) await expectCode(w.buildConversion(cfg), "TX_NOT_POSSIBLE", "warm-up", [], "NOT_ENOUGH_MONEY");
     const deltas: number[] = [];

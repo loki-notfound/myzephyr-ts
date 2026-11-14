@@ -1295,8 +1295,8 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
           expect(b.sourceAsset === source && b.destinationAsset === destination && b.feeAsset === source, name + ": assets and fee asset");
           expect(b.destination.address === primary && b.destination.amount === amount && b.amountBurnt === amount, name + ": the destination and the burnt amount");
           expect(b.totalDebited === amount + b.fee && b.fee > BigInt(0) && b.amountMinted > BigInt(0), name + ": fee, total, minted");
-          // four outputs: the destination, the change, and the two zero outputs the core adds to every conversion (one per
-          // asset, wallet2::transfer_selected_rct) so that the burnt amount's proof and the minted output are not singled out
+          // four outputs: the destination, the change, and the two outputs of zero amount the core adds to every conversion
+          // (one in each asset, wallet2::transfer_selected_rct)
           expect(b.ringSize === 16 && b.inputs >= 1 && b.outputs === 4 && b.unlockTime === BigInt(0) && b.weight > 0, name + ": ring size 16, inputs, four outputs, unlock time (got ring " + b.ringSize + ", inputs " + b.inputs + ", outputs " + b.outputs + ")");
           // the minted amount against the pinned formula with the pricing record of the height the transaction names
           const named = prOf(((await forwarderRpc("getblockheaderbyheight", { height: b.pricingRecordHeight })).block_header as Record<string, unknown>).pricing_record);
@@ -1395,6 +1395,61 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     } finally {
       await w.close();
     }
+  }, 1200000);
+
+  // ------------------------------------------------------------------ N26: failed reads of a build (inputs from outside the public tree)
+  /** Forwarder route counts with their listener and mount (Node.js only). */
+  async function forwarderRawRoutes(): Promise<Record<string, number>> {
+    const st = await new Promise<{ routes: Record<string, { count: number }> }>((resolve, reject) => {
+      http.get((t.root as string) + "/__stats", (res) => { const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c)); res.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); } catch (e) { reject(e); } }); }).on("error", reject);
+    });
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(st.routes)) out[k] = v.count;
+    return out;
+  }
+
+  await check("N26", "Funded builds whose read of the circulating supply or of the pricing record history fails at a constructed daemon (a JSON-RPC error, HTTP 500, both with node text): a same-asset transfer and a conversion each reject with DAEMON_ERROR/DAEMON_RESPONSE without node text; a build through the plain forwarder afterwards works", async (notes) => {
+    const funded = opts.funded;
+    if (funded === undefined) throw new CheckNotRun("no funded wallet supplied (FUNDED_WALLET_IN and FUNDED_EXPECT)");
+    if (t.base === undefined || t.root === undefined) throw new CheckFailure("no target");
+    if (opts.env !== "node-direct") throw new CheckNotRun("Node.js direct runs only");
+    const start = fundedAfterBuilds ?? funded.wallet;
+    const tenth = BigInt("100000000000");
+    const outcomes: Record<string, string> = {};
+    const before = await forwarderRawRoutes();
+    for (const mount of ["/fail/supply-rpc", "/fail/supply-http", "/fail/history-rpc", "/fail/history-http"]) {
+      const w = await F.openWalletData({ networkType: 0, password: start.password, keysData: new Uint8Array(start.keys), cacheData: new Uint8Array(start.cache), server: t.root + mount, proxyToWorker: false });
+      try {
+        const primary = await w.getPrimaryAddress();
+        const account1 = await w.getAddress(1, 0);
+        const attempts: Array<[string, () => Promise<unknown>]> = [
+          ["transfer", () => w.buildTransfer({ asset: "ZPH", destinations: [{ address: account1, amount: tenth }], accountIndex: 0 })],
+          ["conversion", () => w.buildConversion({ sourceAsset: "ZSD", destinationAsset: "ZYS", destination: { address: primary, amount: tenth }, accountIndex: 0 })]];
+        for (const [what, attempt] of attempts) {
+          const err = await expectCode(attempt(), "DAEMON_ERROR", mount + " " + what, notes, "DAEMON_RESPONSE");
+          const text = errorTexts(err).join(" ");
+          expect(!text.includes(opts.marker) && !/circulating|pricing record/i.test(text), mount + " " + what + ": no node or core text in the error");
+          outcomes[mount + " " + what] = codeOf(err) + diagnosticOf(err);
+        }
+      } finally {
+        await w.close();
+      }
+    }
+    const w = await F.openWalletData({ networkType: 0, password: start.password, keysData: new Uint8Array(start.keys), cacheData: new Uint8Array(start.cache), server: t.base, proxyToWorker: false });
+    try {
+      const b = await w.buildTransfer({ asset: "ZPH", destinations: [{ address: await w.getAddress(1, 0), amount: tenth }], accountIndex: 0 });
+      expect(b.txs.length === 1, "a build through the plain forwarder works afterwards");
+    } finally {
+      await w.close();
+    }
+    const after = await forwarderRawRoutes();
+    const answered: Record<string, number> = {};
+    for (const k of Object.keys(after)) if (k.includes(" /fail/") && after[k] !== (before[k] ?? 0)) answered[k.split(" ").slice(1).join(" ")] = after[k] - (before[k] ?? 0);
+    for (const [mount, method] of [["/fail/supply-rpc", "get_circulating_supply"], ["/fail/supply-http", "get_circulating_supply"], ["/fail/history-rpc", "get_pricing_record_history"], ["/fail/history-http", "get_pricing_record_history"]]) {
+      expect((answered[mount + " /json_rpc " + method] ?? 0) >= 2, mount + ": the constructed failure answered both builds");
+    }
+    report.measurements.N26 = { outcomes, answered };
+    notes.push("requests per failing mount: " + Object.entries(answered).map(([k, v]) => k + " " + v).join("; "));
   }, 1200000);
 
   const entryGuard = await Internal.getNetworkGuardReport();
