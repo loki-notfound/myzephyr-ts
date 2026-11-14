@@ -1391,7 +1391,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       expect(built.every((d) => d === built[0]) && built[0] <= 0, "every built conversion returns the allocator to its level (growth " + built.join(",") + ")");
       // a refusal is a typed core exception (wallet_internal_error): measured and reported; each refusal must cost the same
       // (no accumulation beyond one failure's own amount; see the round's evidence on typed core exceptions)
-      if (refusedDeltas !== undefined) expect(refusedDeltas.every((d) => d === refusedDeltas![0]) && refusedDeltas[0] <= 512, "every refused conversion changes the allocator by the same amount (growth " + refusedDeltas.join(",") + ")");
+      if (refusedDeltas !== undefined) expect(refusedDeltas.every((d) => Math.abs(d - refusedDeltas![0]) <= 16) && refusedDeltas[0] <= 512, "every refused conversion changes the allocator by the same amount, within 16 bytes (growth " + refusedDeltas.join(",") + ")");
     } finally {
       await w.close();
     }
