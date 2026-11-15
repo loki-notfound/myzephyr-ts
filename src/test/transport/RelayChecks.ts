@@ -6,7 +6,8 @@
  * daemon, an HTTP error, an unreadable answer, a dropped connection, a late answer and a refused connection. Each
  * relay call must send exactly one submit request (counted at the sink, which records body lengths only) or none
  * when it fails before the request; no error carries the sink's node text; a retry sends the same bytes; a refusal
- * voids the token.
+ * voids the token; a kept build prepared while another daemon was configured goes to the daemon configured when
+ * relayPrepared is called.
  */
 import { createRandomWallet, ZephyrWalletError } from "../../main/ts/index";
 import type { ZephyrRelayResult, ZephyrWallet } from "../../main/ts/index";
@@ -125,6 +126,11 @@ export async function runRelayChecks(targets: RelayCheckTargets): Promise<RelayC
     token = await prepare();
     expectOutcome("late", await relay("late", sink("late"), token), "RELAY_UNKNOWN/NO_ANSWER", 1);
     await w.discardPrepared(token);
+    // a kept build survives setDaemonConnection: prepared while the wallet is configured with the closed port, it is
+    // relayed to the daemon configured when relayPrepared is called (the accepting sink); the closed port gets nothing
+    await w.setDaemonConnection(targets.closed);
+    token = await prepare();
+    expectOutcome("daemon changed after prepare", await relay("daemon changed after prepare", sink("accept"), token), "accepted NATIVE_ERROR/RELAY_RECORD_FAILED", 1);
   } catch (err) {
     fail("unexpected failure: " + (err instanceof ZephyrWalletError ? err.code + "/" + String(err.diagnostic) : err instanceof Error ? err.name : typeof err));
   } finally {
@@ -136,6 +142,6 @@ export async function runRelayChecks(targets: RelayCheckTargets): Promise<RelayC
   const sentToSink = Object.values(submitsPerCall).reduce((n, v) => n + v, 0);
   if (passed !== sentToSink + 1) fail("the transport passed " + passed + " submit requests; the sink received " + sentToSink + " and one went to the closed port");
   if (refused !== 0) fail("the transport refused " + refused + " submit requests");
-  return { check: { id: "S03", title: "Relay against constructed daemons (test module, a synthetic kept transaction): every reason of the daemon's reply maps to its fixed pair and voids the token; a busy daemon, an HTTP error, an unreadable answer, a dropped connection and a late answer keep it for a retry of the same bytes; a refused connection sends nothing; acceptance (also not relayed) reports the core's failed record of a transaction that spends nothing of the wallet; exactly one submit request per relay call, none for a void token; no node text in any error", status: notes.length === 0 ? "pass" : "fail", notes },
+  return { check: { id: "S03", title: "Relay against constructed daemons (test module, a synthetic kept transaction): every reason of the daemon's reply maps to its fixed pair and voids the token; a busy daemon, an HTTP error, an unreadable answer, a dropped connection and a late answer keep it for a retry of the same bytes; a refused connection sends nothing; a kept build survives setDaemonConnection and goes to the daemon configured at the relay call; acceptance (also not relayed) reports the core's failed record of a transaction that spends nothing of the wallet; exactly one submit request per relay call, none for a void token; no node text in any error", status: notes.length === 0 ? "pass" : "fail", notes },
     outcomes, submitsPerCall, permits, sinkRequests, passedInTransport: passed, refusedInTransport: refused };
 }

@@ -117,7 +117,9 @@ runs, with no network access:
   would accept it) and relays it to an accepting sink, to one refusing with each reason of the daemon's
   reply, to a busy one, one answering HTTP 500, an unreadable answer, a dropped connection and a late
   answer, and to a closed port; every outcome must have its fixed pair, every relay call exactly one
-  submit request (none for a void token), a retry the same bytes, and no error the sink's node text;
+  submit request (none for a void token), a retry the same bytes, and no error the sink's node text; a
+  kept build prepared while the closed port was configured must reach the accepting sink configured with
+  `setDaemonConnection` before the relay call;
 * the same two suites and the module loading cases in headless Chromium, in a wallet worker,
   with every non-loopback request sent to a closed proxy port and under the page policy of
   `docs/DEPLOYMENT.md`, and the redirect checks in the page and in a wallet worker (the policy then
@@ -186,7 +188,8 @@ a working build through the plain forwarder. The transport check `S01` (offline,
 in the redirect runners' main thread and page) shows that the transport refuses every submit and
 relay request before sending it outside a relay call, `S02` and `S03` the one way a relay passes.
 
-Relay is tested against a local sink only; this suite relays nothing to the network. Before the runs,
+Relay is tested against a local sink only; this suite relays nothing to the network. What the network
+accepted was shown separately, by a funded test on mainnet on 2026-11-15 (docs/LIMITATIONS.md). Before the runs,
 `src/test/network/sinkSelfTest.cjs` starts the forwarder against a counting loopback upstream and
 sends every submit and relay form to every mount: the plain mounts refuse them, the `/sink/<mode>`
 mounts answer them, and the upstream must receive none of them. `N27` (Node.js direct, after `N26`,
@@ -212,12 +215,19 @@ history of the disposable wallet stays empty. `N20` reads the history of a funde
 in the Node.js direct run with inputs you keep outside this repository:
 
     export FUNDED_WALLET_IN=<directory with a copy of the wallet: keys.bin, cache.bin, password.txt>
-    export FUNDED_EXPECT=<its expected transfers, JSON: {"transfers":[{hash, height, direction, asset, amount, accountIndex, subaddressIndex}]}>
+    export FUNDED_EXPECT=<its expected history, JSON: {"transfers":[{hash, height, direction, asset, amount, accountIndex, subaddressIndex}], "txs":[...], "balances":{...}}>
 
-It syncs the copy (never the input), compares every transfer with the expectations, the incoming
-sums per asset with the balances of the wallet, its accounts and subaddresses, applies every query
-filter, compares direct and worker results field by field, and syncs again after the next block to
-see the confirmations grow (two more syncs; up to twenty minutes of waiting).
+`transfers` lists every transfer (an outgoing transfer has no `subaddressIndex`); the optional `txs` list
+every transaction with its `fee`, `feeAsset`, `incoming` transfers, `outgoing` transfer (its destinations
+by their index in the wallet, never an address) and `conversion`, and the optional `balances` the balance
+and unlocked balance per account index and asset, amounts as decimal strings (`FundedExpectations` in
+`src/test/network/NetworkChecks.ts`). It syncs the copy (never the input), compares every transfer and,
+when given, every transaction and the balances with the expectations, and derives the balances of the
+wallet, its accounts and subaddresses from the history: incoming transfers add, an outgoing transfer takes
+its amount and fee from the sending account, and a destination at the sending account in the source asset,
+which the core does not list as incoming, stays in its balance. It applies every query filter, compares
+direct and worker results field by field, and syncs again after the next block to see the confirmations
+grow (two more syncs; up to twenty minutes of waiting).
 `FUNDED_WALLET_OUT=<new directory>` receives the synced bytes. Without the two variables `N20` is
 reported as not run.
 

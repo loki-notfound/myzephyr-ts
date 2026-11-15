@@ -70,9 +70,15 @@ export interface FundedInputs {
   readonly saveSynced?: (seed: SeedWallet) => Promise<void>;
 }
 
-/** Expected history of the funded wallet: every transfer by hash, and the totals per asset and account. */
+/**
+ * Expected history of the funded wallet: every transfer by hash (an outgoing transfer has no subaddress index) and,
+ * optionally, every transaction with its fee, outgoing transfer (destinations by their index in the wallet, never an
+ * address) and conversion, and the balance and unlocked balance per account and asset. Amounts are decimal strings.
+ */
 export interface FundedExpectations {
-  readonly transfers: ReadonlyArray<{ readonly hash: string; readonly height: number; readonly direction: "incoming" | "outgoing"; readonly asset: string; readonly amount: string; readonly accountIndex: number; readonly subaddressIndex: number }>;
+  readonly transfers: ReadonlyArray<{ readonly hash: string; readonly height: number; readonly direction: "incoming" | "outgoing"; readonly asset: string; readonly amount: string; readonly accountIndex: number; readonly subaddressIndex?: number }>;
+  readonly txs?: ReadonlyArray<Readonly<Record<string, unknown>>>;
+  readonly balances?: Readonly<Record<string, Readonly<Record<string, { readonly balance: string; readonly unlocked: string }>>>>;
 }
 
 export interface NetworkOptions {
@@ -903,7 +909,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
   });
 
   // ------------------------------------------------------------------ N20: funded history (inputs from outside the public tree)
-  await check("N20", "Funded history: transactions and transfers per asset and account equal the expectations; incoming sums equal the balances of wallet, accounts and subaddresses; every query filter; direct and proxied equal; confirmations grow with the daemon height", async (notes) => {
+  await check("N20", "Funded history: transactions and transfers per asset and account equal the expectations (fees, outgoing transfers with their destinations, conversions, balances when expected); the balances of wallet, accounts and subaddresses equal the sums of the history; every query filter; direct and proxied equal; confirmations grow with the daemon height", async (notes) => {
     const funded = opts.funded;
     if (funded === undefined) throw new CheckNotRun("no funded wallet supplied (FUNDED_WALLET_IN and FUNDED_EXPECT)");
     if (t.base === undefined) throw new CheckFailure("no target");
@@ -929,29 +935,87 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       const want = funded.expect.transfers.slice().sort((a, b) => (key(a) < key(b) ? -1 : 1));
       const have = got.slice().sort((a, b) => (key(a) < key(b) ? -1 : 1));
       expect(show(have) === show(want), "transfers equal the expectations: " + show(have).substring(0, 600));
-      expect(txs.length === new Set(want.map((x) => x.hash)).size && txs.every((tx) => tx.isConfirmed && !tx.inPool && !tx.isFailed && tx.outgoingTransfer === undefined && tx.conversion === undefined && tx.feeAsset === undefined), "transactions: confirmed, incoming only");
+      expect(txs.length === new Set(want.map((x) => x.hash)).size && txs.every((tx) => tx.isConfirmed && !tx.inPool && !tx.isFailed), "transactions: confirmed");
       expect(txs.every((tx) => tx.confirmations === h1 - (tx.height as number)), "confirmations equal the wallet height minus the transaction height");
-      // incoming sums equal the balances (wallet, account, subaddress, by asset)
-      const sum = (filter: (x: F.ZephyrWalletTransfer) => boolean) => { const m = new Map<string, bigint>(); for (const x of transfers) if (x.direction === "incoming" && filter(x)) m.set(x.asset as string, (m.get(x.asset as string) ?? BigInt(0)) + x.amount); return m; };
+      // a transaction has an outgoing transfer exactly where the expectations list one; its fee asset is the outgoing asset, and a
+      // conversion is reported exactly when a destination is in another asset
+      const outgoingHashes = new Set(want.filter((x) => x.direction === "outgoing").map((x) => x.hash));
+      expect(txs.every((tx) => (tx.outgoingTransfer !== undefined) === outgoingHashes.has(tx.hash)), "outgoing transfers exactly where expected");
+      expect(txs.every((tx) => {
+        const o = tx.outgoingTransfer;
+        if (o === undefined) return tx.feeAsset === undefined && tx.conversion === undefined;
+        return tx.fee !== undefined && tx.feeAsset === o.asset && (tx.conversion !== undefined) === (o.destinations ?? []).some((d) => d.asset !== undefined && d.asset !== o.asset);
+      }), "fee asset and conversion follow the outgoing transfer");
+      // destinations by their index in this wallet (no address leaves the check)
+      const ownIndex = new Map<string, { accountIndex: number; subaddressIndex: number } | undefined>();
+      for (const tx of txs) for (const d of tx.outgoingTransfer?.destinations ?? []) {
+        if (d.address === undefined || ownIndex.has(d.address)) continue;
+        try { const i = await w.getAddressIndex(d.address); ownIndex.set(d.address, { accountIndex: i.accountIndex, subaddressIndex: i.subaddressIndex }); } catch (e) { ownIndex.set(d.address, undefined); }
+      }
+      const canon = (v: unknown): string => JSON.stringify(v, (k, x) => (x !== null && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.keys(x as object).sort().map((n) => [n, (x as Record<string, unknown>)[n]])) : typeof x === "bigint" ? x.toString() : x));
+      const described = txs.map((tx) => {
+        const o = tx.outgoingTransfer;
+        return { hash: tx.hash, height: tx.height, fee: tx.fee, feeAsset: tx.feeAsset,
+          incoming: tx.incomingTransfers.map((x) => ({ asset: x.asset, amount: x.amount, accountIndex: x.accountIndex, subaddressIndex: x.subaddressIndex })),
+          outgoing: o === undefined ? undefined : { asset: o.asset, amount: o.amount, accountIndex: o.accountIndex, subaddressIndices: o.subaddressIndices,
+            destinations: (o.destinations ?? []).map((d) => { const i = d.address === undefined ? undefined : ownIndex.get(d.address); return { own: i !== undefined, accountIndex: i?.accountIndex, subaddressIndex: i?.subaddressIndex, asset: d.asset, amount: d.amount }; }) },
+          conversion: tx.conversion };
+      });
+      if (funded.expect.txs !== undefined) {
+        const byHash = (list: ReadonlyArray<Readonly<Record<string, unknown>>>) => list.slice().sort((p, q) => (String(p.hash) < String(q.hash) ? -1 : 1)).map(canon);
+        const have = byHash(described), wantTxs = byHash(funded.expect.txs);
+        expect(have.length === wantTxs.length && have.every((x, i) => x === wantTxs[i]), "transactions equal the expectations (fee, incoming, outgoing with destinations, conversion): " + have.filter((x, i) => x !== wantTxs[i]).join(" ").substring(0, 600));
+      }
+      // balances: incoming transfers add; an outgoing transfer takes its amount and fee from the sending account; a destination at
+      // the sending account in the source asset is not listed as incoming (the core counts it with the account's change and keeps
+      // it in the balance, wallet2::process_new_transaction), so it is added back here. The change returns to subaddress 0, so the
+      // subaddress balances are derived only while every outgoing transfer spent from subaddress 0.
+      const fromSubaddressZero = txs.every((tx) => tx.outgoingTransfer === undefined || canon(tx.outgoingTransfer.subaddressIndices ?? []) === "[0]");
+      const sum = (filter: (accountIndex: number, subaddressIndex: number | undefined) => boolean) => {
+        const m = new Map<string, bigint>();
+        const add = (asset: string | undefined, v: bigint) => m.set(asset as string, (m.get(asset as string) ?? BigInt(0)) + v);
+        for (const x of transfers) if (x.direction === "incoming" && filter(x.accountIndex, x.subaddressIndex)) add(x.asset, x.amount);
+        for (const tx of txs) {
+          const o = tx.outgoingTransfer;
+          if (o === undefined) continue;
+          if (filter(o.accountIndex, 0)) add(o.asset, -(o.amount + (tx.fee as bigint)));
+          for (const d of o.destinations ?? []) {
+            const i = d.address === undefined ? undefined : ownIndex.get(d.address);
+            if (i !== undefined && i.accountIndex === o.accountIndex && (d.asset ?? o.asset) === o.asset && filter(i.accountIndex, i.subaddressIndex)) add(o.asset, d.amount);
+          }
+        }
+        for (const [k, v] of Array.from(m.entries())) if (v === BigInt(0)) m.delete(k);
+        return m;
+      };
+      const nonZero = (m: ReadonlyMap<string, bigint>) => new Map(Array.from(m.entries()).filter(([, v]) => v !== BigInt(0)).sort());
       const balance = await w.getBalance();
       const unlocked = await w.getUnlockedBalance();
       const walletSums = sum(() => true);
-      for (const [asset, value] of balance) expect(value === (walletSums.get(asset) ?? BigInt(0)), "wallet balance " + asset + " equals the incoming sum");
+      for (const [asset, value] of balance) expect(value === (walletSums.get(asset) ?? BigInt(0)), "wallet balance " + asset + " equals the history's sum");
       for (const asset of walletSums.keys()) expect(balance.has(asset), "the wallet map has " + asset);
       const accounts = await w.getAccounts({ includeSubaddresses: true });
       const shapes: Record<string, unknown> = { wallet: show(balance), walletUnlocked: show(unlocked), accounts: [] as unknown[] };
+      const balancesSeen: Record<string, Record<string, { balance: string; unlocked: string }>> = {};
       for (const a of accounts) {
-        const accSums = sum((x) => x.accountIndex === a.index);
-        expect(show(new Map(Array.from(a.balance.entries()).sort())) === show(new Map(Array.from(accSums.entries()).sort())), "account " + a.index + " map equals its incoming sums");
+        const accSums = sum((acc) => acc === a.index);
+        expect(show(nonZero(a.balance)) === show(new Map(Array.from(accSums.entries()).sort())), "account " + a.index + " map equals the history's sums");
         const byMap = await w.getBalance(a.index);
-        for (const sub of a.subaddresses ?? []) {
-          const subSums = sum((x) => x.accountIndex === a.index && x.subaddressIndex === sub.index);
-          expect(show(new Map(Array.from(sub.balance.entries()).sort())) === show(new Map(Array.from(subSums.entries()).sort())), "subaddress " + a.index + "/" + sub.index + " map equals its incoming sums");
+        for (const sub of fromSubaddressZero ? a.subaddresses ?? [] : []) {
+          const subSums = sum((acc, s) => acc === a.index && s === sub.index);
+          expect(show(nonZero(sub.balance)) === show(new Map(Array.from(subSums.entries()).sort())), "subaddress " + a.index + "/" + sub.index + " map equals the history's sums");
           for (const [asset, v] of subSums) expect((await w.getBalance(asset, a.index, sub.index)) === v, "scalar " + asset + " " + a.index + "/" + sub.index);
           const entry = byMap.get(sub.index);
           expect(subSums.size === 0 ? entry === undefined || entry.size === 0 || Array.from(entry.values()).every((v) => v === BigInt(0)) : entry !== undefined && Array.from(subSums).every(([asset, v]) => entry.get(asset) === v), "account map entry of subaddress " + sub.index);
         }
+        if (!fromSubaddressZero) notes.push("an outgoing transfer spent from another subaddress than 0: subaddress balances not derived");
         for (const [asset, v] of accSums) expect((await w.getBalance(asset, a.index)) === v, "scalar " + asset + " of account " + a.index);
+        const seen: Record<string, { balance: string; unlocked: string }> = {};
+        for (const asset of ["ZPH", "ZSD", "ZRS", "ZYS"]) seen[asset] = { balance: (await w.getBalance(asset, a.index)).toString(), unlocked: (await w.getUnlockedBalance(asset, a.index)).toString() };
+        balancesSeen[String(a.index)] = seen;
+        const wantBalances = funded.expect.balances?.[String(a.index)];
+        if (wantBalances !== undefined) for (const [asset, b] of Object.entries(wantBalances)) {
+          expect((await w.getBalance(asset, a.index)).toString() === b.balance && (await w.getUnlockedBalance(asset, a.index)).toString() === b.unlocked, "account " + a.index + " " + asset + " balance and unlocked balance equal the expectations");
+        }
         (shapes.accounts as unknown[]).push({ index: a.index, balance: show(a.balance), unlockedBalance: show(a.unlockedBalance), accountMap: show(byMap), accountMapUnlocked: show(await w.getUnlockedBalance(a.index)),
           subaddresses: (a.subaddresses ?? []).filter((x) => x.isUsed || x.balance.size > 0).map((x) => ({ index: x.index, balance: show(x.balance), unlockedBalance: show(x.unlockedBalance), isUsed: x.isUsed, numUnspentOutputs: x.numUnspentOutputs })),
           unusedSubaddresses: (a.subaddresses ?? []).filter((x) => !x.isUsed && x.balance.size === 0).length });
@@ -960,7 +1024,9 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       const assets = Array.from(new Set(want.map((x) => x.asset))).sort();
       const filters: Array<[string, F.ZephyrHistoryQuery, (x: FundedExpectations["transfers"][number]) => boolean]> = [];
       for (const asset of assets) filters.push(["asset " + asset, { asset }, (x) => x.asset === asset]);
-      for (const a of Array.from(new Set(want.map((x) => x.accountIndex)))) { filters.push(["account " + a, { accountIndex: a }, (x) => x.accountIndex === a]); filters.push(["account " + a + " subaddress 0", { accountIndex: a, subaddressIndex: 0 }, (x) => x.accountIndex === a && x.subaddressIndex === 0]); }
+      // a subaddress filter matches the incoming transfers at that subaddress and the outgoing transfers that spent from it
+      const spentFrom = new Map(txs.filter((tx) => tx.outgoingTransfer !== undefined).map((tx) => [tx.hash, tx.outgoingTransfer?.subaddressIndices ?? []] as [string, ReadonlyArray<number>]));
+      for (const a of Array.from(new Set(want.map((x) => x.accountIndex)))) { filters.push(["account " + a, { accountIndex: a }, (x) => x.accountIndex === a]); filters.push(["account " + a + " subaddress 0", { accountIndex: a, subaddressIndex: 0 }, (x) => x.accountIndex === a && (x.direction === "incoming" ? x.subaddressIndex === 0 : (spentFrom.get(x.hash) ?? []).includes(0))]); }
       filters.push(["incoming", { direction: "incoming" }, (x) => x.direction === "incoming"], ["outgoing", { direction: "outgoing" }, (x) => x.direction === "outgoing"],
         ["confirmed", { status: "confirmed" }, () => true], ["pool", { status: "pool" }, () => false], ["failed", { status: "failed" }, () => false]);
       const heights = want.map((x) => x.height).sort((a, b) => a - b);
@@ -1002,7 +1068,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       }
       notes.push("funded copy: synced " + r1.numBlocksFetched + " blocks from " + h0 + " to " + h1 + "; " + txs.length + " transactions, " + transfers.length + " transfers; " + filters.length + " filters; direct and proxied equal");
       return { startHeight: h0, height: h1, daemonHeight: dh0, numBlocksFetched: r1.numBlocksFetched, transactions: txs.map((tx) => ({ hash: tx.hash, height: tx.height, timestamp: tx.timestamp, confirmations: tx.confirmations, isLocked: tx.isLocked, fee: tx.fee === undefined ? undefined : tx.fee.toString(), unlockTime: tx.unlockTime.toString(), incoming: tx.incomingTransfers.length })),
-        transfers: got, shapes, filters: filterResults, confirmations: grown };
+        transfers: got, txs: JSON.parse(canon(described)), balances: balancesSeen, shapes, filters: filterResults, confirmations: grown };
     } finally {
       await w.close();
     }
@@ -1092,7 +1158,8 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       // an amount above the balance: rejected from the wallet's own balance, no request
       const r0 = await forwarderRoutes();
       await expectCode(w.buildTransfer({ asset: "ZYS", destinations: [{ address: account1, amount: BigInt(6) * unit }], accountIndex: 0 }), "TX_NOT_POSSIBLE", "an amount above the balance", notes, "NOT_ENOUGH_MONEY");
-      await expectCode(w.buildTransfer({ asset: "ZSD", destinations: [{ address: primary, amount: tenth }], accountIndex: 1 }), "TX_NOT_POSSIBLE", "an asset account 1 does not hold", notes, "NOT_ENOUGH_MONEY");
+      expect((await w.getBalance("ZSD", 1)) < unit, "account 1 holds less than 1 ZSD");
+      await expectCode(w.buildTransfer({ asset: "ZSD", destinations: [{ address: primary, amount: unit }], accountIndex: 1 }), "TX_NOT_POSSIBLE", "1 ZSD from account 1, above its balance", notes, "NOT_ENOUGH_MONEY");
       const r1 = await forwarderRoutes();
       expect(JSON.stringify(r0) === JSON.stringify(r1), "the rejected builds sent no request");
       // nothing persists
