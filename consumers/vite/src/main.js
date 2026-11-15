@@ -3,7 +3,11 @@
 // WebAssembly module from the package's defaults. The test harness serves the page with the
 // documented Content-Security-Policy, the daemon under the base path /rpc of the same origin, a
 // saved disposable wallet at /seed/* and receives the result at /result.
+//
+// With ?offline the page runs the offline platform checks instead (offlinePage.js): no daemon, the
+// wallet in a worker, the results shown on the page and posted to /result.
 import { createRandomWallet, openWalletData, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
+import { runOfflinePage } from "./offlinePage.js";
 
 const status = document.getElementById("status");
 
@@ -48,4 +52,5 @@ async function run() {
     body: JSON.stringify({ checks: [{ id: "P01", title: "create, save, reopen and one sync through the package entry", status: pass ? "pass" : "fail", notes }] }) });
 }
 
-run();
+if (new URLSearchParams(location.search).has("offline")) runOfflinePage();
+else run();

@@ -1,0 +1,11 @@
+{
+  "name": "zephyr-ts-consumer-electron",
+  "private": true,
+  "description": "Minimal Electron consumer of the packed package (platform tests, bin/test_platform_electron.sh): the current stable and the oldest supported Electron major",
+  "main": "main.cjs",
+  "dependencies": {
+    "@loki-notfound/zephyr-ts": "file:../zephyr-ts.tgz",
+    "electron-current": "npm:electron@45.2.1",
+    "electron-oldest": "npm:electron@43.8.6"
+  }
+}
