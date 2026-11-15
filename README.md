@@ -17,7 +17,8 @@ The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
 the read-only history of transactions and transfers, an explicit pool refresh, building same-asset
 transactions and conversions to inspect them, and relaying a prepared transaction or conversion in two
-explicit steps (below). Relay is proven against a local sink only so far, not yet on the network.
+explicit steps (below). Relay was proven on mainnet on 2026-11-15 for transfers in the four V2 assets
+and four of the six conversions; its failure paths are proven against a local sink only.
 Sweeps and listeners are not supported. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 Which systems, runtimes and browsers are tested, automatically or by hand, is in
@@ -168,7 +169,8 @@ atomic units; the asset is the core's string, historical names included; a value
 report is absent, never zero or a default asset. Results are frozen plain objects and arrays.
 
 * The query (`ZephyrHistoryQuery`) has optional fields only: `asset`, `accountIndex`,
-  `subaddressIndex` (with `accountIndex`), `direction` (`"incoming"` or `"outgoing"`), `status`
+  `subaddressIndex` (with `accountIndex`; it matches incoming transfers received at that subaddress
+  and outgoing transfers that spent from it, by their `subaddressIndices`), `direction` (`"incoming"` or `"outgoing"`), `status`
   (`"confirmed"`, `"pool"` for own outgoing transactions in the pool and the incoming ones the last
   `refreshPool` saw, `"failed"`), `minHeight` and `maxHeight` (inclusive, confirmed transactions only)
   and `hashes`. Unknown fields and bad values reject with `INVALID_CONFIG` before any native call
