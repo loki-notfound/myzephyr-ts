@@ -19,8 +19,8 @@ OUT=$ROOT/build/test-results/platform; mkdir -p "$OUT"
 node "$TOOL" env
 log "install the Electron consumer from its lockfile"
 rm -rf "$C"; cp -R "$ROOT/consumers/electron" "$C"
-offline=(); [ "${OFFLINE:-0}" = 1 ] && offline=(--offline)
-( cd "$C" && npm ci "${offline[@]}" --omit=dev --ignore-scripts --no-audit --no-fund ) > "$P/logs/electron-install.log" 2>&1 \
+offline=(); [ "${OFFLINE:-0}" = 1 ] && offline=(--offline) # expanded as ${a[@]+"${a[@]}"}: bash 3.2 (macOS) rejects an empty array under set -u
+( cd "$C" && npm ci ${offline[@]+"${offline[@]}"} --omit=dev --ignore-scripts --no-audit --no-fund ) > "$P/logs/electron-install.log" 2>&1 \
   || { tail -n 20 "$P/logs/electron-install.log"; die "Electron consumer: install failed"; }
 node "$TOOL" installed "$P/consumers/zephyr-ts.tgz" "$C/node_modules/@loki-notfound/zephyr-ts" || die "Electron consumer: the installed package differs from the tarball"
 export electron_config_cache=${electron_config_cache:-$P/electron-cache}
@@ -36,7 +36,7 @@ for e in current oldest; do
   log "Electron ($e) $(cat "$C/node_modules/electron-$e/dist/version"): offline checks in the main process and a renderer"
   R_OUT=$OUT/electron-$e; rm -rf "$R_OUT"; mkdir -p "$R_OUT"
   rc=0
-  ( cd "$C" && ELECTRON_ENABLE_LOGGING=0 bounded 1800 "${wrap[@]}" "$BIN" main.cjs --checks "$P/consumers/vite/src/offlineChecks.js" --root "$P/consumers/vite/dist" \
+  ( cd "$C" && ELECTRON_ENABLE_LOGGING=0 bounded 1800 ${wrap[@]+"${wrap[@]}"} "$BIN" main.cjs --checks "$P/consumers/vite/src/offlineChecks.js" --root "$P/consumers/vite/dist" \
       --guard "$P/consumers/node/offlineGuard.cjs" --page-server "$ROOT/src/test/platform/pageServer.cjs" --out "$R_OUT" --timeout-ms 1200000 ) > "$R_OUT/electron.log" 2>&1 || rc=$?
   grep -E '^(electron |main (direct|worker) checks|renderer )' "$R_OUT/electron.log" || true
   [ "$rc" = 0 ] || { tail -n 20 "$R_OUT/electron.log"; die "Electron ($e): the offline checks failed (exit $rc)"; }

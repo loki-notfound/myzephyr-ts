@@ -23,11 +23,11 @@ cp "$TGZ_IN" "$P/consumers/zephyr-ts.tgz"
 node "$TOOL" verify "$P/consumers/zephyr-ts.tgz" "$SUM" > /dev/null
 node "$TOOL" wasm-sha256 "$P/consumers/zephyr-ts.tgz" > "$P/wasm.sha256"
 echo "module:   $(cat "$P/wasm.sha256")  dist/zephyr.wasm in the tarball"
-offline=(); [ "${OFFLINE:-0}" = 1 ] && offline=(--offline)
+offline=(); [ "${OFFLINE:-0}" = 1 ] && offline=(--offline) # expanded as ${a[@]+"${a[@]}"}: bash 3.2 (macOS) rejects an empty array under set -u
 for c in node vite; do
   log "platform: install the $c consumer from its lockfile"
   cp -R "$ROOT/consumers/$c" "$P/consumers/$c"
-  ( cd "$P/consumers/$c" && npm ci "${offline[@]}" --omit=dev --ignore-scripts --no-audit --no-fund ) > "$P/logs/$c-install.log" 2>&1 \
+  ( cd "$P/consumers/$c" && npm ci ${offline[@]+"${offline[@]}"} --omit=dev --ignore-scripts --no-audit --no-fund ) > "$P/logs/$c-install.log" 2>&1 \
     || { tail -n 20 "$P/logs/$c-install.log"; die "$c consumer: install failed"; }
   node "$TOOL" installed "$P/consumers/zephyr-ts.tgz" "$P/consumers/$c/node_modules/@loki-notfound/zephyr-ts" || die "$c consumer: the installed package differs from the tarball"
 done

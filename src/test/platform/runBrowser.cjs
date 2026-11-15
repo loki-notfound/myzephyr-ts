@@ -95,13 +95,25 @@ async function wd(base, method, p, body) {
   return json.value;
 }
 
+// msedgedriver on Windows does not always find the browser by itself: name the binary of a standard installation
+function edgeOnWindows() {
+  if (process.platform !== "win32") return undefined;
+  for (const base of [process.env["ProgramFiles(x86)"], process.env.ProgramFiles]) {
+    if (!base) continue;
+    const p = path.join(base, "Microsoft", "Edge", "Application", "msedge.exe");
+    if (fs.existsSync(p)) return p;
+  }
+  return undefined;
+}
+
 function capabilities() {
   const headless = process.env.PLATFORM_TEST_HEADED === "1" ? [] : null;
   if (BROWSER === "chrome" || BROWSER === "msedge") {
     const key = BROWSER === "chrome" ? "goog:chromeOptions" : "ms:edgeOptions";
     const o = { args: (headless || ["--headless=new"]).concat(["--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update",
       "--disable-sync", "--disable-extensions", "--disable-default-apps", "--user-data-dir=" + profile]) };
-    if (BROWSER_BINARY) o.binary = BROWSER_BINARY;
+    const binary = BROWSER_BINARY || (BROWSER === "msedge" ? edgeOnWindows() : undefined);
+    if (binary) o.binary = binary;
     return { browserName: BROWSER, [key]: o };
   }
   if (BROWSER === "firefox") {
