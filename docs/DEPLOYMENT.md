@@ -129,19 +129,25 @@ that serves `zephyr.worker.js`, not by the page's policy:
 | Directive (worker script response) | Value | Without it |
 |---|---|---|
 | `connect-src` | every daemon origin you use (form 2: the application's own origin) | every daemon request is blocked; the wallet reports `isConnectedToDaemon() === false` and network calls reject with `DAEMON_ERROR` |
+| `script-src` | `'wasm-unsafe-eval'` (no script source) | Firefox: the worker cannot instantiate the module the page compiled; the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_UNAVAILABLE` and the browser reports a `script-src` violation (`wasm-eval`). Chromium does not need it |
 
-The workers instantiate the module the page compiled; they need no `'wasm-unsafe-eval'` and no
-script source. A worker script served without any policy is not restricted at all (the page's
-policy does not carry over), so send one.
+The workers instantiate the module the page compiled and load no script; Chromium needs no
+`'wasm-unsafe-eval'` in the worker's policy, Firefox does. A worker script served without any
+policy is not restricted at all (the page's policy does not carry over), so send one.
 
-These statements are verified in Chromium only. Firefox and Safari apply policies to workers
-differently and have not been tested; check the policy in every engine you support.
+The rows of the page table and the first row of the worker table were verified in Chromium; the
+last row of the worker table in Firefox 160 (without it the construction fails as shown, with it the
+offline checks pass). Safari is covered by the platform tests of the workflow (`docs/PLATFORMS.md`
+in the repository); check the policy in every engine you support.
 
-Policies used by the tests (Chromium; `<daemon origins>` stands for your daemons):
+Policies used by the tests (`<daemon origins>` stands for your daemons):
 
     page:   default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'
-    worker: default-src 'none'; connect-src <daemon origins>
+    worker: default-src 'none'; script-src 'wasm-unsafe-eval'; connect-src <daemon origins>
 
-Each row of the tables was checked by running with that source removed: the run failed as shown
-and the browser reported the violation of exactly that directive. No `'unsafe-eval'`,
-`'unsafe-inline'`, `blob:` or `data:` source is needed.
+The platform tests use these two in every browser; the Chromium suites of `bin/test_offline.sh` and
+the network tests serve the worker without `script-src`, which Chromium accepts.
+
+Each row of the tables was checked by running with that source removed (in the browser named
+above): the run failed as shown and the browser reported the violation of exactly that directive.
+No `'unsafe-eval'`, `'unsafe-inline'`, `blob:` or `data:` source is needed.

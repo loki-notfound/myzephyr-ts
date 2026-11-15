@@ -301,9 +301,16 @@ button, an amount or an address. The library never copies such text into an erro
 * The core resolves addresses of the wallet's lookahead window with `getAddressIndex` before those
   subaddresses are created; listings show only created subaddresses (the core creates them when an
   output arrives at one).
-* Runtime coverage so far: Node.js 22 and headless Chromium on Linux x86_64. Firefox, Safari,
-  Electron, Windows and macOS have not been tested. The browser entry is tested with Vite 8 and
-  webpack 5 only.
+* Runtime coverage: everything that needs a daemon (synchronization, history after a sync, building
+  and relaying) is tested on Linux x86_64 only, with Node.js 22 and headless Chromium. The offline
+  checks of the packed package run in the workflow on Windows, macOS (Intel and arm64) and Linux, in
+  Node.js 22 to 26, Chrome, Edge, Firefox, Safari and Electron 43 and 45; a platform counts as
+  tested only where its job passed. Manual tests on Windows 10 and an Intel Mac are not done yet.
+  `docs/PLATFORMS.md` in the repository lists each system, runtime and version, and what is not
+  tested. The browser entry is tested with Vite 8 and webpack 5 only.
+* Firefox needs `script-src 'wasm-unsafe-eval'` in the policy of the worker script, unlike
+  Chromium; without it the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_UNAVAILABLE`,
+  not with `WASM_MODULE_REJECTED` as for a page policy without it (`DEPLOYMENT.md`).
 * The runtime dependencies are the packages the entry's modules load. The HTTP transport has no
   authentication or proxy support: credentials and proxies are rejected by the address contract and
   again by the transport. In Node.js and Electron it never uses a proxy, also not one named by the

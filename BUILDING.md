@@ -252,14 +252,65 @@ height, so that the five syncs download no block hashes. Results, including the 
 each consumer ships, go to `build/test-results/package/`. With `OFFLINE=1` the consumers install
 from the npm cache only.
 
+## Platform tests
+
+The platform tests take a packed tarball built elsewhere (on Linux, by `bin/pack.sh`) to the machine
+they run on and test it there without building anything: no WebAssembly compilation, no TypeScript
+build. They need Node.js 22 or newer and npm, and run on Linux, macOS and Windows (in Git Bash).
+`docs/PLATFORMS.md` lists where the workflow runs them.
+
+    bin/platform_prepare.sh <tarball> <file with its SHA-256>
+    bin/test_platform_node.sh
+    bin/test_platform_browser.sh <label> --launch <Chromium-family binary>
+    bin/test_platform_browser.sh <label> --webdriver <driver binary>|auto --browser chrome|msedge|firefox|safari [--browser-binary <path>]
+    bin/test_platform_electron.sh
+
+1. `bin/platform_prepare.sh` prints the system, architecture and runtime versions, checks the
+   tarball's SHA-256 against the file (`<hash>  <name>`, as `sha256sum` writes it), installs the
+   tarball into copies of `consumers/node` and `consumers/vite` under `build/platform/` from their
+   lockfiles (with `OFFLINE=1` from the npm cache only), checks that each installed package equals
+   the tarball file by file, and builds the Vite consumer (production build, no configuration file).
+2. `bin/test_platform_node.sh` runs the offline checks K01 to K11 of
+   `consumers/vite/src/offlineChecks.js` through the package entry: loaded with `require` and with
+   `import`, each in the main thread and with a worker per wallet, under a preload that blocks and
+   counts every network access in the main thread and the workers (`consumers/node/offlineGuard.cjs`);
+   a run passes only with every check passed, the package's `zephyr.wasm` installed and no network
+   access attempted. Then it type-checks the shipped declarations without Node.js types.
+3. `bin/test_platform_browser.sh` serves the Vite build from `127.0.0.1` under the policies of
+   `docs/DEPLOYMENT.md` (`src/test/platform/pageServer.cjs`) and opens `index.html?offline`, which runs
+   the same checks with the wallet in a worker and posts the result. A Chromium-family browser can be
+   started directly (`--launch`, headless, network contained as in the offline suites); any browser
+   can be driven through the WebDriver endpoint of its driver (`--webdriver`; `auto` takes the driver
+   named by `CHROMEWEBDRIVER`, `EDGEWEBDRIVER` or `GECKOWEBDRIVER`, as the hosted runner images set
+   them, else the one on the `PATH`, and `/usr/bin/safaridriver` for Safari, which needs
+   `safaridriver --enable` once). The runner (`src/test/platform/runBrowser.cjs`) uses no dependency:
+   it speaks WebDriver with Node.js's own `fetch`. A run passes only with every check passed, exactly
+   one WebAssembly module loaded (the package's, by SHA-256), the worker script served and no policy
+   violation reported other than the browser's own request for `/favicon.ico`.
+4. `bin/test_platform_electron.sh` installs `consumers/electron` from its lockfile, which pins the
+   current stable Electron (45.2.1) and the oldest supported major (43.8.6); the package's own
+   installer downloads each Electron archive and checks it against the package's `checksums.json`,
+   and the script prints that SHA-256 and compares it again. Each Electron runs the checks in its
+   main process through the Node.js entry (directly and with a worker per wallet) and in a sandboxed
+   renderer that loads the Vite build from a privileged `app://` scheme under the same policies
+   (`consumers/electron/main.cjs`). On Linux without a display it runs under `xvfb-run`.
+
+Results go to `build/test-results/platform/`. With `?offline`, the page of the Vite consumer shows
+PASS or FAIL per check, the browser and system it detected and a short result block; when its server
+forwards a daemon under `/rpc` of the same origin, it also offers an optional, read-only online step
+(connect, height, a new wallet at that height and its sync). The platform tests never use it.
+
 ## Continuous integration
 
-`.github/workflows/build.yml` runs on every pull request to `main` and on every push to `main`. One
-job on an `ubuntu-24.04` runner with Node.js 22 checks out the tested commit (the pull request's
+`.github/workflows/build.yml` runs on every pull request to `main` and on every push to `main`. The
+build job on an `ubuntu-24.04` runner with Node.js 22 checks out the tested commit (the pull request's
 head, not a merge commit), runs `bin/build.sh` from that fresh checkout, `bin/pack.sh` and
-`bin/test_offline.sh` with the runner's Chromium (`CHROMIUM`). The network suite, the packaging
-tests and the file compatibility test are not part of it: they need a daemon or another
-repository.
+`bin/test_offline.sh` with the runner's Chromium (`CHROMIUM`), and keeps the package tarball with
+its SHA-256 as a workflow artifact (three days). The platform jobs `node`, `browser` and `electron`
+then run on Linux, Windows and macOS runners (`docs/PLATFORMS.md`): each downloads that artifact,
+runs `bin/platform_prepare.sh` on it and one of the platform test scripts, and builds nothing. The
+network suite, the packaging tests and the file compatibility test are not part of the workflow:
+they need a daemon or another repository.
 
 * The workflow reads the repository only (`permissions: contents: read`), uses no secret and
   does not run for `pull_request_target`; the checkout keeps no credentials.
@@ -273,9 +324,14 @@ repository.
   prints it and whether the run's tarball equals it. A difference does not fail the job.
 * Ubuntu 24.04 denies unprivileged user namespaces to the runner's Chromium, which the tests run
   with its sandbox; the job lifts that restriction on its disposable runner.
-* The job stops after 150 minutes. A newer push to the same pull request cancels that pull
-  request's run still in progress; a push to `main` never cancels or replaces another run, so every
-  landed commit keeps its run and its hashes.
+* Every platform job prints the system, architecture, runtime and browser versions and the
+  tarball's SHA-256, and stops at its first failed step. On Windows the checkout keeps the committed
+  line endings (`core.autocrlf false`), so that the scripts run in Git Bash; the Safari job enables
+  `safaridriver` first; the Linux browser and Electron jobs lift the user namespace restriction as
+  the build job does.
+* The build job stops after 150 minutes, each platform job after 45. A newer push to the same pull
+  request cancels that pull request's run still in progress; a push to `main` never cancels or
+  replaces another run, so every landed commit keeps its run and its hashes.
 
 A run needs about 4 GB of disk. Measured on an 11-core machine with the inputs already on disk:
 the build about 7 minutes, the offline tests about 19 minutes. A runner also downloads the

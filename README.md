@@ -20,6 +20,8 @@ transactions and conversions to inspect them, and relaying a prepared transactio
 explicit steps (below). Relay is proven against a local sink only so far, not yet on the network.
 Sweeps and listeners are not supported. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
+Which systems, runtimes and browsers are tested, automatically or by hand, is in
+[docs/PLATFORMS.md](docs/PLATFORMS.md).
 
 ## Core and pinned sources
 
@@ -469,8 +471,9 @@ tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transpo
 
 [BUILDING.md](BUILDING.md) describes the requirements, the build from a fresh clone, offline
 builds from local caches, the offline test suites, the optional file compatibility test with
-zephyr-javascript, the network suite and the packaging tests with Vite, webpack and Node.js
-consumers.
+zephyr-javascript, the network suite, the packaging tests with Vite, webpack and Node.js
+consumers, and the platform tests that take the packed tarball to other systems, browsers and
+Electron.
 
 ## Versions
 
