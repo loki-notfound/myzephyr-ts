@@ -107,18 +107,24 @@ that wallet's worker.
   incoming pool transfer is what the core recorded (the core's listener reports none for pool
   outputs; the history record carries one when the core stored it); when it is missing the field
   is absent.
-* Proven on real data: incoming transfers in ZPH, ZSD, ZRS and ZYS at two accounts, their heights,
-  confirmations, amounts and the sums per asset against the balances, read the same by
-  zephyr-javascript. Not proven on real data, because no test wallet has sent anything: outgoing
-  transfers and their destinations, conversions, fees paid, change, own transactions in the pool and
-  failed ones. Their decoding follows the core's records and is tested with constructed records only.
+* Proven on real data: incoming transfers in ZPH, ZSD, ZRS and ZYS at two accounts and, after the
+  mainnet test of 2026-11-15, outgoing transfers with their destinations, the fees paid, transfers with a
+  destination at the sending account and conversions with their burnt and minted amounts: heights,
+  confirmations, amounts, the balances they sum to, read the same by zephyr-javascript (destinations, fees
+  and the outgoing assets included). Not proven on real data: own transactions in the pool and failed ones;
+  their decoding follows the core's records and is tested with constructed records only.
+* An amount sent to an address of the sending account in the source asset is not listed as an incoming
+  transfer: the core counts it with the account's change (zephyr `wallet2.cpp`,
+  `wallet2::process_new_transaction`), and it stays in the account's balance. An amount received at the
+  sending account in another asset, such as a conversion's minted amount, is listed as incoming.
 * The core reports no fee asset. `feeAsset` is the asset of the outgoing transfer (fees are paid in
   the source asset); a transaction without an outgoing transfer has no `feeAsset`, although its
   `fee` (paid by the sender) is reported.
 * For an outgoing transfer the core computes the amount as inputs minus change minus fee, and the
   fee as inputs minus outputs, from its own records; for a conversion, whose outputs are in another
-  asset, these values come from that computation as well and are unproven. `conversion` is derived
-  from the outgoing transfer's asset and its destinations' asset and amounts.
+  asset, these values come from that computation as well. On the four relayed conversions the amount
+  equalled the burnt amount and the fee the fee charged. `conversion` is derived from the outgoing
+  transfer's asset and its destinations' asset and amounts.
 * Not returned: transaction notes, payment identifiers, outputs and their assets (the core does not
   store the asset of an output), key images, transaction keys and proofs (`checkTxKey` reads zero
   amounts in this core).
@@ -144,12 +150,18 @@ that wallet's worker.
 * Same-asset transfers in the four V2 assets only. Conversions (see `buildConversion`), sweeps,
   integrated addresses and payment identifiers, an unlock time and "subtract the fee from a destination"
   (the core's wrapper does not pass it) are not supported.
-* The fee is the core's, in the source asset: for a same-asset transfer the core computes the same
-  per-byte fee in every asset (no conversion). Observed on mainnet on 2026-11-13 with one input and
-  two outputs at the default priority: about 0.000307 to 0.000309 in each of ZPH, ZSD, ZRS and ZYS
-  (200 atomic units per byte of weight), 0.000427 with two destinations. Fees vary with the daemon's
-  fee estimate and with the transaction's weight, which changes by a few bytes between two builds of
-  the same transfer (the ring members are chosen anew).
+* The fee is the core's, in the source asset: the transaction's weight times a per-byte fee of the
+  daemon's fee estimate, rounded up to the estimate's quantization (zephyr `wallet2.cpp`,
+  `wallet2::create_transactions_2` with `calculate_fee_from_weight`). For a same-asset transfer the core
+  does not convert it, so the fee has the same number of atomic units in every asset for the same weight.
+  The tier of the estimate follows the priority; with `"default"` the core chooses it (README,
+  `priority`). Observed on mainnet with one input and two outputs at the default priority: 200,000 atomic
+  units per byte of weight, about 0.000307 to 0.000309 in each of ZPH, ZSD, ZRS and ZYS (built on
+  2026-11-13; charged on 2026-11-15 in ZPH, ZSD and ZRS), 0.000427 with two destinations (built) and
+  0.0005628 with two destinations and two inputs (charged). Once in the nine relayed transactions of 2026-11-15 the default
+  priority took the second tier, 790,000 per byte: 0.00121581 ZYS for a ZYS transfer of the same shape.
+  Fees vary with the daemon's fee estimate and with the transaction's weight, which changes by a few bytes
+  between two builds of the same transfer (the ring members are chosen anew).
 * The bridge first checks the wallet's own unlocked balance of the asset in the selected account or
   subaddresses (a necessary condition, without any request); the core's check with the fee stays
   authoritative. The core's own "not enough" failures, too few ring members and an oversized
@@ -166,7 +178,7 @@ that wallet's worker.
   returns (the test module's allocator returns to its level after every build).
 * Proven on real data (a funded test wallet, copies only, nothing relayed): one build per V2 asset
   to the wallet's own second account, one from that account back, two destinations, a repeated
-  build, direct and proxied. Not proven: what the network accepts (nothing was relayed).
+  build, direct and proxied. What the network accepted is under "Relaying a prepared transaction".
 
 ## Building conversions without relay
 
@@ -188,41 +200,60 @@ that wallet's worker.
   core's own comment there gives one (the amount-burnt verification uses the sum of the change outputs'
   masks, and the minted amount is not tied to the destination output), which this project has not
   verified.
-* Fees are in the source asset: the core computes the fee in ZPH (200 atomic units per byte of weight
-  observed, as for a transfer) and converts it into the source asset with the moving-average price
-  (ZSD, ZRS) or the ZYS price. Observed with one input and a weight of about 2,290: 0.000458 ZPH for
-  ZPH to ZRS, 0.0000548 ZSD for ZSD to ZPH and ZSD to ZYS, 0.0000275 ZYS for ZYS to ZSD.
+* Fees are in the source asset: the core computes the fee in ZPH as for a transfer (200,000 atomic units
+  per byte of weight observed) and, for a source asset other than ZPH, converts it with the pricing record
+  the conversion names (zephyr `cryptonote_tx_utils.cpp`, `get_fee_in_asset_equivalent`, called from
+  `wallet2::create_transactions_2`): with the ZSD moving average into ZSD, with the ZRS moving average into
+  ZRS, and into ZYS first with the ZSD moving average and then with the ZYS price. A conversion from ZPH
+  pays the ZPH fee unconverted. Observed with one input and a weight of about 2,290 (built on 2026-11-13):
+  0.000458 ZPH for ZPH to ZRS, 0.0000548 ZSD for ZSD to ZPH and ZSD to ZYS, 0.0000275 ZYS for ZYS to ZSD.
+  Charged on 2026-11-15: 0.000052645533 ZSD (ZSD to ZPH), 0.0005942 ZPH (ZPH to ZRS, two inputs),
+  0.000052846797 ZSD (ZSD to ZYS), 0.000034350652 ZYS (ZYS to ZSD).
 * The reserve ratio decides at build time which pairs are possible (README). With the ratio near 1.66
-  on 2026-11-13, ZPH to ZSD and ZRS to ZPH were refused (`TX_NOT_POSSIBLE`/`RESERVE_RATIO`); ZPH to ZRS,
-  ZSD to ZPH, ZSD to ZYS and ZYS to ZSD built.
+  on 2026-11-13 and near 1.75 on 2026-11-15, ZPH to ZSD and ZRS to ZPH were refused
+  (`TX_NOT_POSSIBLE`/`RESERVE_RATIO`); ZPH to ZRS, ZSD to ZPH, ZSD to ZYS and ZYS to ZSD built.
 * Requests: a conversion build sends what a transfer build sends plus the block header with the pricing
   record of the wallet's top block (`getblockheaderbyheight`) and one more circulating supply and
   pricing record history read. The node learns the wallet's height and that it builds a conversion; a
   refused conversion sends the reads up to the refusal and no ring member request.
 * A refused conversion is a typed failure of the core; each refusal leaves about 136 bytes in the
   module (measured in the test module). A built conversion releases everything.
-* Not proven: a relayed conversion and what the network charges for it, the amount actually received,
-  and the slippage between build and inclusion: the rate is fixed by the pricing record the transaction
-  names, and the chain accepts that record only while it is at most 10 blocks old when the transaction
-  is mined (`tx_pr_height_valid`); a conversion relayed later is rejected, and the reserve ratio is
-  checked again against the block that includes it.
+* Relayed on mainnet on 2026-11-15: ZSD to ZPH, ZPH to ZRS, ZSD to ZYS and ZYS to ZSD, each mined one or
+  two blocks after the block of its pricing record, with the fee charged and the minted amount received as
+  described. Not proven: ZPH to ZSD and ZRS to ZPH (refused by the ratio), and a conversion whose pricing
+  record aged before inclusion: the rate is fixed by the pricing record the transaction names, and the
+  chain accepts that record only while it is at most 10 blocks old when the transaction is mined
+  (`tx_pr_height_valid`); a conversion relayed later is rejected, and the reserve ratio is checked again
+  against the block that includes it.
 
 ## Relaying a prepared transaction
 
-* Not yet proven on the network: that the chain accepts what this library relays, the fee the network
-  charges, the amount a conversion delivers, change and locked balances after a spend, and whether a
-  conversion survives the time between build and inclusion. Relay is proven against a local sink that
-  answers as the daemon does (acceptance, every refusal flag, a busy daemon, an HTTP error, an unreadable
-  answer, a dropped connection, a late answer, a refused connection), with transactions built on copies of
-  a funded test wallet and with a synthetic transaction in the test module; nothing of it reached the
-  network. A funded test on mainnet follows before any release.
+* Proven on mainnet on 2026-11-15 with a funded test wallet (a wallet in the Node.js main thread, the
+  default priority, 0.1 or 0.05 of the source asset, only the wallet's own addresses, one transaction at a
+  time): one transfer per V2 asset, a transfer with two destinations (one of them at the sending account),
+  and the conversions ZSD to ZPH, ZPH to ZRS, ZSD to ZYS and ZYS to ZSD were accepted by the daemon on the
+  first submit, mined, and after ten confirmations (eleven in two cases) equal to their descriptions: the
+  fee charged, the change, the balances and unlocked balances per asset in both accounts, and for a
+  conversion the minted amount received. ZPH to ZSD and ZRS to ZPH were refused at build time by the
+  reserve ratio.
+* Not proven: a refusal by a daemon on real data, a transfer the core splits, a conversion whose pricing
+  record aged before inclusion, the two conversions the ratio refused, relay from a browser or from a
+  wallet in a worker (`proxyToWorker`), and platforms other than Node.js on Linux x86_64. The refusal and
+  failure paths are proven against a local sink that answers as the daemon does (acceptance, every refusal
+  flag, a busy daemon, an HTTP error, an unreadable answer, a dropped connection, a late answer, a refused
+  connection), with transactions built on copies of a funded test wallet and with a synthetic transaction
+  in the test module; nothing of those reached the network.
+* The fee charged is the fee of the description. With the default priority it may be of the second tier
+  of the daemon's estimate (README, `priority`); a wallet should show the fee with its asset, the total
+  debited and the destinations before `relayPrepared`, and relay only what the user confirmed.
 * The daemon's reasons come from the module's own transport, not from the core: the wrapper's
   `relay_txs`, the only commit path the core offers without a source change, turns every commit failure
   into one text. The transport reads the reply's status (compared with the core's constants) and its
   boolean flags for that one request; the reply's reason text is never read.
 * A kept build holds the transaction and its secret transaction key in the module's memory until it is
   relayed or void; anything that can call the wallet can relay its token. The token itself is not a
-  secret and carries no information.
+  secret and carries no information. It survives `setDaemonConnection` and is relayed to the daemon
+  configured when `relayPrepared` is called (check `S03`).
 * The submit request goes to the wallet's configured daemon, which, like every daemon, is trusted by the
   core; it learns the transaction and the client that sent it. An HTTP error is reported as an unknown
   outcome, not as a refusal, because a proxy in front of the daemon may have forwarded the request.
@@ -257,10 +288,11 @@ button, an amount or an address. The library never copies such text into an erro
 * Failed openings of wrong-password bytes leak a few kilobytes inside the core; in worker mode the
   leak goes away with the construction's worker.
 * Balances other than zero are verified with a funded test wallet that received five transfers in
-  four assets (ZPH, ZSD, ZRS, ZYS) at two accounts: the wallet, account and subaddress maps,
-  `isUsed` and `numUnspentOutputs` equal the received transfers. Nothing has been sent from a test
-  wallet, so spent outputs, change and balances after a spend are not verified, nor how a locked
-  balance appears in the maps (nothing was locked in the funded wallet when it was observed).
+  four assets (ZPH, ZSD, ZRS, ZYS) at two accounts and relayed nine transactions on mainnet on
+  2026-11-15: the wallet, account and subaddress maps equal the sums of its history (check `N20`), and
+  spent outputs, change and the balances after each spend were verified after confirmation.
+  Not verified on real data: how a locked balance appears in the maps (the comparisons ran at ten
+  confirmations, when nothing was locked).
 * Account and subaddress calls check every index against the wallet's own listings, because the
   core's wallet wrapper has no count of them: a call with a subaddress index, or one that lists
   subaddresses, takes time proportional to the account's number of subaddresses times the wallet's

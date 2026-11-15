@@ -141,8 +141,9 @@ const all = await wallet.getAccounts({ includeSubaddresses: true });
 const where = await wallet.getAddressIndex(sub.address);               // { accountIndex: 1, subaddressIndex: 1 }
 ```
 
-Balances other than zero are tested with a funded test wallet (incoming transfers in four assets
-and two accounts); see [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what is not proven yet.
+Balances other than zero are tested with a funded test wallet: incoming transfers in four assets
+and two accounts, and the nine transactions it relayed on mainnet on 2026-11-15 (see "Relaying a
+prepared transaction"); see [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what is not proven yet.
 
 ### History
 
@@ -278,7 +279,15 @@ reject with `INVALID_CONFIG`/`UNKNOWN_FIELD`):
 * `subaddressIndices` (optional): spend only from these subaddresses of the account
   (`SUBADDRESS_INDICES`, `SUBADDRESS_NOT_FOUND`);
 * `priority` (optional): `"default"` (the core's choice), `"unimportant"`, `"normal"` or
-  `"elevated"` (`TX_PRIORITY`).
+  `"elevated"` (`TX_PRIORITY`). The last three take the first, second and third tier of the daemon's
+  fee estimate (zephyr `wallet2.cpp`, `wallet2::get_base_fee`). With `"default"` the core chooses
+  (`wallet2::adjust_priority`, called by the wrapper's `create_txs`): while the wallet's automatic low
+  priority is on and it stores no default priority (as for a wallet this library creates), the first
+  tier, or the second tier when the pool holds a backlog at the first tier's fee or the last ten blocks
+  fill more than 80 % of the full reward zone; when those reads fail, the first tier. A wallet whose keys
+  file turns the automatic low priority off or stores a default priority gets the first tier (the stored
+  priority is not applied on this path). So `"default"` is not always the cheapest tier: on mainnet on
+  2026-11-15 it took the second tier once in nine transactions.
 
 Every value is checked before the build is dispatched; then the wallet's unlocked balance of the
 asset in the selected account or subaddresses must cover the amounts, or the build rejects with
@@ -364,7 +373,9 @@ relays exactly what that token names, as it was described; `discardPrepared(toke
   completely, after the daemon refused it, after `discardPrepared`, `close`, a password change, a newer
   prepare (also one that fails), a sync after which the wallet's height differs from the height at the
   build by more than 10 blocks, a conversion whose pricing record has aged, and after three relay calls.
-  A forced stop ends the worker that holds it. It is never part of the wallet bytes. A void or unknown
+  A forced stop ends the worker that holds it. It is never part of the wallet bytes. It survives
+  `setDaemonConnection`: `relayPrepared` sends it to the daemon configured when it is called, not to the
+  daemon the build read from. A void or unknown
   token rejects with `INVALID_CONFIG`/`RELAY_TOKEN_VOID` before any request; a value that is not a token
   with `INVALID_CONFIG`/`RELAY_TOKEN`.
 * What is relayed is what was described: before the request the module checks that the kept transaction
@@ -407,7 +418,10 @@ transaction in the history (`isConfirmed` false), its transaction key, and the s
 account's balance falls by the debited total (amount and fee; the change counts while pending) and its
 unlocked balance by the spent inputs. While it is pending the core counts an amount sent to an address of
 the same account back into that account's balance (in the source asset, also for a conversion to such an
-address, whose source-asset balance then falls only by the fee until the transaction is confirmed). This lives in the wallet's cache: save the wallet bytes (`getData`)
+address, whose source-asset balance then falls only by the fee until the transaction is confirmed). The
+mainnet test of 2026-11-15 confirmed the final balances: after confirmation an amount sent to the same
+account stays in its balance, and a conversion's source asset has fallen by the burnt amount and the fee
+while the minted amount is received. This lives in the wallet's cache: save the wallet bytes (`getData`)
 after `relayPrepared` resolves; bytes saved before reopen without the record, with the outputs unspent,
 until a sync sees the transaction in a block. A transaction that never reaches the pool stays pending; the
 core marks it failed (and its outputs unspent again) only after 500 seconds and a refresh that reads the
@@ -421,9 +435,22 @@ const r = await wallet.relayPrepared(p.token);                 // rejects unless
 const saved = await wallet.getData();                          // keep the wallet's record of it
 ```
 
-Not yet proven on the network: that the chain accepts what this SDK relays, the fee it is charged, and
-the amount a conversion delivers. The relay is proven against a local sink that plays the daemon
-(docs/LIMITATIONS.md); a funded test on mainnet follows before any release.
+What a wallet should show before `relayPrepared`: the description is what will be relayed and charged.
+Show the destinations and amounts, the fee with its asset (the source asset) and the total debited, and
+for a conversion the burnt and minted amounts; then relay only after the user confirmed exactly that. With
+the default priority the fee may be of the second tier (see `priority` above); a wallet that wants the
+cheapest tier passes `"unimportant"`.
+
+Proven on mainnet on 2026-11-15, with a funded test wallet (a wallet in the Node.js main thread, the default
+priority, 0.1 or 0.05 of the source asset to the wallet's own addresses): one transfer per V2 asset, a
+transfer with two destinations, and the conversions ZSD to ZPH, ZPH to ZRS, ZSD to ZYS and ZYS to ZSD were
+accepted by the daemon, mined, and after ten confirmations equal to their descriptions: the fee charged,
+the change and the balances and unlocked balances per asset in both accounts, and for a conversion the
+minted amount received. ZPH to ZSD and ZRS to ZPH were refused at build time by the reserve ratio. Not
+proven: a refusal by a daemon on real data, a transfer the core splits, a conversion whose pricing record
+aged before the relay, the two pairs the ratio refused, relay from a browser or from a wallet in a worker,
+and other platforms (docs/LIMITATIONS.md). The failure paths of relay are proven against a local sink that
+plays the daemon.
 
 ## Not ported
 
