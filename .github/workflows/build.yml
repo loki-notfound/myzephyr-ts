@@ -1,7 +1,10 @@
 # Build and offline tests: the public recipe from a fresh checkout (bin/build.sh), the package
 # check (bin/pack.sh) and the offline test suites with the runner's Chromium
-# (bin/test_offline.sh). No network test suite, no secrets, read-only token, no cache.
-# See BUILDING.md, "Continuous integration".
+# (bin/test_offline.sh). The platform jobs then take the packed tarball of that build (a workflow
+# artifact, SHA-256 verified; nothing is built again) to Windows, macOS (Intel and arm64) and further
+# Node.js versions, browsers and Electron, and run the offline platform checks there
+# (bin/platform_prepare.sh, bin/test_platform_*.sh). No network test suite, no secrets, read-only
+# token, no cache. See BUILDING.md, "Continuous integration", and docs/PLATFORMS.md.
 name: build and offline tests
 
 on:
@@ -73,6 +76,20 @@ jobs:
       - name: Pack and check the package (bin/pack.sh)
         run: bin/pack.sh
 
+      - name: Keep the package tarball and its SHA-256 for the platform jobs
+        run: |
+          mkdir -p build/platform-artifact
+          cp build/package/*.tgz build/platform-artifact/
+          ( cd build/platform-artifact && sha256sum -- *.tgz > package.sha256 && cat package.sha256 )
+
+      - name: Upload the package tarball (workflow artifact)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-tarball
+          path: build/platform-artifact/
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Record the output hashes in the job summary
         # .github/package.sha256, when a commit carries it, holds the SHA-256 of the package tarball
         # recorded from a build of that commit ("<hash>  <file name>"); the step prints whether this
@@ -110,3 +127,193 @@ jobs:
 
       - name: Offline tests (bin/test_offline.sh)
         run: bin/test_offline.sh
+
+  # The platform jobs below never build: each downloads the tarball of the build job, verifies its
+  # SHA-256, installs it into the consumers in consumers/ from their lockfiles and runs the offline
+  # platform checks. Every job prints the system, architecture, runtime versions and the tarball hash
+  # (bin/platform_prepare.sh) and fails at the first failed step.
+  node:
+    name: Node.js ${{ matrix.node }} (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: every Node.js major that "engines" admits and that is current or LTS
+          - { os: ubuntu-24.04, node: 22.23.4 }
+          - { os: ubuntu-24.04, node: 24.22.2 }
+          - { os: ubuntu-24.04, node: 26.13.0 }
+          # Windows and macOS (Intel and arm64): the floor and the newest LTS
+          - { os: windows-latest, node: 22.23.4 }
+          - { os: windows-latest, node: 26.13.0 }
+          - { os: macos-15-intel, node: 22.23.4 }
+          - { os: macos-15-intel, node: 26.13.0 }
+          - { os: macos-15, node: 22.23.4 }
+          - { os: macos-15, node: 26.13.0 }
+    env:
+      TZ: UTC
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - name: Download the package tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package-tarball
+          path: build/artifact
+
+      - name: Verify and install the tarball (bin/platform_prepare.sh)
+        run: bin/platform_prepare.sh build/artifact/*.tgz build/artifact/package.sha256
+
+      - name: Offline checks in Node.js (bin/test_platform_node.sh)
+        run: bin/test_platform_node.sh
+
+  browser:
+    name: ${{ matrix.browser }} (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, browser: chromium }
+          - { os: ubuntu-24.04, browser: chrome }
+          - { os: ubuntu-24.04, browser: firefox }
+          - { os: windows-latest, browser: chrome }
+          - { os: windows-latest, browser: msedge }
+          - { os: windows-latest, browser: firefox }
+          - { os: macos-15, browser: chrome }
+          - { os: macos-15, browser: safari }
+          - { os: macos-15, browser: firefox }
+          - { os: macos-15-intel, browser: safari }
+    env:
+      TZ: UTC
+      BROWSER: ${{ matrix.browser }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+          package-manager-cache: false
+
+      - name: Download the package tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package-tarball
+          path: build/artifact
+
+      - name: Allow the browser sandbox
+        # as in the build job: Ubuntu 24.04 denies unprivileged user namespaces to browsers without
+        # an AppArmor profile; the browsers run with their sandbox
+        if: runner.os == 'Linux'
+        run: |
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Allow Safari to be driven by WebDriver
+        if: matrix.browser == 'safari'
+        run: sudo safaridriver --enable
+
+      - name: Verify and install the tarball (bin/platform_prepare.sh)
+        run: bin/platform_prepare.sh build/artifact/*.tgz build/artifact/package.sha256
+
+      - name: Offline checks in the browser (bin/test_platform_browser.sh)
+        # Chromium is started directly; every other browser through the WebDriver endpoint of the
+        # driver the runner image provides
+        run: |
+          if [ "$BROWSER" = chromium ]; then
+            CHROMIUM=$(command -v chromium || true)
+            [ -n "$CHROMIUM" ] || { echo "::error::no chromium binary on the runner"; exit 1; }
+            bin/test_platform_browser.sh chromium --launch "$CHROMIUM"
+          else
+            bin/test_platform_browser.sh "$BROWSER" --webdriver auto --browser "$BROWSER"
+          fi
+
+  electron:
+    name: Electron (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-15-intel, macos-15]
+    env:
+      TZ: UTC
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+          package-manager-cache: false
+
+      - name: Download the package tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package-tarball
+          path: build/artifact
+
+      - name: Allow the Electron sandbox
+        if: runner.os == 'Linux'
+        run: |
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Verify and install the tarball (bin/platform_prepare.sh)
+        run: bin/platform_prepare.sh build/artifact/*.tgz build/artifact/package.sha256
+
+      - name: Offline checks in Electron, current and oldest supported (bin/test_platform_electron.sh)
+        run: bin/test_platform_electron.sh
