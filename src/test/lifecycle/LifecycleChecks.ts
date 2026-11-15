@@ -1718,7 +1718,7 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       ["another source asset", m((t) => { t.sourceAsset = "ZPH"; })], ["another destination asset", m((t) => { t.destinationAsset = "ZRS"; })], ["another fee asset", m((t) => { t.feeAsset = "ZPH"; })],
       ["total not amount plus fee", m((t) => { t.totalDebited = "1"; })], ["amount as a number", m((t) => { t.amount = 12; })], ["fee above 2^64-1", m((t) => { t.fee = "18446744073709551616"; })],
       ["ring size zero", m((t) => { t.ringSize = 0; })], ["17 outputs", m((t) => { t.outputs = 17; })], ["fewer outputs than destinations", m((t) => { t.outputs = 1; })],
-      ["weight zero", m((t) => { t.weight = "0"; })], ["destination of another address", m((t) => { t.destinations[0].address = addr.substring(0, addr.length - 1) + "z"; })],
+      ["weight zero", m((t) => { t.weight = "0"; })], ["destination of another address", m((t) => { t.destinations[0].address = addr.substring(0, addr.length - 1) + (addr.endsWith("z") ? "y" : "z"); })],
       ["destination amount changed", m((t) => { t.destinations[1].amount = "8"; })], ["destinations missing for one transaction", m((t) => { delete t.destinations; })],
       ["amounts not the requested sum", m((t) => { t.amount = "13"; t.totalDebited = "308000013"; })], ["no transaction", { txs: [] }], ["txs not an array", { txs: {} }],
       ["destinations in a split", m((t) => { t.destinations = []; }, split)], ["duplicate hash", m((t) => { t.hash = h(3); }, split)],
@@ -1829,7 +1829,7 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       ["total not burnt plus fee", m((t) => { t.totalDebited = "1"; })], ["minted as a number", m((t) => { t.amountMinted = 432100000000; })], ["fee above 2^64-1", m((t) => { t.fee = "18446744073709551616"; })],
       ["pricing record height zero", m((t) => { t.pricingRecordHeight = "0"; })], ["pricing record height above 2^53", m((t) => { t.pricingRecordHeight = "9007199254740993"; })],
       ["ring size zero", m((t) => { t.ringSize = 0; })], ["17 outputs", m((t) => { t.outputs = 17; })], ["one output", m((t) => { t.outputs = 1; })], ["weight zero", m((t) => { t.weight = "0"; })],
-      ["destination of another address", m((t) => { t.destination.address = addr.substring(0, addr.length - 1) + "z"; })], ["destination amount changed", m((t) => { t.destination.amount = "1"; })],
+      ["destination of another address", m((t) => { t.destination.address = addr.substring(0, addr.length - 1) + (addr.endsWith("z") ? "y" : "z"); })], ["destination amount changed", m((t) => { t.destination.amount = "1"; })],
       ["destination as a list", m((t) => { t.destination = [t.destination]; })], ["several transactions", { txs: [tx] }], ["tx not an object", { tx: [tx] }], ["extra top-level field", { tx, more: 1 }]
     ];
     let bridgeRejected = 0, dtoRejected = 0;
