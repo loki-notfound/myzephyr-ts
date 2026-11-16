@@ -305,7 +305,9 @@ button, an amount or an address. The library never copies such text into an erro
   and relaying) is tested on Linux x86_64 only, with Node.js 22 and headless Chromium. The offline
   checks of the packed package run in the workflow on Windows, macOS (Intel and arm64) and Linux, in
   Node.js 22 to 26, Chrome, Edge, Firefox, Safari and Electron 43 and 45; a platform counts as
-  tested only where its job passed. Manual tests on Windows 10 and an Intel Mac are not done yet.
+  tested only where its job passed. By hand, on 2026-11-16: Windows 10 (Node.js 24, Edge, Chrome) and
+  macOS 26 on an Intel Mac (Node.js 24, Chrome, Safari), the same offline checks and the first
+  synchronization of a new wallet in the browsers.
   `docs/PLATFORMS.md` in the repository lists each system, runtime and version, and what is not
   tested. The browser entry is tested with Vite 8 and webpack 5 only.
 * Firefox needs `script-src 'wasm-unsafe-eval'` in the policy of the worker script, unlike

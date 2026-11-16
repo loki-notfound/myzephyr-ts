@@ -46,10 +46,15 @@ job fails or did not run is not tested.
 Some systems are older than any runner image and are tested by hand with the same checks, on a
 package tarball identified by its SHA-256:
 
-| System | Status |
-|---|---|
-| Windows 10 (x86_64), Node.js and its browsers | not done yet |
-| macOS on an Intel Mac, the latest macOS that supports Intel, Node.js and its browsers | not done yet |
+| System | Tested on 2026-11-16 | Not run |
+|---|---|---|
+| Windows 10 Pro 22H2 (build 19045, x86_64) | Node.js 24.19.0: the offline checks through `require` and `import`, main thread and worker. Microsoft Edge 157 and Google Chrome 155: the offline checks with the wallet in a worker under the page policy of `docs/DEPLOYMENT.md`; then, in both, a connection to a public daemon through a same-origin proxy and the first synchronization of a new wallet. All passed. | Firefox, Electron, Node.js 22 |
+| macOS 26.7 on an Intel Mac (x86_64) | Node.js 24.21.0: the same four runs. Google Chrome 157 and Safari 27 (from `http://127.0.0.1`, a secure context): the same offline checks and the same connection and first synchronization. All passed. | Firefox, Electron, Node.js 22 |
+
+Both ran the package of commit `8931043c` (tarball SHA-256
+`341e024ab5803b88ac6df42616029917898b1a6c55e41c0afb12b6e4343c75d9`, module
+`229b1534d60258c4be2f734f89effd38fba7a2ebf8ee7f95c33e96b9eda80333`). Later commits that change only
+documentation change the tarball's hash, not the tested code.
 
 ## Verified on the maintainer's Linux machine
 
@@ -71,9 +76,9 @@ Debian 13 x86_64, with the tarball of a local build: the Node.js checks with Nod
   integration;
 * the webpack consumer outside the build job's Linux packaging tests (the platform jobs use the Vite
   build);
-* everything that needs a daemon outside Linux x86_64: synchronization, history after a sync,
-  building and relaying transactions (the network suites run on Linux only, by hand, see
-  `BUILDING.md`);
+* everything that needs a daemon outside Linux x86_64, except the connection and first
+  synchronization of a new wallet in the two manual tests above: history after a sync, building and
+  relaying transactions (the network suites run on Linux only, by hand, see `BUILDING.md`);
 * building the package on any system other than Linux x86_64.
 
 ## Requirements found by these tests
