@@ -27,12 +27,12 @@ and forced stop. No job uses a daemon or the network for a test.
 |---|---|---|---|
 | node | `ubuntu-24.04` (x86_64) | Node.js 22.23.4, 24.22.2, 26.13.0 | the checks with `require` and with `import`, each in the main thread and with a worker per wallet, network access blocked; the shipped declarations type-checked without Node.js types (`bin/test_platform_node.sh`) |
 | node | `windows-latest` (x86_64) | Node.js 22.23.4, 26.13.0 | as above |
-| node | `macos-15-intel` (x86_64), `macos-15` (arm64) | Node.js 22.23.4, 26.13.0 | as above |
+| node | `macos-15-intel` (x86_64), `macos-26` (arm64) | Node.js 22.23.4, 26.13.0 | as above |
 | browser | `ubuntu-24.04` | Chromium (the runner's, started directly), Google Chrome, Firefox | the Vite production build of `consumers/vite`, built on the runner from the tarball, served from `127.0.0.1` under the policies of `DEPLOYMENT.md`, the checks with the wallet in a worker (`bin/test_platform_browser.sh`) |
 | browser | `windows-latest` | Google Chrome, Microsoft Edge, Firefox | as above |
-| browser | `macos-15` (arm64) | Google Chrome, Safari, Firefox | as above |
+| browser | `macos-26` (arm64) | Google Chrome, Safari, Firefox | as above |
 | browser | `macos-15-intel` | Safari | as above |
-| electron | `ubuntu-24.04` (under Xvfb), `windows-latest`, `macos-15-intel`, `macos-15` | Electron 45.2.1 (current stable major) and 43.8.6 (oldest supported major) | `consumers/electron`: the checks in the main process through the Node.js entry (directly and with a worker per wallet) and in a sandboxed renderer (context isolation, no Node.js integration) that loads the Vite build from a privileged `app://` scheme, wallet in a worker (`bin/test_platform_electron.sh`) |
+| electron | `ubuntu-24.04` (under Xvfb), `windows-latest`, `macos-15-intel`, `macos-26` | Electron 45.2.1 (current stable major) and 43.8.6 (oldest supported major) | `consumers/electron`: the checks in the main process through the Node.js entry (directly and with a worker per wallet) and in a sandboxed renderer (context isolation, no Node.js integration) that loads the Vite build from a privileged `app://` scheme, wallet in a worker (`bin/test_platform_electron.sh`) |
 
 Browsers other than the runner's Chromium are driven through the WebDriver endpoint of the driver
 the runner image provides (chromedriver, msedgedriver, geckodriver, safaridriver), with Node.js's
