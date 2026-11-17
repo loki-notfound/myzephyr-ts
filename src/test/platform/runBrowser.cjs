@@ -18,6 +18,12 @@
  * response (policy tests only).
  * Writes <out>/report.json (the page's result) and <out>/summary.json (browser, server log, problems);
  * exits 0 only if every check passed and the server log is as expected.
+ *
+ * When the page gives no result, summary.json records what is known instead (noResult): how far the page
+ * got (the last progress mark it posted: page loaded, checks started, one mark per check), whether the
+ * browser process (with WebDriver: the driver process, and whether the session still answers) was alive
+ * when the wait ended and its exit status, and the browser's output reduced to counts per category of a
+ * fixed set (outputSummary): no line of its text, so no path, address or wallet text reaches a log.
  */
 const fs = require("fs");
 const os = require("os");
@@ -67,10 +73,10 @@ const children = [];
 
 function start(cmd, argv, opts) {
   const child = spawn(cmd, argv, Object.assign({ stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" }, opts || {}));
-  const rec = { child, exited: false, stderr: "" };
-  child.stderr.on("data", (d) => { rec.stderr = (rec.stderr + d.toString()).slice(-8000); });
-  child.stdout.on("data", () => undefined);
-  child.on("exit", () => { rec.exited = true; });
+  const rec = { child, exited: false, stderr: "", exitCode: null, exitSignal: null };
+  child.stderr.on("data", (d) => { rec.stderr = (rec.stderr + d.toString()).slice(-65536); });
+  child.stdout.on("data", (d) => { rec.stderr = (rec.stderr + d.toString()).slice(-65536); });
+  child.on("exit", (code, signal) => { rec.exited = true; rec.exitCode = code; rec.exitSignal = signal; });
   child.on("error", (e) => { rec.exited = true; rec.stderr += "\nstart failed: " + e.code; });
   children.push(rec);
   return rec;
@@ -83,6 +89,38 @@ async function stop(rec) {
   else { try { process.kill(-pid, "SIGTERM"); } catch (e) { /* gone */ } }
   for (let i = 0; i < 50 && !rec.exited; i++) await sleep(100);
   if (!rec.exited && process.platform !== "win32") { try { process.kill(-pid, "SIGKILL"); } catch (e) { /* gone */ } }
+}
+
+// ------------------------------------------------------------------- what is known without a result
+// Categories of a browser's output lines, first match wins; only the counts are kept, never a line's text.
+const OUTPUT_CATEGORIES = [
+  ["crash", /crash|minidump|segmentation fault|sigsegv|sigabrt|sigbus|sigill|trace\/breakpoint|aborted|fatal/i],
+  ["out of memory", /out of memory|\boom\b|cannot allocate|allocation fail/i],
+  ["killed", /\bkilled\b|sigkill|sigterm/i],
+  ["gpu", /\bgpu\b|\bviz\b|\begl\b|\bgl\b|vulkan|mesa|drm/i],
+  ["sandbox", /sandbox|namespace|seccomp/i],
+  ["system bus", /dbus|d-bus|bus\.cc/i],
+  ["fonts", /fontconfig|font/i],
+  ["WebAssembly", /wasm|webassembly/i],
+  ["worker", /worker/i],
+  ["network", /net::|network|socket|connection/i],
+  ["error", /error/i],
+  ["warning", /warn/i]
+];
+function outputSummary(text) {
+  const lines = String(text || "").split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const category = (l) => { for (const [name, re] of OUTPUT_CATEGORIES) if (re.test(l)) return name; return "other"; };
+  const counts = {};
+  for (const l of lines) { const c = category(l); counts[c] = (counts[c] || 0) + 1; }
+  return { lines: lines.length, counts, lastLines: lines.slice(-8).map(category) };
+}
+/** Mark the state of a process when the wait for the page's result ended (before the runner stops it). */
+function markEnd(rec) {
+  rec.atEnd = rec.exited ? { alive: false, exitCode: rec.exitCode, exitSignal: rec.exitSignal } : { alive: true, exitCode: null, exitSignal: null };
+}
+function processState(rec, label) {
+  const e = rec.atEnd || { alive: !rec.exited, exitCode: rec.exitCode, exitSignal: rec.exitSignal };
+  return { process: label, aliveWhenTheWaitEnded: e.alive, exitCode: e.exitCode, exitSignal: e.exitSignal };
 }
 
 // ------------------------------------------------------------------------------- WebDriver
@@ -146,11 +184,18 @@ async function runWebDriver(url, server) {
     info.platformName = s.capabilities.platformName;
     await wd(base, "POST", "/session/" + session + "/url", { url });
     info.result = await server.waitFor("offline", TIMEOUT);
+    if (info.result === undefined) {
+      markEnd(driver);
+      let answers = false;
+      try { await Promise.race([wd(base, "GET", "/session/" + session + "/url"), sleep(10000).then(() => { throw new Error("no answer"); })]); answers = true; } catch (e) { answers = false; }
+      info.sessionAnswers = answers;
+    }
     try { info.status = String(await wd(base, "POST", "/session/" + session + "/execute/sync", { script: "return document.getElementById('status').textContent", args: [] })).substring(0, 40); } catch (e) { info.status = "unreadable"; }
   } finally {
     if (session) { try { await wd(base, "DELETE", "/session/" + session); } catch (e) { info.deleteError = String(e.message).substring(0, 200); } }
     await stop(driver);
   }
+  if (info.result === undefined) info.processes = [Object.assign(processState(driver, "driver " + path.basename(DRIVER)), { sessionAnswers: info.sessionAnswers })], info.output = outputSummary(driver.stderr);
   return info;
 }
 
@@ -165,13 +210,14 @@ async function runLaunch(url, server) {
   const info = { launched: path.basename(LAUNCH) };
   try {
     info.result = await Promise.race([server.waitFor("offline", TIMEOUT), (async () => { while (!browser.exited) await sleep(500); return undefined; })()]);
+    if (info.result === undefined) markEnd(browser);
   } finally {
     await stop(browser);
   }
   const v = spawnSync(LAUNCH, ["--version"], { encoding: "utf8" });
   info.browserName = "chromium";
-  info.browserVersion = (v.stdout || "").trim();
-  if (info.result === undefined) info.stderrTail = browser.stderr.split("\n").slice(-8).join("\n");
+  info.browserVersion = (v.stdout || "").trim().substring(0, 80);
+  if (info.result === undefined) info.processes = [processState(browser, "browser")], info.output = outputSummary(browser.stderr);
   return info;
 }
 
@@ -192,12 +238,17 @@ async function runLaunch(url, server) {
   for (const c of children) await stop(c);
   const result = info && info.result;
   const problems = fatal ? ["runner: " + fatal] : judgeRun(result, snapshot, { ids: IDS, wasmSha256: WASM_SHA });
+  // without a result: how far the page got, the browser's (or driver's) state and its output in counts
+  const noResult = result ? undefined : {
+    lastProgress: snapshot.progress.last === undefined ? "none" : snapshot.progress.last, progressMarks: snapshot.progress.marks, unrecognizedMarks: snapshot.progress.unrecognized,
+    processes: info && info.processes, output: info && info.output, fatal: fatal ? true : undefined
+  };
   const summary = {
     browser: BROWSER, browserName: info && info.browserName, browserVersion: info && info.browserVersion, platformName: info && info.platformName,
     via: LAUNCH ? "direct launch" : "WebDriver (" + path.basename(DRIVER) + ")", host: { platform: process.platform, arch: process.arch, release: os.release(), node: process.version },
     userAgent: result && result.env ? result.env.userAgent : undefined, tarballSha256: TARBALL_SHA, wasmSha256: WASM_SHA,
     started, finished: new Date().toISOString(), pageStatus: info && info.status, requests: snapshot.requests, cspReports: snapshot.cspReports,
-    pagePolicy: snapshot.pagePolicy, workerPolicy: snapshot.workerPolicy, stderrTail: info && info.stderrTail, problems, passed: problems.length === 0
+    pagePolicy: snapshot.pagePolicy, workerPolicy: snapshot.workerPolicy, progress: snapshot.progress, noResult, problems, passed: problems.length === 0
   };
   fs.writeFileSync(path.join(OUT, "report.json"), JSON.stringify(result || { fatal: fatal || "no result within the timeout" }, null, 1) + "\n");
   fs.writeFileSync(path.join(OUT, "summary.json"), JSON.stringify(summary, null, 1) + "\n");
@@ -207,6 +258,12 @@ async function runLaunch(url, server) {
   if (summary.userAgent) process.stdout.write("user agent: " + summary.userAgent + "\n");
   process.stdout.write("checks: " + checks.map((c) => c.id + "=" + c.status).join(" ") + "\n");
   for (const p of problems) process.stdout.write("problem: " + p + "\n");
+  if (noResult) {
+    const ps = (noResult.processes || []).map((p) => p.process + (p.aliveWhenTheWaitEnded ? " still running" : " ended, exit code " + p.exitCode + ", signal " + p.exitSignal) + (p.sessionAnswers === undefined ? "" : ", session answers " + p.sessionAnswers)).join("; ");
+    const o = noResult.output;
+    process.stdout.write("no result: last progress " + noResult.lastProgress + " (" + noResult.progressMarks + " marks); " + (ps || "no process state") + "; output "
+      + (o ? o.lines + " lines: " + Object.keys(o.counts).sort().map((k) => k + " " + o.counts[k]).join(", ") + "; last lines: " + o.lastLines.join(", ") : "not recorded") + "\n");
+  }
   process.exit(problems.length === 0 ? 0 : 1);
 })().catch(async (e) => {
   process.stderr.write("runner failed: " + (e && e.message ? e.message : e) + "\n");

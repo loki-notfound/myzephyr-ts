@@ -42,6 +42,9 @@ function listFiles(root) {
   return files;
 }
 
+/** The progress marks a page may post to /progress: loaded, the offline checks started, one check done. */
+const PROGRESS_MARK = /^(page loaded|offline checks started|K[0-9]{2} (pass|fail))$/;
+
 function startPageServer(opts) {
   const root = path.resolve(opts.root);
   const files = listFiles(root);
@@ -52,6 +55,8 @@ function startPageServer(opts) {
   const cspReports = [];
   const results = new Map();
   const waiters = new Map();
+  // how far the page got: the last progress mark it posted, from a fixed set only (no text of the page is kept)
+  const progress = { last: undefined, marks: 0, unrecognized: 0 };
   const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -77,6 +82,10 @@ function startPageServer(opts) {
           send(204);
           for (const w of waiters.get(phase) || []) w(r);
           waiters.delete(phase);
+        } else if (req.method === "POST" && url.pathname === "/progress") {
+          const mark = body.toString("utf8").trim();
+          if (PROGRESS_MARK.test(mark)) { progress.last = mark; progress.marks++; } else progress.unrecognized++;
+          send(204);
         } else if (req.method === "POST" && url.pathname === "/csp-report") {
           let r;
           try { r = JSON.parse(body.toString("utf8")); } catch (e) { r = { unparseable: true }; }
@@ -117,7 +126,7 @@ function startPageServer(opts) {
           });
         },
         snapshot() {
-          return { origin, pagePolicy, workerPolicy, requests: requests.slice(), cspReports: cspReports.slice(), phases: Array.from(results.keys()) };
+          return { origin, pagePolicy, workerPolicy, requests: requests.slice(), cspReports: cspReports.slice(), phases: Array.from(results.keys()), progress: Object.assign({}, progress) };
         },
         close() { return new Promise((r) => { server.closeAllConnections && server.closeAllConnections(); server.close(() => r()); }); }
       });

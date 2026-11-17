@@ -87,6 +87,11 @@ function resultBlock(state) {
   return out.join("\n");
 }
 
+// how far the page got, for a runner that receives no result: fixed marks only (page loaded, started, one per check)
+function progress(mark) {
+  fetch("/progress", { method: "POST", body: mark }).catch(() => undefined);
+}
+
 async function post(body) {
   try { await fetch("/result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); } catch (e) { /* shown on the page anyway */ }
 }
@@ -132,6 +137,7 @@ async function runOnline(info, useSeed) {
 }
 
 export async function runOfflinePage() {
+  progress("page loaded");
   const status = document.getElementById("status");
   document.title = "zephyr-ts platform check";
   const head = el("h1", "zephyr-ts platform check");
@@ -149,9 +155,10 @@ export async function runOfflinePage() {
   renderChecks(table, CHECKS, []);
   block.value = resultBlock(state);
   status.textContent = "running the offline checks";
+  progress("offline checks started");
   let report;
   try {
-    report = await runOfflineChecks(z, { proxyToWorker: true, log: (line) => { status.textContent = "running the offline checks: " + line; } });
+    report = await runOfflineChecks(z, { proxyToWorker: true, log: (line) => { status.textContent = "running the offline checks: " + line; progress(line); } });
   } catch (e) {
     report = { checks: [], fatal: e && e.name };
   }

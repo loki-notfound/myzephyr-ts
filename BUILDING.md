@@ -286,7 +286,11 @@ build. They need Node.js 22 or newer and npm, and run on Linux, macOS and Window
    `safaridriver --enable` once). The runner (`src/test/platform/runBrowser.cjs`) uses no dependency:
    it speaks WebDriver with Node.js's own `fetch`. A run passes only with every check passed, exactly
    one WebAssembly module loaded (the package's, by SHA-256), the worker script served and no policy
-   violation reported other than the browser's own request for `/favicon.ico`.
+   violation reported other than the browser's own request for `/favicon.ico`. When the page gives no
+   result, `summary.json` records what is known instead (`noResult`): the last progress mark the page
+   posted (page loaded, checks started, one mark per check), whether the browser (with WebDriver: the
+   driver, and whether the session still answers) was still running when the wait ended or its exit
+   status, and the browser's output as counts per category of a fixed set, never as text.
 4. `bin/test_platform_electron.sh` installs `consumers/electron` from its lockfile, which pins the
    current stable Electron (45.2.1) and the oldest supported major (43.8.6); the package's own
    installer downloads each Electron archive and checks it against the package's `checksums.json`,
