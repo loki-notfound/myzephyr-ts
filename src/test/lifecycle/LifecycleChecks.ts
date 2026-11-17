@@ -2118,6 +2118,33 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     notes.push(kinds.length + " wallet kinds x " + GETTER_CALLS.length + " getters as expected; undefined only from " + GETTERS_WITH_UNDEFINED.join(", "));
   });
 
+  await check("C42", "A worker's module from its parent only: without it WASM_MODULE_UNAVAILABLE; after a message it could not receive in the place of the module message WASM_MODULE_REJECTED; such a message after another message or after the module changes nothing (the module state of this context is restored afterwards)", async (notes) => {
+    const L = LibraryUtils as unknown as { WASM_COMPILED: unknown; WASM_COMPILED_VALUE: unknown; WASM_SHARED_REQUIRED: boolean; WASM_SHARED_REFUSED: boolean };
+    const saved = { compiled: L.WASM_COMPILED, value: L.WASM_COMPILED_VALUE, required: L.WASM_SHARED_REQUIRED, refused: L.WASM_SHARED_REFUSED };
+    const pairOf = async () => { try { await LibraryUtils.getCompiledWasmModule(); return "resolved"; } catch (err) { return codeOf(err) + diagnosticOf(err); } };
+    const fresh = () => { L.WASM_COMPILED = undefined; L.WASM_COMPILED_VALUE = undefined; L.WASM_SHARED_REQUIRED = true; L.WASM_SHARED_REFUSED = false; };
+    const seen: string[] = [];
+    try {
+      fresh();
+      seen.push("no module: " + await pairOf());
+      LibraryUtils.refuseSharedWasmModule(true);
+      seen.push("refused in its place: " + await pairOf());
+      fresh();
+      LibraryUtils.refuseSharedWasmModule(false);
+      seen.push("after another message: " + await pairOf());
+      fresh();
+      L.WASM_COMPILED_VALUE = saved.value;
+      LibraryUtils.refuseSharedWasmModule(true);
+      const refusedAfterModule = L.WASM_SHARED_REFUSED;
+      seen.push("after the module: refused " + refusedAfterModule);
+    } finally {
+      L.WASM_COMPILED = saved.compiled; L.WASM_COMPILED_VALUE = saved.value; L.WASM_SHARED_REQUIRED = saved.required; L.WASM_SHARED_REFUSED = saved.refused;
+    }
+    notes.push(seen.join("; "));
+    expect(seen.join("; ") === "no module: NATIVE_ERROR/WASM_MODULE_UNAVAILABLE; refused in its place: NATIVE_ERROR/WASM_MODULE_REJECTED; after another message: NATIVE_ERROR/WASM_MODULE_UNAVAILABLE; after the module: refused false", "the module state of a worker gives the expected pairs");
+    expect(saved.value !== undefined || !proxy, "the module of this context was compiled before");
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   if (proxy) {
     const proof = await postRawWorkerMessage([newMessageId(), "getNetworkGuardReport", newMessageId()], 10000);

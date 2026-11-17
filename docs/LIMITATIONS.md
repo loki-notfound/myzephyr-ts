@@ -311,8 +311,9 @@ button, an amount or an address. The library never copies such text into an erro
   `docs/PLATFORMS.md` in the repository lists each system, runtime and version, and what is not
   tested. The browser entry is tested with Vite 8 and webpack 5 only.
 * Firefox needs `script-src 'wasm-unsafe-eval'` in the policy of the worker script, unlike
-  Chromium; without it the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_UNAVAILABLE`,
-  not with `WASM_MODULE_REJECTED` as for a page policy without it (`DEPLOYMENT.md`).
+  Chromium; without it the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_REJECTED`, as
+  for a page policy without it (`DEPLOYMENT.md`; up to `2.3.0-sec.2-ts.1` it was reported as
+  `WASM_MODULE_UNAVAILABLE`). Verified with Firefox 160 on Linux.
 * The runtime dependencies are the packages the entry's modules load. The HTTP transport has no
   authentication or proxy support: credentials and proxies are rejected by the address contract and
   again by the transport. In Node.js and Electron it never uses a proxy, also not one named by the

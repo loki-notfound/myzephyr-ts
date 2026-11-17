@@ -128,6 +128,11 @@ self.onmessage = async function(e) {
   await self.dispatchLifecycleMessage(e.data);
 }
 
+// a message this worker could not receive: in the place of the module message it means the module was refused here
+self.onmessageerror = function() {
+  LibraryUtils.refuseSharedWasmModule(self.WORKER_ROUTABLE_MESSAGES === 0);
+}
+
 function walletOf(walletId: string): any {
   return self.WORKER_WALLETS.get(walletId).wallet; // existence and kind checked by the dispatcher
 }

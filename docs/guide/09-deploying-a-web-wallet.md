@@ -41,7 +41,7 @@ serves `zephyr.worker.js`, not by the page's policy:
 | Directive (worker script response) | Value | Without it |
 |---|---|---|
 | `connect-src` | every daemon origin you use (form 2: the application's own origin) | every daemon request is blocked: `isConnectedToDaemon()` is `false` and network calls reject with `DAEMON_ERROR` |
-| `script-src` | `'wasm-unsafe-eval'` (no script source) | Firefox: the worker cannot instantiate the module; the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_UNAVAILABLE`. Chromium does not need it |
+| `script-src` | `'wasm-unsafe-eval'` (no script source) | Firefox: the worker cannot receive the module the page compiled; the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_REJECTED`. Chromium does not need it |
 
 The policies the platform tests use in every browser (`<daemon origins>` stands for your daemons):
 
@@ -51,11 +51,12 @@ worker: default-src 'none'; script-src 'wasm-unsafe-eval'; connect-src <daemon o
 ```
 
 A worker script served without any policy is not restricted at all (the page's policy does not carry
-over), so send one. No `'unsafe-eval'`, `'unsafe-inline'`, `blob:` or `data:` source is needed. Note
-Firefox: without `'wasm-unsafe-eval'` in the worker's policy, the first construction rejects with
-`WASM_MODULE_UNAVAILABLE`, not with `WASM_MODULE_REJECTED` as for a page policy without it. The page
-rows and the first worker row were verified in Chromium, the last worker row in Firefox 160; check the
-policy in every engine you support.
+over), so send one. No `'unsafe-eval'`, `'unsafe-inline'`, `blob:` or `data:` source is needed. In
+Firefox, without `'wasm-unsafe-eval'` in the worker's policy, the module message the page posts cannot
+be received in the worker; the library sees that where the module message belongs and rejects the first
+construction with `WASM_MODULE_REJECTED`, as for a page policy without it (versions up to
+`2.3.0-sec.2-ts.1` reported `WASM_MODULE_UNAVAILABLE`). The page rows and the first worker row were
+verified in Chromium, the last worker row in Firefox 160; check the policy in every engine you support.
 
 A small Node.js server that sends both policies, as an illustration:
 

@@ -142,11 +142,14 @@ that serves `zephyr.worker.js`, not by the page's policy:
 | Directive (worker script response) | Value | Without it |
 |---|---|---|
 | `connect-src` | every daemon origin you use (form 2: the application's own origin) | every daemon request is blocked; the wallet reports `isConnectedToDaemon() === false` and network calls reject with `DAEMON_ERROR` |
-| `script-src` | `'wasm-unsafe-eval'` (no script source) | Firefox: the worker cannot instantiate the module the page compiled; the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_UNAVAILABLE` and the browser reports a `script-src` violation (`wasm-eval`). Chromium does not need it |
+| `script-src` | `'wasm-unsafe-eval'` (no script source) | Firefox: the worker cannot receive the module the page compiled; the first construction rejects with `NATIVE_ERROR`/`WASM_MODULE_REJECTED` and the browser reports a `script-src` violation (`wasm-eval`). Chromium does not need it |
 
 The workers instantiate the module the page compiled and load no script; Chromium needs no
-`'wasm-unsafe-eval'` in the worker's policy, Firefox does. A worker script served without any
-policy is not restricted at all (the page's policy does not carry over), so send one.
+`'wasm-unsafe-eval'` in the worker's policy, Firefox does: without it Firefox does not deliver the
+module message to the worker (a `messageerror` event in its place), and the library, which sees that
+event where the module message belongs, rejects with `WASM_MODULE_REJECTED` (up to
+`2.3.0-sec.2-ts.1`: `WASM_MODULE_UNAVAILABLE`). A worker script served without any policy is not
+restricted at all (the page's policy does not carry over), so send one.
 
 The rows of the page table and the first row of the worker table were verified in Chromium; the
 last row of the worker table in Firefox 160 (without it the construction fails as shown, with it the

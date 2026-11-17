@@ -180,7 +180,9 @@ restored. The module is compiled once per runtime and shared with every wallet w
 location before the first construction.
 
 A missing or unusable file rejects the first construction with `NATIVE_ERROR` and
-`WASM_MODULE_UNAVAILABLE`, `WASM_MODULE_UNVERIFIED`, `WASM_MODULE_MISMATCH` or `WASM_MODULE_REJECTED`.
+`WASM_MODULE_UNAVAILABLE`, `WASM_MODULE_UNVERIFIED`, `WASM_MODULE_MISMATCH` or `WASM_MODULE_REJECTED`
+(also when a wallet worker cannot receive the compiled module: Firefox, a worker policy without
+`'wasm-unsafe-eval'`).
 
 Guide: [Serving zephyr.wasm](../09-deploying-a-web-wallet.md#serving-zephyrwasm).
 

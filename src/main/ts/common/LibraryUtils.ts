@@ -56,6 +56,13 @@ export default class LibraryUtils {
   static WASM_COMPILATIONS = 0;
   /** Set in an SDK worker: the module must come from the parent context, never from a compilation here. */
   static WASM_SHARED_REQUIRED = false;
+  /**
+   * Set in an SDK worker when the message in the place of the module message could not be received (a
+   * messageerror before any other message and before a module was adopted): the parent posted its compiled
+   * module first, so this worker refused the module. Firefox does so in a worker whose own policy lacks
+   * 'wasm-unsafe-eval'. The worker then rejects with WASM_MODULE_REJECTED instead of WASM_MODULE_UNAVAILABLE.
+   */
+  static WASM_SHARED_REFUSED = false;
   /** Loads the Emscripten glue (factory) that instantiates the module. */
   static WASM_GLUE_LOADER: () => any = () => require("#zephyr-sdk/zephyr.js");
   /**
@@ -168,6 +175,15 @@ export default class LibraryUtils {
   }
 
   /**
+   * A message an SDK worker could not receive (messageerror). Where the module message is expected (admit:
+   * no other message came first) and no module was adopted, the module was refused by this context. Only
+   * where it occurs is used; the event itself is not read.
+   */
+  static refuseSharedWasmModule(admit: boolean): void {
+    if (admit && LibraryUtils.WASM_COMPILED_VALUE === undefined) LibraryUtils.WASM_SHARED_REFUSED = true;
+  }
+
+  /**
    * The compiled module of this runtime: compiled once from WASM_LOCATION and shared with every
    * SDK worker. A failed load is not cached, so a later call tries again. The bytes are checked
    * against the SHA-256 the build embedded before they are compiled. Fixed diagnostics:
@@ -175,11 +191,13 @@ export default class LibraryUtils {
    * NATIVE_ERROR/WASM_MODULE_UNVERIFIED (this runtime offers no Web Crypto digest, so the bytes
    * cannot be checked), NATIVE_ERROR/WASM_MODULE_MISMATCH (the bytes are not the zephyr.wasm of
    * this build) and NATIVE_ERROR/WASM_MODULE_REJECTED (the right bytes do not compile in this
-   * runtime, e.g. compilation refused by a Content-Security-Policy without 'wasm-unsafe-eval').
+   * runtime, e.g. compilation refused by a Content-Security-Policy without 'wasm-unsafe-eval'). In an SDK
+   * worker the module comes from the parent context only: WASM_MODULE_REJECTED when the worker could not
+   * receive it (see WASM_SHARED_REFUSED), otherwise WASM_MODULE_UNAVAILABLE.
    */
   static getCompiledWasmModule(): Promise<WebAssembly.Module> {
     if (LibraryUtils.WASM_COMPILED !== undefined) return LibraryUtils.WASM_COMPILED;
-    if (LibraryUtils.WASM_SHARED_REQUIRED) return Promise.reject(new ZephyrWalletError("NATIVE_ERROR", "WASM_MODULE_UNAVAILABLE"));
+    if (LibraryUtils.WASM_SHARED_REQUIRED) return Promise.reject(new ZephyrWalletError("NATIVE_ERROR", LibraryUtils.WASM_SHARED_REFUSED ? "WASM_MODULE_REJECTED" : "WASM_MODULE_UNAVAILABLE"));
     const attempt = LibraryUtils.compileWasmModule(LibraryUtils.WASM_LOCATION);
     LibraryUtils.WASM_COMPILED = attempt;
     attempt.then((compiled) => {
