@@ -92,9 +92,10 @@ The package entry (`src/main/ts/index.ts`) exports:
   below);
 * building and relaying for full wallets: `buildTransfer` and `buildConversion` (build, describe, discard),
   `prepareTransfer` and `prepareConversion` (build, describe, keep under a token), `relayPrepared` and
-  `discardPrepared`, with the types `ZephyrTransferConfig`, `ZephyrTransferBuild`, `ZephyrBuiltTx`,
-  `ZephyrConversionConfig`, `ZephyrConversionBuild`, `ZephyrPreparedTransfer`, `ZephyrPreparedConversion`,
-  `ZephyrRelayResult`, `ZephyrRelayedTx` and `ZephyrRelayOutcome` (below);
+  `discardPrepared`, with the types `ZephyrTransferConfig`, `ZephyrTransferDestinationInput`,
+  `ZephyrTxPriority`, `ZephyrTransferBuild`, `ZephyrBuiltTx`, `ZephyrConversionConfig`,
+  `ZephyrConversionDestinationInput`, `ZephyrConversionBuild`, `ZephyrPreparedTransfer`,
+  `ZephyrPreparedConversion`, `ZephyrRelayResult`, `ZephyrRelayedTx` and `ZephyrRelayOutcome` (below);
 * `validateAddress`, `ZephyrWalletError` (a fixed code and an optional fixed diagnostic; no
   native or daemon text, no secrets), `setWorkerDistPath`, `setWasmModuleUrl` and
   `terminateWorker`;

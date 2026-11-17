@@ -98,10 +98,23 @@ process environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) and c
 configured daemon address directly; in a browser the browser's own settings apply. A reverse proxy
 must forward the wallet's requests itself; one that answers with a redirect fails (see above).
 
-* Forward these read-only paths: `/json_rpc`, `/getheight` (also `/get_height`), `/getinfo`
-  (`/get_info`), `/getblocks.bin` (`/get_blocks.bin`), `/gethashes.bin` (`/get_hashes.bin`),
-  `/get_transaction_pool_hashes.bin` and `/get_o_indexes.bin`. A public node should run in
-  restricted RPC mode.
+* For connecting and synchronizing, forward these read-only paths: `/json_rpc`, `/getheight` (also
+  `/get_height`), `/getinfo` (`/get_info`), `/getblocks.bin` (`/get_blocks.bin`), `/gethashes.bin`
+  (`/get_hashes.bin`), `/get_transaction_pool_hashes.bin` and `/get_o_indexes.bin`. A public node
+  should run in restricted RPC mode.
+* For `refreshPool`, also forward `/gettransactions`. For building a transfer or a conversion
+  (`buildTransfer`, `buildConversion` and the two prepare calls), also forward
+  `/get_output_distribution.bin` and `/get_outs.bin`. All three are read-only.
+* For `relayPrepared`, also forward `POST /sendrawtransaction`. It is the only request of the library
+  that changes anything at the daemon: it submits one signed transaction. A proxy that
+  refuses it with an HTTP status makes every relay end as `RELAY_UNKNOWN`/`HTTP_STATUS` (a status other
+  than 200 counts as an unknown outcome), so decide deliberately whether your deployment relays
+  through it.
+* A proxy that filters the JSON-RPC methods of `/json_rpc` must allow the ones the wallet core calls.
+  Seen in the tests of synchronization, building and relaying: `get_version`, `get_info`,
+  `hard_fork_info`, `get_fee_estimate`, `get_txpool_backlog`, `getblockheadersrange`,
+  `getblockheaderbyheight`, `get_circulating_supply` and `get_pricing_record_history`. The allowlist
+  the network tests use is in `src/test/network/forwarder.cjs` of the repository.
 * Send request bodies with a `Content-Length`. The daemon's HTTP server does not accept chunked
   request bodies; a proxy that re-sends the wallet's requests chunked makes every connection check
   fail. The library's own requests carry a length.
