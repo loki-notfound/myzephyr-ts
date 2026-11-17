@@ -67,7 +67,10 @@ The package entry (`src/main/ts/index.ts`) exports:
 
 * `createRandomWallet`, `restoreWalletFromSeed`, `restoreWalletFromKeys` and `createKeysWallet`
   (mainnet, testnet, stagenet), and `openWalletData` to open a full wallet from its keys and
-  cache bytes; no file paths;
+  cache bytes; no file paths; each takes a configuration type of its own that lists the fields it
+  accepts (`ZephyrRandomWalletConfig`, `ZephyrSeedWalletConfig`, `ZephyrKeysWalletConfig`,
+  `ZephyrKeysOnlyWalletConfig`, `ZephyrOpenWalletConfig`), and every field is still checked at run
+  time;
 * on a wallet (`ZephyrWallet`): primary address and subaddresses, seed and seed language, private and public keys,
   view-only state (a view-only wallet has no seed, seed language or private spend key: those three
   getters resolve to `undefined` there, as their declarations say); for full wallets also the network type, restore height, `getData` (keys and
@@ -101,7 +104,8 @@ The package entry (`src/main/ts/index.ts`) exports:
   native or daemon text, no secrets), `setWorkerDistPath`, `setWasmModuleUrl` and
   `terminateWorker`;
 * the types `ZephyrWalletData`, `ZephyrDaemonConnection`, `ZephyrWalletSyncResult`,
-  `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, `ZephyrAssetBalances` (the map by
+  `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, the five construction configurations
+  above, `ZephyrAssetBalances` (the map by
   asset), `ZephyrAccountBalances` (the map by subaddress index), `ZephyrAccount`,
   `ZephyrSubaddress`, `ZephyrAddressIndex`, `ZephyrAccountOptions`, `ZephyrWalletErrorCode` and
   `ZephyrWalletErrorDiagnostic`.

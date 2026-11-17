@@ -72,7 +72,12 @@ export type {
   ZephyrDaemonConnection,
   ZephyrWalletSyncResult,
   ZephyrWalletConstructionOptions,
-  ZephyrNetworkTypeInput
+  ZephyrNetworkTypeInput,
+  ZephyrRandomWalletConfig,
+  ZephyrSeedWalletConfig,
+  ZephyrKeysWalletConfig,
+  ZephyrKeysOnlyWalletConfig,
+  ZephyrOpenWalletConfig
 } from "./wallet/ZephyrWallet";
 export type { ZephyrAssetBalances, ZephyrAccountBalances } from "./common/ZephyrBalances";
 export type { ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions } from "./common/ZephyrAccounts";

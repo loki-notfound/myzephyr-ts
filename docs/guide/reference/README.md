@@ -31,6 +31,11 @@ only.
 | `ZephyrWalletConstructionOptions` | type | [ZephyrWalletConstructionOptions](types.md#zephyrwalletconstructionoptions) |
 | `ZephyrDaemonConnection` | type | [ZephyrDaemonConnection](types.md#zephyrdaemonconnection) |
 | `ZephyrWalletSyncResult` | type | [ZephyrWalletSyncResult](types.md#zephyrwalletsyncresult) |
+| `ZephyrRandomWalletConfig` | type | [ZephyrRandomWalletConfig](types.md#zephyrrandomwalletconfig) |
+| `ZephyrSeedWalletConfig` | type | [ZephyrSeedWalletConfig](types.md#zephyrseedwalletconfig) |
+| `ZephyrKeysWalletConfig` | type | [ZephyrKeysWalletConfig](types.md#zephyrkeyswalletconfig) |
+| `ZephyrKeysOnlyWalletConfig` | type | [ZephyrKeysOnlyWalletConfig](types.md#zephyrkeysonlywalletconfig) |
+| `ZephyrOpenWalletConfig` | type | [ZephyrOpenWalletConfig](types.md#zephyropenwalletconfig) |
 | `ZephyrAssetBalances` | type | [ZephyrAssetBalances](types.md#zephyrassetbalances) |
 | `ZephyrAccountBalances` | type | [ZephyrAccountBalances](types.md#zephyraccountbalances) |
 | `ZephyrAccount` | type | [ZephyrAccount](types.md#zephyraccount) |

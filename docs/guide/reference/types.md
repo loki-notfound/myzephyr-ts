@@ -67,6 +67,143 @@ interface ZephyrWalletSyncResult {
 The result of `sync()`: the number of blocks fetched and whether the wallet received money in them.
 Guide: [Synchronizing](../03-connecting-to-a-daemon.md#synchronizing).
 
+## Construction configurations
+
+One configuration type per construction function. Each lists exactly the fields the function's run-time
+validation accepts, with the types it accepts; the validation stays the authority and rejects everything
+else with the same fixed errors whatever the declared type (see [Functions](functions.md#constructing-wallets)).
+Value domains and rules between fields are checked at run time only: the seed's word count, the key
+format, the lookahead limit and pair, the daemon address, which keys a keys restore needs. Not declared,
+although the validation accepts them, are values that have no effect: `path: ""`, `isTrustedDaemon: true`
+(every daemon is trusted), `regtest`, `isMultisig` and `saveCurrent` `false`, and in the object form of
+`server` `trusted: true` and empty `username`, `password`, `proxyUri` or `proxy`. A field whose value is
+`undefined` counts as absent at run time. The repository checks each type against its validation with
+one table of accepted and rejected object literals (`consumers/node/configCases.ts`).
+
+### `ZephyrRandomWalletConfig`
+
+```ts signature
+interface ZephyrRandomWalletConfig {
+        readonly networkType: ZephyrNetworkTypeInput;
+        readonly password?: string;
+        readonly language?: string;
+        readonly accountLookahead?: number;
+    readonly subaddressLookahead?: number;
+        readonly proxyToWorker?: boolean;
+        readonly server?: string | {
+        readonly uri: string;
+    };
+}
+```
+
+The configuration of `createRandomWallet`. `server` is a daemon address (`""` means none) or an object
+with the address in `uri`. Guide: [Creating a random wallet](../02-wallets.md#creating-a-random-wallet).
+
+### `ZephyrSeedWalletConfig`
+
+```ts signature
+interface ZephyrSeedWalletConfig {
+        readonly networkType: ZephyrNetworkTypeInput;
+        readonly password?: string;
+        readonly seed: string;
+        readonly seedOffset?: string;
+        readonly restoreHeight?: number;
+        readonly accountLookahead?: number;
+    readonly subaddressLookahead?: number;
+        readonly proxyToWorker?: boolean;
+        readonly server?: string | {
+        readonly uri: string;
+    };
+}
+```
+
+The configuration of `restoreWalletFromSeed`: `seed` is required (12, 13, 24 or 25 words). Guide:
+[Restoring from a seed](../02-wallets.md#restoring-from-a-seed).
+
+### `ZephyrKeysWalletConfig`
+
+```ts signature
+interface ZephyrKeysWalletConfig {
+        readonly networkType: ZephyrNetworkTypeInput;
+        readonly password?: string;
+        readonly primaryAddress?: string;
+        readonly privateViewKey?: string;
+        readonly privateSpendKey?: string;
+        readonly restoreHeight?: number;
+        readonly language?: string;
+        readonly accountLookahead?: number;
+    readonly subaddressLookahead?: number;
+        readonly proxyToWorker?: boolean;
+        readonly server?: string | {
+        readonly uri: string;
+    };
+}
+```
+
+The configuration of `restoreWalletFromKeys`. Every key field is optional in the type; at run time at
+least one is required, a private view key needs `primaryAddress`, and an address with a view key and
+no spend key restores a view-only wallet. Guide: [Restoring from keys](../02-wallets.md#restoring-from-keys).
+
+### `ZephyrKeysOnlyWalletConfig`
+
+```ts signature
+type ZephyrKeysOnlyWalletConfig = {
+    readonly networkType: ZephyrNetworkTypeInput;
+    readonly password?: string;
+        readonly language?: string;
+    readonly proxyToWorker?: boolean;
+    readonly seed?: undefined;
+    readonly seedOffset?: undefined;
+    readonly primaryAddress?: undefined;
+    readonly privateViewKey?: undefined;
+    readonly privateSpendKey?: undefined;
+} | {
+    readonly networkType: ZephyrNetworkTypeInput;
+    readonly password?: string;
+        readonly seed: string;
+    readonly seedOffset?: string;
+    readonly proxyToWorker?: boolean;
+    readonly language?: undefined;
+    readonly primaryAddress?: undefined;
+    readonly privateViewKey?: undefined;
+    readonly privateSpendKey?: undefined;
+} | {
+    readonly networkType: ZephyrNetworkTypeInput;
+    readonly password?: string;
+    readonly primaryAddress?: string;
+    readonly privateViewKey?: string;
+    readonly privateSpendKey?: string;
+        readonly language?: string;
+    readonly proxyToWorker?: boolean;
+    readonly seed?: undefined;
+    readonly seedOffset?: undefined;
+};
+```
+
+The configuration of `createKeysWallet`: one of three forms, chosen by the fields present: random (no
+recovery field; `language` allowed), from a `seed` (with an optional `seedOffset`; no `language`), or
+from keys. A field marked `?: undefined` belongs to another form. A keys-only wallet takes no restore
+height, lookahead or daemon. Guide: [Keys-only wallets](../02-wallets.md#keys-only-wallets).
+
+### `ZephyrOpenWalletConfig`
+
+```ts signature
+interface ZephyrOpenWalletConfig {
+        readonly networkType: ZephyrNetworkTypeInput;
+        readonly password?: string;
+        readonly keysData: Uint8Array;
+    readonly cacheData?: Uint8Array;
+        readonly proxyToWorker?: boolean;
+        readonly server?: string | {
+        readonly uri: string;
+    };
+}
+```
+
+The configuration of `openWalletData`: the bytes `getData()` returned (`keysData` required and not
+empty) and the password they were saved with; no lookahead, the bytes carry their own. Guide:
+[Saving and opening wallet bytes](../02-wallets.md#saving-and-opening-wallet-bytes).
+
 ## Balances, accounts and subaddresses
 
 ### `ZephyrAssetBalances`

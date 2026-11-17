@@ -4,7 +4,9 @@
 # package entry only. Run bin/build.sh first; this script packs with bin/pack.sh.
 #   node     require() and import of the Node entry, and a type check of the shipped declarations
 #            with library checking and without Node.js types installed (module resolution node16,
-#            and bundler with the browser condition)
+#            and bundler with the browser condition); the construction configuration types against
+#            their run-time validation (consumers/node/configCases.ts: type-checked there, then run
+#            offline through the package entry)
 #   webpack  a production bundle of the browser entry with no resolve fallback, run in Chromium
 #   vite     the Vite development server and a Vite production build, without a configuration file,
 #            each run in Chromium
@@ -142,6 +144,13 @@ for cfg in tsconfig.json tsconfig.bundler.json; do
 done
 rm -rf "$TC"
 echo "  declarations: type check clean without Node.js types (node16, bundler with the browser condition)"
+rc=0
+( cd "$C" && OFFLINE_GUARD_OUT=$OUT/node-config-cases-guard.json timeout 600 node --require ./offlineGuard.cjs runConfigCases.cjs --typescript "$C" --from "$C" ) \
+  > "$OUT/node-config-cases.txt" 2>&1 || rc=$?
+sed 's/^/  /' "$OUT/node-config-cases.txt"
+[ "$rc" = 0 ] || die "Node consumer: a construction configuration type differs from its validation"
+node -e 'const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).counts; process.exit(Object.values(c).reduce((a, b) => a + b, 0) === 0 ? 0 : 1);' "$OUT/node-config-cases-guard.json" \
+  || die "Node consumer: the configuration cases attempted network access"
 
 # ---------------------------------------------------------------------------------------- webpack
 log "webpack consumer"

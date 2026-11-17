@@ -1,8 +1,10 @@
 # Functions
 
 The nine functions the package exports. Every function that returns a promise rejects with a
-[`ZephyrWalletError`](errors.md); none throws synchronously. Configuration objects are typed `unknown`
-in the declarations and checked field by field at run time, before any native call.
+[`ZephyrWalletError`](errors.md); none throws synchronously. Each construction function takes a
+configuration type of its own ([Types](types.md#construction-configurations)) that lists the fields its
+validation accepts; the validation still checks every field at run time, before any native call, and
+stays the authority: a JavaScript caller, or a value cast past the type, gets the same rejections.
 
 ## Constructing wallets
 
@@ -17,7 +19,10 @@ The five construction functions share these rules:
 - Unsupported fields reject with `UNSUPPORTED_CAPABILITY`: a non-empty `path` (`FILE_PATH`),
   `regtest: true` (`REGTEST`), `isMultisig: true` (`MULTISIG`), `saveCurrent: true` (`SAVE_CURRENT`),
   `isTrustedDaemon: false` (`UNTRUSTED_DAEMON`), and `connectionManager`, `fs`, `cmd` or
-  `rejectUnauthorized` (`CONFIG_FIELD`).
+  `rejectUnauthorized` (`CONFIG_FIELD`). The configuration types do not declare these fields. Nor do they
+  declare the values the validation accepts without effect: `path: ""`, `isTrustedDaemon: true`,
+  `regtest`, `isMultisig` and `saveCurrent` `false`, and in the object form of `server` `trusted: true`
+  and empty `username`, `password`, `proxyUri` or `proxy`; at run time these are still accepted.
 - `proxyToWorker` (default `true`) runs the wallet in its own worker.
 - The second argument, `options`, is `undefined` or `{ signal }` with an `AbortSignal`
   ([`ZephyrWalletConstructionOptions`](types.md#zephyrwalletconstructionoptions)); another field rejects
@@ -35,10 +40,11 @@ The five construction functions share these rules:
 ### `createRandomWallet`
 
 ```ts signature
-function createRandomWallet(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
+function createRandomWallet(config: ZephyrRandomWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
 ```
 
-Creates a random full wallet. Accepted fields: `networkType`, `password` (default `""`), `language`
+Creates a random full wallet ([`ZephyrRandomWalletConfig`](types.md#zephyrrandomwalletconfig)). Accepted
+fields: `networkType`, `password` (default `""`), `language`
 (the seed language, default English), `accountLookahead`, `subaddressLookahead`, `proxyToWorker`,
 `server`. With a daemon that answers the connection check, the restore height is the daemon height;
 otherwise it is the core's date-based estimate, about a month of blocks below the chain tip.
@@ -52,10 +58,11 @@ Guide: [Creating a random wallet](../02-wallets.md#creating-a-random-wallet).
 ### `restoreWalletFromSeed`
 
 ```ts signature
-function restoreWalletFromSeed(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
+function restoreWalletFromSeed(config: ZephyrSeedWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
 ```
 
-Restores a full wallet from a seed; it never falls back to a random wallet. Accepted fields:
+Restores a full wallet from a seed ([`ZephyrSeedWalletConfig`](types.md#zephyrseedwalletconfig)); it
+never falls back to a random wallet. Accepted fields:
 `networkType`, `password`, `seed` (required), `seedOffset`, `restoreHeight` (a safe integer from 0,
 default 0), `accountLookahead`, `subaddressLookahead`, `proxyToWorker`, `server`. Spaces in the seed are
 normalized.
@@ -70,13 +77,15 @@ Guide: [Restoring from a seed](../02-wallets.md#restoring-from-a-seed).
 ### `restoreWalletFromKeys`
 
 ```ts signature
-function restoreWalletFromKeys(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
+function restoreWalletFromKeys(config: ZephyrKeysWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
 ```
 
-Restores a full wallet from keys; it never falls back to a random wallet. Accepted fields:
+Restores a full wallet from keys ([`ZephyrKeysWalletConfig`](types.md#zephyrkeyswalletconfig)); it never
+falls back to a random wallet. Accepted fields:
 `networkType`, `password`, `primaryAddress`, `privateViewKey`, `privateSpendKey`, `restoreHeight`,
 `language`, `accountLookahead`, `subaddressLookahead`, `proxyToWorker`, `server`. A private spend key
-gives a wallet that can spend; an address with a private view key gives a view-only wallet.
+gives a wallet that can spend; an address with a private view key gives a view-only wallet. Which keys
+a restore needs is checked at run time only: the type declares every key field optional.
 
 Rejects with: `INVALID_CONFIG`/`CREATE_MODE` without any key field or with a `seed`;
 `INVALID_RECOVERY_MATERIAL` with `KEY_EMPTY`, `KEY_FORMAT` (not 64 hexadecimal characters),
@@ -88,7 +97,7 @@ Guide: [Restoring from keys](../02-wallets.md#restoring-from-keys).
 ### `createKeysWallet`
 
 ```ts signature
-function createKeysWallet(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
+function createKeysWallet(config: ZephyrKeysOnlyWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
 ```
 
 Creates a keys-only wallet: random without recovery fields, from a `seed` (with an optional
@@ -109,11 +118,12 @@ Guide: [Keys-only wallets](../02-wallets.md#keys-only-wallets).
 ### `openWalletData`
 
 ```ts signature
-function openWalletData(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
+function openWalletData(config: ZephyrOpenWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet>;
 ```
 
 Opens a full wallet from its keys and cache bytes, as returned by
-[`getData`](wallet.md#getdata). Accepted fields: `networkType`, `password`, `keysData` (a non-empty
+[`getData`](wallet.md#getdata) ([`ZephyrOpenWalletConfig`](types.md#zephyropenwalletconfig)). Accepted
+fields: `networkType`, `password`, `keysData` (a non-empty
 `Uint8Array`, required), `cacheData` (a `Uint8Array`, optional), `proxyToWorker`, `server`. No lookahead
 field: the bytes carry their own.
 
@@ -128,14 +138,14 @@ Guide: [Saving and opening wallet bytes](../02-wallets.md#saving-and-opening-wal
 ### `validateAddress`
 
 ```ts signature
-function validateAddress(address: unknown, networkType: ZephyrNetworkTypeInput, proxyToWorker?: boolean): Promise<void>;
+function validateAddress(address: string, networkType: ZephyrNetworkTypeInput, proxyToWorker?: boolean): Promise<void>;
 ```
 
 Checks an address with the core's own parser for a network type. Resolves when it is valid. By default
 it runs in a utility worker; with `proxyToWorker` `false` in the calling context. In Node.js the utility
 worker keeps the process alive until [`terminateWorker`](#terminateworker) is called.
 
-Rejects with: `INVALID_ADDRESS`/`ADDRESS_TYPE` for an empty or non-string address, `INVALID_ADDRESS`
+Rejects with: `INVALID_ADDRESS`/`ADDRESS_TYPE` for an empty or (at run time) non-string address, `INVALID_ADDRESS`
 (for example `CORE_INVALID_ADDRESS`) for a malformed address or one of another network,
 `INVALID_CONFIG`/`NETWORK_TYPE`, `INVALID_CONFIG`/`FIELD_TYPE` for a non-boolean third argument.
 

@@ -14,6 +14,20 @@ import HttpClient from "../../main/ts/common/HttpClient";
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
 
+/**
+ * The construction functions and validateAddress with untyped arguments: these checks pass configurations
+ * and arguments the declared types reject on purpose, to test the run-time validation that stays the authority.
+ */
+interface UntypedEntry {
+  createRandomWallet(config: unknown, options?: unknown): Promise<F.ZephyrWallet>;
+  restoreWalletFromSeed(config: unknown, options?: unknown): Promise<F.ZephyrWallet>;
+  restoreWalletFromKeys(config: unknown, options?: unknown): Promise<F.ZephyrWallet>;
+  createKeysWallet(config: unknown, options?: unknown): Promise<F.ZephyrWallet>;
+  openWalletData(config: unknown, options?: unknown): Promise<F.ZephyrWallet>;
+  validateAddress(address: unknown, networkType: unknown, proxyToWorker?: unknown): Promise<void>;
+}
+const U = F as unknown as UntypedEntry;
+
 export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promise<LifecycleReport> {
   const log = opts.log ?? (() => undefined);
   const proxy = opts.proxyToWorker;
@@ -229,9 +243,9 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await expectCode(w.getAddress(4294967296, 0), "INVALID_CONFIG", "index 2^32", notes);
     await expectCode(w.getAddress(0, -1), "INVALID_CONFIG", "index -1", notes);
     await expectCode(F.restoreWalletFromSeed({ networkType: 0, password: pw, seed: "abbey abbey", proxyToWorker: proxy }), "INVALID_RECOVERY_MATERIAL", "two-word seed", notes);
-    await expectCode(F.createRandomWallet({ networkType: 0, password: pw, restoreHeight: 5, proxyToWorker: proxy }), "INVALID_CONFIG", "random with restoreHeight", notes);
+    await expectCode(U.createRandomWallet({ networkType: 0, password: pw, restoreHeight: 5, proxyToWorker: proxy }), "INVALID_CONFIG", "random with restoreHeight", notes);
     await expectCode(F.createRandomWallet({ networkType: 0, password: pw, accountLookahead: 4294967296, subaddressLookahead: 1, proxyToWorker: proxy }), "INVALID_CONFIG", "lookahead 2^32", notes);
-    await expectCode(F.createRandomWallet({ networkType: 0, password: pw, path: "wallet-file", proxyToWorker: proxy }), "UNSUPPORTED_CAPABILITY", "path", notes);
+    await expectCode(U.createRandomWallet({ networkType: 0, password: pw, path: "wallet-file", proxyToWorker: proxy }), "UNSUPPORTED_CAPABILITY", "path", notes);
     await expectCode(F.openWalletData({ networkType: 0, password: pw, keysData: new Uint8Array(0), proxyToWorker: proxy }), "INVALID_WALLET_DATA", "empty keys bytes", notes);
     if (proxy) {
       const raw: unknown[][] = [
@@ -604,7 +618,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     // ABI/type errors keep their earlier diagnostics; keys-only wallets keep rejecting any lookahead
     await expectCode(F.createRandomWallet({ networkType: 0, password: pw, accountLookahead: 4294967296, subaddressLookahead: 20001, proxyToWorker: proxy }), "INVALID_CONFIG", "2^32 x 20001 (ABI first)", notes, "LOOKAHEAD_RANGE");
     await expectCode(F.createRandomWallet({ networkType: 0, password: pw, accountLookahead: 20001, proxyToWorker: proxy }), "INVALID_CONFIG", "20001 without its pair", notes, "LOOKAHEAD_PAIR");
-    await expectCode(F.createKeysWallet({ networkType: 0, password: pw, accountLookahead: 20001, subaddressLookahead: 1, proxyToWorker: proxy }), "UNSUPPORTED_CAPABILITY", "keys-only wallet with 20001 x 1", notes, "KEYS_ONLY_LOOKAHEAD");
+    await expectCode(U.createKeysWallet({ networkType: 0, password: pw, accountLookahead: 20001, subaddressLookahead: 1, proxyToWorker: proxy }), "UNSUPPORTED_CAPABILITY", "keys-only wallet with 20001 x 1", notes, "KEYS_ONLY_LOOKAHEAD");
     rejected += 3;
     const elapsed = Date.now() - started;
     const s = await hooks.state();
@@ -630,7 +644,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     const w = wi as WorkerInstrumentation;
     // 1. FIFO: two long constructions take both slots; three wait; the middle one is aborted while queued
     const n0 = w.started().length;
-    const pA = F.createRandomWallet(LONG); const pB = F.createRandomWallet(LONG);
+    const pA = U.createRandomWallet(LONG); const pB = U.createRandomWallet(LONG);
     expect(await waitUntil(() => acc().activeConstructions === 2, 10000), "two constructions active");
     const dCtl = new AbortController();
     const pC = open(); const pD = outcomeOf(F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(keys), cacheData: copyBytes(cache), proxyToWorker: proxy }, { signal: dCtl.signal })); const pE = open();
@@ -649,7 +663,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     let entered = -1;
     w.onNativeEnter = (index, name) => { if (name === "create_full_wallet" && entered < 0) entered = index; };
     const aCtl = new AbortController();
-    const pX = outcomeOf(F.createRandomWallet(LONG, { signal: aCtl.signal }));
+    const pX = outcomeOf(U.createRandomWallet(LONG, { signal: aCtl.signal }));
     expect(await waitUntil(() => entered >= 0, 30000), "the construction entered native code");
     await new Promise((r) => setTimeout(r, 300)); // table generation takes seconds; the worker is now blocked in native code
     const t0 = Date.now();
@@ -746,14 +760,14 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     if (wi !== undefined) {
       let entered = -1;
       wi.onNativeEnter = (index, name) => { if (name === "create_full_wallet" && entered < 0) entered = index; };
-      const p = outcomeOf(F.createRandomWallet(LONG, { signal: ctl.signal }));
+      const p = outcomeOf(U.createRandomWallet(LONG, { signal: ctl.signal }));
       await waitUntil(() => entered >= 0, 30000);
       ctl.abort();
       abortedOutcome = await p;
       wi.onNativeEnter = undefined;
     } else {
       ctl.abort();
-      abortedOutcome = await outcomeOf(F.createRandomWallet(LONG, { signal: ctl.signal }));
+      abortedOutcome = await outcomeOf(U.createRandomWallet(LONG, { signal: ctl.signal }));
     }
     expect(abortedOutcome === "NATIVE_ERROR/CONSTRUCTION_ABORTED", "the aborted construction rejects CONSTRUCTION_ABORTED: " + abortedOutcome);
     const s1 = await hooks.state();

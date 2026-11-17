@@ -21,6 +21,10 @@
 // The reference check compares the names documented in docs/guide/reference/ with the package's
 // exports (index.d.ts), the public members of ZephyrWallet and ZephyrWalletError, the error codes and
 // the diagnostics, and fails on any name missing or extra.
+//
+// The configuration cases (consumers/node/configCases.ts) are type-checked with the blocks and then run
+// against the validation through the installed package (consumers/node/runConfigCases.cjs, under the same
+// offline guard): a construction configuration type that differs from its validation fails the check.
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
@@ -28,6 +32,7 @@ const md = require("./markdown.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const GUIDE = path.join(ROOT, "docs", "guide");
+const CONFIG_CASES = path.join(ROOT, "consumers", "node", "configCases.ts");
 const RUN_TIMEOUT_MS = 300000;
 
 function args() {
@@ -127,8 +132,11 @@ function main() {
     b.name = name;
     compiled.push(b);
   });
+  fs.mkdirSync(path.join(opt.work, "config"));
+  const configCases = path.join(opt.work, "config", "configCases.ts");
+  fs.copyFileSync(CONFIG_CASES, configCases);
   const program = ts.createProgram(
-    [path.join(opt.work, "blocks", "guide-globals.d.ts"), ...compiled.map((b) => path.join(opt.work, "blocks", b.name))],
+    [path.join(opt.work, "blocks", "guide-globals.d.ts"), ...compiled.map((b) => path.join(opt.work, "blocks", b.name)), configCases],
     { strict: true, noEmit: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
       lib: ["lib.es2022.d.ts", "lib.dom.d.ts", "lib.dom.iterable.d.ts"], types: ["node"], typeRoots: [typeRoot], allowJs: true, checkJs: false,
       skipLibCheck: true, forceConsistentCasingInFileNames: true, isolatedModules: true });
@@ -136,6 +144,10 @@ function main() {
   for (const d of ts.getPreEmitDiagnostics(program)) {
     const msg = ts.flattenDiagnosticMessageText(d.messageText, " ");
     if (!d.file) { failures.push(`TypeScript: ${msg}`); continue; }
+    if (path.resolve(d.file.fileName) === configCases) {
+      failures.push(`${path.relative(ROOT, CONFIG_CASES)}:${d.file.getLineAndCharacterOfPosition(d.start || 0).line + 1}: ${msg}`);
+      continue;
+    }
     const b = byName.get(path.basename(d.file.fileName));
     if (!b) { failures.push(`${path.basename(d.file.fileName)}: ${msg}`); continue; }
     const { line } = d.file.getLineAndCharacterOfPosition(d.start || 0);
@@ -172,6 +184,18 @@ function main() {
     }
   }
   console.log(`run: ${ran} of ${runnable.length} runnable blocks`);
+
+  // ---------------------------------------------------------------- configuration cases
+  if (failures.length === 0) {
+    const guardOut = path.join(opt.work, "config", "guard.json");
+    const r = spawnSync(process.execPath, ["--require", guard, path.join(ROOT, "consumers", "node", "runConfigCases.cjs"), "--typescript", opt.tsDir, "--from", path.join(opt.work, "config")],
+      { cwd: opt.work, encoding: "utf8", timeout: RUN_TIMEOUT_MS, env: Object.assign({}, process.env, { OFFLINE_GUARD_OUT: guardOut }) });
+    let counts;
+    try { counts = JSON.parse(fs.readFileSync(guardOut, "utf8")).counts; } catch (e) { counts = undefined; }
+    const quiet = counts !== undefined && Object.values(counts).reduce((x, y) => x + y, 0) === 0;
+    process.stdout.write((r.stdout || "").split("\n").filter((l) => l).map((l) => "  " + l).join("\n") + "\n");
+    if (r.status !== 0 || r.error || !quiet) failures.push(`configuration cases failed (${r.error ? r.error.code : "exit " + r.status}${quiet ? "" : "; network access attempted or no guard report"})`);
+  }
 
   // ---------------------------------------------------------------- reference
   failures.push(...checkReference(ts, indexDts, docs));

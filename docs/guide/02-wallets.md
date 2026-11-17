@@ -32,14 +32,18 @@ opened with another network type than the one they were created for reject with
 
 ## The construction configuration
 
-The construction functions take one plain object. Its type is `unknown` in the declarations: every
-field is checked at run time, before any native call, and an unknown field rejects with
-`INVALID_CONFIG`/`UNKNOWN_FIELD`. The fields:
+The construction functions take one plain object, each with a type of its own:
+`ZephyrRandomWalletConfig`, `ZephyrSeedWalletConfig`, `ZephyrKeysWalletConfig`,
+`ZephyrKeysOnlyWalletConfig` and `ZephyrOpenWalletConfig` ([reference](reference/types.md#construction-configurations)).
+A type lists exactly the fields its function accepts, so TypeScript reports a misplaced or misspelled
+field at compile time. Every field is still checked at run time, before any native call, and an unknown
+field rejects with `INVALID_CONFIG`/`UNKNOWN_FIELD`; value rules (the seed's word count, the key format,
+the lookahead limit, which keys a restore needs) are checked at run time only. The fields:
 
 | Field | Used by | Meaning |
 |---|---|---|
 | `networkType` | all | required, see above |
-| `password` | full wallets | encrypts the wallet bytes; a string, default `""` |
+| `password` | all | encrypts the wallet bytes of a full wallet; a string, default `""`; a keys-only wallet accepts it and has no bytes |
 | `seed` | `restoreWalletFromSeed`, `createKeysWallet` | 12, 13, 24 or 25 words |
 | `seedOffset` | with `seed` | an optional passphrase that changes the derived wallet |
 | `primaryAddress`, `privateViewKey`, `privateSpendKey` | `restoreWalletFromKeys`, `createKeysWallet` | keys as 64 hexadecimal characters |
@@ -47,12 +51,14 @@ field is checked at run time, before any native call, and an unknown field rejec
 | `language` | `createRandomWallet`, `restoreWalletFromKeys`, `createKeysWallet` | the seed language, for example `"English"` |
 | `accountLookahead`, `subaddressLookahead` | creating and restoring full wallets | a pair of integers; each and their product at most 20,000 |
 | `proxyToWorker` | all | `true` (default): the wallet runs in its own worker |
-| `server` | full wallets | a daemon address ([chapter 3](03-connecting-to-a-daemon.md)) |
+| `server` | full wallets | a daemon address ([chapter 3](03-connecting-to-a-daemon.md)), a string (`""`: none) or `{ uri }` |
 | `keysData`, `cacheData` | `openWalletData` | the wallet bytes |
 
 `path` (a file path), `regtest`, `isMultisig`, `saveCurrent` and `isTrustedDaemon: false` reject
-with `UNSUPPORTED_CAPABILITY`. Each function also rejects a field that belongs to another kind of
-construction: a random wallet with a `seed` or a `restoreHeight`, a seed restore with keys or a
+with `UNSUPPORTED_CAPABILITY`. The values that have no effect (`path: ""`, `isTrustedDaemon: true`,
+`regtest`, `isMultisig` or `saveCurrent` `false`) are accepted at run time but not declared, so
+TypeScript reports them: delete them. Each function also rejects a field that belongs to another kind
+of construction: a random wallet with a `seed` or a `restoreHeight`, a seed restore with keys or a
 `language`. The [reference](reference/functions.md) lists every rejection.
 
 ## Creating a random wallet

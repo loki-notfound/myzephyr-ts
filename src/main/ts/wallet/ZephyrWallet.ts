@@ -814,26 +814,27 @@ async function createFull(raw: unknown, expectedIntent: ZephyrWalletCreateIntent
  * random-wallet creation; otherwise it is the core's date-based estimate, which lies about a month
  * of blocks below the chain tip, so a first sync also scans those older blocks.
  */
-export async function createRandomWallet(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> { return createFull(raw, "random", options); }
+export async function createRandomWallet(config: ZephyrRandomWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> { return createFull(config, "random", options); }
 
 /** Restore a full wallet from a seed; never falls back to a random wallet. */
-export async function restoreWalletFromSeed(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> { return createFull(raw, "seed", options); }
+export async function restoreWalletFromSeed(config: ZephyrSeedWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> { return createFull(config, "seed", options); }
 
 /** Restore a full wallet from keys; never falls back to a random wallet. */
-export async function restoreWalletFromKeys(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> { return createFull(raw, "keys", options); }
+export async function restoreWalletFromKeys(config: ZephyrKeysWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> { return createFull(config, "keys", options); }
 
 /** Create a full wallet with the intent derived from the fields present (for contract tests). */
 export async function createWallet(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> { return createFull(raw, undefined, options); }
 
 /** Create a keys-only wallet (random, seed or keys by the fields present). */
-export async function createKeysWallet(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> {
+export async function createKeysWallet(config: ZephyrKeysOnlyWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> {
+  const raw: unknown = config;
   splitServer(raw, true); // a non-empty server rejects with KEYS_ONLY_DAEMON
   const validated = validateCreateConfig(raw, true);
   const signal = constructionSignal(options);
   const proxied = proxyFlag(raw);
-  const config = new ZephyrWalletConfig(Object.assign({}, raw as object, { proxyToWorker: proxied }) as Partial<ZephyrWalletConfig>);
+  const walletConfig = new ZephyrWalletConfig(Object.assign({}, raw as object, { proxyToWorker: proxied }) as Partial<ZephyrWalletConfig>);
   try {
-    const wallet = await ZephyrWalletKeys.createWallet(config, signal);
+    const wallet = await ZephyrWalletKeys.createWallet(walletConfig, signal);
     return wrapWallet(wallet, "keys", proxied);
   } catch (err) {
     throw toWalletError(validated.intent === "random" ? "create" : "restore", err);
@@ -841,8 +842,8 @@ export async function createKeysWallet(raw: unknown, options?: ZephyrWalletConst
 }
 
 /** Open a full wallet from keys and cache bytes (no path; an optional daemon address in server). */
-export async function openWalletData(raw: unknown, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> {
-  const { rest, daemon } = splitServer(raw, false);
+export async function openWalletData(config: ZephyrOpenWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> {
+  const { rest, daemon } = splitServer(config, false);
   const validated = validateOpenConfig(rest);
   const signal = constructionSignal(options);
   const proxied = proxyFlag(rest);
@@ -855,7 +856,7 @@ export async function openWalletData(raw: unknown, options?: ZephyrWalletConstru
 }
 
 /** Validate an address for a network type; rejects with INVALID_ADDRESS. */
-export async function validateAddress(address: unknown, networkType: ZephyrNetworkTypeInput, proxyToWorker = true): Promise<void> {
+export async function validateAddress(address: string, networkType: ZephyrNetworkTypeInput, proxyToWorker = true): Promise<void> {
   if (typeof address !== "string" || address.length === 0) throw new ZephyrWalletError("INVALID_ADDRESS", "ADDRESS_TYPE");
   const net = networkType === "mainnet" ? 0 : networkType === "testnet" ? 1 : networkType === "stagenet" ? 2 : networkType;
   if (net !== 0 && net !== 1 && net !== 2) throw new ZephyrWalletError("INVALID_CONFIG", "NETWORK_TYPE");

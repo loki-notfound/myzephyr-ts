@@ -27,7 +27,11 @@ reshaped, and what is not ported.
 - **The construction configuration** keeps the field names of `MoneroWalletConfig` that it supports:
   `networkType`, `password`, `seed`, `seedOffset`, `primaryAddress`, `privateViewKey`,
   `privateSpendKey`, `restoreHeight`, `language`, `accountLookahead`, `subaddressLookahead`,
-  `proxyToWorker`, `server`, `keysData`, `cacheData`.
+  `proxyToWorker`, `server`, `keysData`, `cacheData`. Each construction function declares its own
+  configuration type with only the fields it accepts (`ZephyrRandomWalletConfig`,
+  `ZephyrSeedWalletConfig`, `ZephyrKeysWalletConfig`, `ZephyrKeysOnlyWalletConfig`,
+  `ZephyrOpenWalletConfig`); `MoneroWalletConfig` fields without effect here, such as
+  `isTrustedDaemon: true` or `path: ""`, are not declared and TypeScript reports them.
 
 ## What was renamed or reshaped
 
