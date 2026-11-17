@@ -165,7 +165,7 @@ function renderPage(page, n, pages, byRel, meta) {
 </head>
 <body>
 <a class="lt-skip-link" href="#main">Skip to main content</a>
-<nav class="lt-family-bar" aria-label="Lateo family">
+<nav class="lt-family-bar" aria-label="Site navigation">
   <div class="lt-family-bar-inner">
     <a class="lt-family-brand" href="https://lateo.dev/" data-product="home">
       <svg class="lt-family-mark" viewBox="0 0 64 64" width="16" height="16" fill="none" aria-hidden="true">
@@ -176,11 +176,10 @@ function renderPage(page, n, pages, byRel, meta) {
       <span>lateo</span>
     </a>
     <ul class="lt-family-links">
-      <li><a class="lt-family-link" href="https://node.lateo.dev/" data-product="node">node</a></li>
-      <li><a class="lt-family-link" href="https://wallet.lateo.dev/" data-product="wallet">wallet</a></li>
-      <li><a class="lt-family-link" href="https://map.lateo.dev/" data-product="map">map</a></li>
-      <li><a class="lt-family-link" href="https://explorer.lateo.dev/" data-product="explorer">explorer</a></li>
-      <li><a class="lt-family-link" href="https://stats.lateo.dev/" data-product="stats">stats</a></li>
+      <li><a class="lt-family-link" href="${relLink(page.out, "index.html")}"${isRef(page) ? "" : ' aria-current="page"'}>Guide</a></li>
+      <li><a class="lt-family-link" href="${relLink(page.out, "reference/index.html")}"${isRef(page) ? ' aria-current="page"' : ""}>API reference</a></li>
+      <li><a class="lt-family-link" href="${REPO_URL}">Repository</a></li>
+      <li><a class="lt-family-link" href="${REPO_URL}/releases">Releases</a></li>
     </ul>
   </div>
 </nav>
@@ -190,11 +189,6 @@ function renderPage(page, n, pages, byRel, meta) {
       <a class="lt-brand" href="${relLink(page.out, "index.html")}">zephyr-ts</a>
       <p class="site-tagline">TypeScript wallet library for Zephyr, a lateo project</p>
     </div>
-    <nav class="lt-nav" aria-label="Site navigation">
-      <a href="${relLink(page.out, "index.html")}"${isRef(page) ? "" : ' aria-current="page"'}>Guide</a>
-      <a href="${relLink(page.out, "reference/index.html")}"${isRef(page) ? ' aria-current="page"' : ""}>API reference</a>
-      <a href="${REPO_URL}">Repository</a>
-    </nav>
   </div>
 </header>
 <main id="main" tabindex="-1">
