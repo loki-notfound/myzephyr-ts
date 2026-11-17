@@ -36,6 +36,7 @@ import ZephyrTxWallet from "./model/ZephyrTxWallet";
 import ZephyrWalletBase from "./ZephyrWalletBase";
 import ZephyrWalletConfig from "./model/ZephyrWalletConfig";
 import ZephyrWalletError, { ZephyrBridgeErrorIdentifier, ZephyrBridgePasswordState, bridgePasswordErrorOf } from "../common/ZephyrWalletError";
+import * as WalletErrors from "../common/ZephyrWalletErrorMapping";
 import { MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL, checkLabel, checkSubaddressIndices, isAddressIndex, isRestoreHeight, parseRestoreHeightText } from "../common/ZephyrLifecycleContract";
 import HttpClient from "../common/HttpClient";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
@@ -291,7 +292,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
         
         // create wallet in wasm which invokes callback when done
         module.create_full_wallet(coreConfigJson, rejectUnauthorizedFnId, async (cppAddress: number | string) => {
-          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
+          if (typeof cppAddress === "string") reject(WalletErrors.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletFull(cppAddress, config.getPath(), config.getPassword(), config.getFs(), config.getServer() ? config.getServer().getRejectUnauthorized() : undefined, rejectUnauthorizedFnId));
         });
       });
@@ -327,7 +328,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
         
         // create wallet in wasm which invokes callback when done
         module.create_full_wallet(coreConfigJson, rejectUnauthorizedFnId, async (cppAddress: number | string) => {
-          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
+          if (typeof cppAddress === "string") reject(WalletErrors.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletFull(cppAddress, config.getPath(), config.getPassword(), config.getFs(), config.getServer() ? config.getServer().getRejectUnauthorized() : undefined, rejectUnauthorizedFnId));
         });
       });
@@ -358,7 +359,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       
         // create wallet in wasm which invokes callback when done
         module.create_full_wallet(coreConfigJson, rejectUnauthorizedFnId, async (cppAddress: number | string) => {
-          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("create", cppAddress)); // fixed bridge identifier only
+          if (typeof cppAddress === "string") reject(WalletErrors.fromBridgeResult("create", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletFull(cppAddress, config.getPath(), config.getPassword(), config.getFs(), config.getServer() ? config.getServer().getRejectUnauthorized() : undefined, rejectUnauthorizedFnId));
         });
       });
@@ -372,7 +373,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   static async getSeedLanguages() {
     let module = await LibraryUtils.loadWasmModule();
     return module.queueTask(async () => {
-      return JSON.parse(ZephyrWalletError.checkBridgeResult("other", module.get_keys_wallet_seed_languages())).languages;
+      return JSON.parse(WalletErrors.checkBridgeResult("other", module.get_keys_wallet_seed_languages())).languages;
     });
   }
 
@@ -418,7 +419,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
         this.module.is_daemon_synced(this.cppAddress, (result: unknown) => {
           if (result === "true") resolve(true);
           else if (result === "false") resolve(false);
-          else reject(ZephyrWalletError.fromBridgeResult("daemon", result));
+          else reject(WalletErrors.fromBridgeResult("daemon", result));
         });
       });
     });
@@ -465,7 +466,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getRestoreHeight();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseRestoreHeightText(ZephyrWalletError.checkBridgeResult("other", this.module.get_restore_height(this.cppAddress))); // exact decimal text of the core uint64_t
+      return parseRestoreHeightText(WalletErrors.checkBridgeResult("other", this.module.get_restore_height(this.cppAddress))); // exact decimal text of the core uint64_t
     });
   }
   
@@ -527,7 +528,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
    * then reports false.
    */
   async setDaemonConnection(uriOrConnection?: Partial<ZephyrRpcConnection> | string, isTrusted?: boolean): Promise<void> {
-    if (isTrusted === false) throw ZephyrWalletError.unsupported("UNTRUSTED_DAEMON");
+    if (isTrusted === false) throw WalletErrors.unsupported("UNTRUSTED_DAEMON");
     if (isTrusted !== undefined && isTrusted !== true) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
     const route = uriOrConnection === undefined || uriOrConnection === null || uriOrConnection === "" ? undefined : parseDaemonAddress(uriOrConnection);
     if (this.getWalletProxy()) return this.getWalletProxy().setDaemonRoute(route);
@@ -539,7 +540,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
         await new Promise<void>((resolve, reject) => {
           this.module.set_daemon_connection(this.cppAddress, route ? route.origin : "", route ? route.basePath : "", (result: unknown) => {
             if (result === "") resolve();
-            else reject(ZephyrWalletError.fromBridgeResult("daemon", result));
+            else reject(WalletErrors.fromBridgeResult("daemon", result));
           });
         });
       } finally {
@@ -585,7 +586,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
         this.module.is_connected_to_daemon(this.cppAddress, (result: unknown) => {
           if (result === "true") resolve(true);
           else if (result === "false") resolve(false);
-          else reject(ZephyrWalletError.fromBridgeResult("daemon", result));
+          else reject(WalletErrors.fromBridgeResult("daemon", result));
         });
       });
     });
@@ -605,7 +606,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
         this.module.set_restore_height_from_daemon(this.cppAddress, (result: unknown) => {
           if (result === "true") resolve(true);
           else if (result === "false") resolve(false);
-          else reject(ZephyrWalletError.fromBridgeResult("daemon", result));
+          else reject(WalletErrors.fromBridgeResult("daemon", result));
         });
       });
     });
@@ -626,7 +627,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     return this.module.queueTask(async () => {
       this.assertNotClosed();
       // fixed bridge identifier on failure; neither the native text nor the payment id is echoed
-      let result = ZephyrWalletError.checkBridgeResult("address", this.module.get_integrated_address(this.cppAddress, standardAddress ? standardAddress : "", paymentId ? paymentId : ""));
+      let result = WalletErrors.checkBridgeResult("address", this.module.get_integrated_address(this.cppAddress, standardAddress ? standardAddress : "", paymentId ? paymentId : ""));
       if (typeof result !== "string" || result.charAt(0) !== '{') throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
       return new ZephyrIntegratedAddress(JSON.parse(result));
     });
@@ -636,7 +637,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().decodeIntegratedAddress(integratedAddress);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let result = ZephyrWalletError.checkBridgeResult("address", this.module.decode_integrated_address(this.cppAddress, integratedAddress)); // fixed bridge identifier on failure
+      let result = WalletErrors.checkBridgeResult("address", this.module.decode_integrated_address(this.cppAddress, integratedAddress)); // fixed bridge identifier on failure
       if (typeof result !== "string" || result.charAt(0) !== '{') throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
       return new ZephyrIntegratedAddress(JSON.parse(result));
     });
@@ -647,7 +648,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getHeight();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseSafeUintText(ZephyrWalletError.checkBridgeResult("other", this.module.get_height(this.cppAddress)));
+      return parseSafeUintText(WalletErrors.checkBridgeResult("other", this.module.get_height(this.cppAddress)));
     });
   }
   
@@ -658,7 +659,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<number>((resolve, reject) => {
         this.module.get_daemon_height(this.cppAddress, (result: unknown) => {
-          try { resolve(parseSafeUintText(ZephyrWalletError.checkBridgeResult("daemon", result))); } catch (err) { reject(err instanceof ZephyrWalletError ? err : new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT")); }
+          try { resolve(parseSafeUintText(WalletErrors.checkBridgeResult("daemon", result))); } catch (err) { reject(err instanceof ZephyrWalletError ? err : new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT")); }
         });
       });
     });
@@ -691,8 +692,8 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
    * Close issued during the sync waits for it; there is no native cancellation.
    */
   async sync(listenerOrStartHeight?: ZephyrWalletListener | number, startHeight?: number, allowConcurrentCalls = false): Promise<ZephyrSyncResult> {
-    if (listenerOrStartHeight instanceof ZephyrWalletListener) throw ZephyrWalletError.unsupported("LISTENERS");
-    if (startHeight !== undefined || allowConcurrentCalls !== false) throw ZephyrWalletError.unsupported("SYNC");
+    if (listenerOrStartHeight instanceof ZephyrWalletListener) throw WalletErrors.unsupported("LISTENERS");
+    if (startHeight !== undefined || allowConcurrentCalls !== false) throw WalletErrors.unsupported("SYNC");
     const start = listenerOrStartHeight;
     if (start !== undefined && !isRestoreHeight(start)) throw new ZephyrWalletError("INVALID_CONFIG", "SYNC_START_HEIGHT");
     if (this.getWalletProxy()) return this.getWalletProxy().syncFrom(start);
@@ -700,7 +701,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<ZephyrSyncResult>((resolve, reject) => {
         this.module.sync(this.cppAddress, start === undefined ? "" : String(start), (result: unknown) => {
-          try { resolve(ZephyrWalletFull.parseSyncResult(ZephyrWalletError.checkBridgeResult("sync", result))); } catch (err) { reject(err instanceof ZephyrWalletError ? err : new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT")); }
+          try { resolve(ZephyrWalletFull.parseSyncResult(WalletErrors.checkBridgeResult("sync", result))); } catch (err) { reject(err instanceof ZephyrWalletError ? err : new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT")); }
         });
       });
     });
@@ -736,7 +737,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getBalanceMap(unlocked);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeAssetBalances(ZephyrWalletError.checkBridgeResult("other", unlocked ? this.module.get_unlocked_balance_wallet(this.cppAddress) : this.module.get_balance_wallet(this.cppAddress)));
+      return parseBridgeAssetBalances(WalletErrors.checkBridgeResult("other", unlocked ? this.module.get_unlocked_balance_wallet(this.cppAddress) : this.module.get_balance_wallet(this.cppAddress)));
     });
   }
 
@@ -747,7 +748,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getAccountBalanceMap(unlocked, accountIdx);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeAccountBalances(ZephyrWalletError.checkBridgeResult("other", unlocked ? this.module.get_unlocked_balance_account(this.cppAddress, accountIdx) : this.module.get_balance_account(this.cppAddress, accountIdx)));
+      return parseBridgeAccountBalances(WalletErrors.checkBridgeResult("other", unlocked ? this.module.get_unlocked_balance_account(this.cppAddress, accountIdx) : this.module.get_balance_account(this.cppAddress, accountIdx)));
     });
   }
 
@@ -761,7 +762,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       const has = subaddressIdx !== undefined;
       const sub = has ? subaddressIdx as number : 0;
-      return parseUint64Text(ZephyrWalletError.checkBridgeResult("other", unlocked ? this.module.get_unlocked_balance_asset(this.cppAddress, assetType, accountIdx, has, sub) : this.module.get_balance_asset(this.cppAddress, assetType, accountIdx, has, sub)));
+      return parseUint64Text(WalletErrors.checkBridgeResult("other", unlocked ? this.module.get_unlocked_balance_asset(this.cppAddress, assetType, accountIdx, has, sub) : this.module.get_balance_asset(this.cppAddress, assetType, accountIdx, has, sub)));
     });
   }
   
@@ -862,12 +863,12 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   
   // The inherited model methods of accounts and subaddresses are not ported (their bindings now have the
   // checked signatures below); they reject with a typed error instead of a binding failure.
-  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async createAccount(label?: string): Promise<ZephyrAccountInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async setSubaddressLabel(accountIdx: number, subaddressIdx: number, label: string): Promise<void> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async createAccount(label?: string): Promise<ZephyrAccountInherited> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async setSubaddressLabel(accountIdx: number, subaddressIdx: number, label: string): Promise<void> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
 
   /**
    * Accounts and subaddresses (checked): arguments are validated again here (the facade validated them
@@ -880,7 +881,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getAccountsChecked(includeSubaddresses);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeAccounts(ZephyrWalletError.checkBridgeResult("other", this.module.get_accounts(this.cppAddress, includeSubaddresses, MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL)), includeSubaddresses);
+      return parseBridgeAccounts(WalletErrors.checkBridgeResult("other", this.module.get_accounts(this.cppAddress, includeSubaddresses, MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL)), includeSubaddresses);
     });
   }
 
@@ -890,7 +891,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getAccountChecked(accountIdx, includeSubaddresses);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeAccount(ZephyrWalletError.checkBridgeResult("other", this.module.get_account(this.cppAddress, accountIdx, includeSubaddresses, MAX_SUBADDRESSES_PER_CALL)), accountIdx, includeSubaddresses);
+      return parseBridgeAccount(WalletErrors.checkBridgeResult("other", this.module.get_account(this.cppAddress, accountIdx, includeSubaddresses, MAX_SUBADDRESSES_PER_CALL)), accountIdx, includeSubaddresses);
     });
   }
 
@@ -899,7 +900,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().createAccountChecked(label);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeAccount(ZephyrWalletError.checkBridgeResult("other", this.module.create_account(this.cppAddress, label)), undefined, false);
+      return parseBridgeAccount(WalletErrors.checkBridgeResult("other", this.module.create_account(this.cppAddress, label)), undefined, false);
     });
   }
 
@@ -909,7 +910,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getSubaddressesChecked(accountIdx, indices);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeSubaddresses(ZephyrWalletError.checkBridgeResult("other", this.module.get_subaddresses(this.cppAddress, accountIdx, indices === undefined ? "" : indices.join(","), MAX_SUBADDRESSES_PER_CALL)), accountIdx, indices);
+      return parseBridgeSubaddresses(WalletErrors.checkBridgeResult("other", this.module.get_subaddresses(this.cppAddress, accountIdx, indices === undefined ? "" : indices.join(","), MAX_SUBADDRESSES_PER_CALL)), accountIdx, indices);
     });
   }
 
@@ -919,7 +920,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().createSubaddressChecked(accountIdx, label);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeSubaddress(ZephyrWalletError.checkBridgeResult("other", this.module.create_subaddress(this.cppAddress, accountIdx, label)), accountIdx);
+      return parseBridgeSubaddress(WalletErrors.checkBridgeResult("other", this.module.create_subaddress(this.cppAddress, accountIdx, label)), accountIdx);
     });
   }
 
@@ -929,7 +930,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().setSubaddressLabelChecked(accountIdx, subaddressIdx, label);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      if (ZephyrWalletError.checkBridgeResult("other", this.module.set_subaddress_label(this.cppAddress, accountIdx, subaddressIdx, label)) !== "") throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
+      if (WalletErrors.checkBridgeResult("other", this.module.set_subaddress_label(this.cppAddress, accountIdx, subaddressIdx, label)) !== "") throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
     });
   }
 
@@ -938,7 +939,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getAddressIndexChecked(address);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeAddressIndex(ZephyrWalletError.checkBridgeResult("address", this.module.get_address_index(this.cppAddress, address)));
+      return parseBridgeAddressIndex(WalletErrors.checkBridgeResult("address", this.module.get_address_index(this.cppAddress, address)));
     });
   }
   
@@ -951,7 +952,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
     if (this.getWalletProxy()) return this.getWalletProxy().getHistoryChecked(s);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return parseBridgeTxs(ZephyrWalletError.checkBridgeResult("other", this.module.get_txs(this.cppAddress, s.status, s.minHeight === undefined ? "" : String(s.minHeight),
+      return parseBridgeTxs(WalletErrors.checkBridgeResult("other", this.module.get_txs(this.cppAddress, s.status, s.minHeight === undefined ? "" : String(s.minHeight),
         s.maxHeight === undefined ? "" : String(s.maxHeight), s.hashes === undefined ? "" : s.hashes.join(","), MAX_TXS_PER_CALL, MAX_TRANSFERS_PER_CALL)), s);
     });
   }
@@ -967,7 +968,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<number>((resolve, reject) => {
         this.module.refresh_pool(this.cppAddress, MAX_TXS_PER_CALL, (result: unknown) => {
-          try { resolve(parsePoolRefresh(ZephyrWalletError.checkBridgeResult("daemon", result))); } catch (err) { reject(err); }
+          try { resolve(parsePoolRefresh(WalletErrors.checkBridgeResult("daemon", result))); } catch (err) { reject(err); }
         });
       });
     });
@@ -984,7 +985,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<ZephyrTransferBuild>((resolve, reject) => {
         this.module.build_txs(this.cppAddress, r.asset, r.addresses.join(","), r.amounts.join(","), r.accountIndex, r.subaddressIndices.join(","), r.priority, MAX_DESTINATIONS, (result: unknown) => {
-          try { resolve(parseBridgeBuild(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+          try { resolve(parseBridgeBuild(WalletErrors.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
         });
       });
     });
@@ -1001,7 +1002,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<ZephyrConversionBuild>((resolve, reject) => {
         this.module.build_conversion(this.cppAddress, r.sourceAsset, r.destinationAsset, r.address, r.amount, r.accountIndex, r.subaddressIndices.join(","), r.priority, (result: unknown) => {
-          try { resolve(parseBridgeConversion(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+          try { resolve(parseBridgeConversion(WalletErrors.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
         });
       });
     });
@@ -1018,7 +1019,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<ZephyrPreparedTransfer>((resolve, reject) => {
         this.module.prepare_txs(this.cppAddress, r.asset, r.addresses.join(","), r.amounts.join(","), r.accountIndex, r.subaddressIndices.join(","), r.priority, MAX_DESTINATIONS, (result: unknown) => {
-          try { resolve(parseBridgePreparedTransfer(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+          try { resolve(parseBridgePreparedTransfer(WalletErrors.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
         });
       });
     });
@@ -1032,7 +1033,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<ZephyrPreparedConversion>((resolve, reject) => {
         this.module.prepare_conversion(this.cppAddress, r.sourceAsset, r.destinationAsset, r.address, r.amount, r.accountIndex, r.subaddressIndices.join(","), r.priority, (result: unknown) => {
-          try { resolve(parseBridgePreparedConversion(ZephyrWalletError.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+          try { resolve(parseBridgePreparedConversion(WalletErrors.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
         });
       });
     });
@@ -1049,7 +1050,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<ZephyrRelayResult>((resolve, reject) => {
         this.module.relay_prepared(this.cppAddress, t, (result: unknown) => {
-          try { resolve(parseBridgeRelay(ZephyrWalletError.checkBridgeResult("relay", result), hashes)); } catch (err) { reject(err); }
+          try { resolve(parseBridgeRelay(WalletErrors.checkBridgeResult("relay", result), hashes)); } catch (err) { reject(err); }
         });
       });
     });
@@ -1063,14 +1064,14 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       this.assertNotClosed();
       return new Promise<boolean>((resolve, reject) => {
         this.module.discard_prepared(this.cppAddress, t, (result: unknown) => {
-          try { resolve(parseBridgeDiscard(ZephyrWalletError.checkBridgeResult("relay", result))); } catch (err) { reject(err); }
+          try { resolve(parseBridgeDiscard(WalletErrors.checkBridgeResult("relay", result))); } catch (err) { reject(err); }
         });
       });
     });
   }
 
   // the inherited query-based listing reached a binding whose signature changed (get_txs); see getHistoryChecked
-  async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
 
   async getTransfers(query?: Partial<ZephyrTransferQuery>): Promise<ZephyrTransfer[]> {
     if (this.getWalletProxy()) return this.getWalletProxy().getTransfers(query);
@@ -1901,7 +1902,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
         throw new ZephyrWalletError("NATIVE_ERROR", "PASSWORD_CHANGED_WITH_ERROR");
       }
       if (parsed.state === "unknown") throw this.stopAdmissionForUnknownPasswordState();
-      throw ZephyrWalletError.fromBridge("changePassword", parsed.identifier);
+      throw WalletErrors.fromBridge("changePassword", parsed.identifier);
     });
     if (this.path) await this.save(); // auto save
   }
@@ -1948,7 +1949,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   protected async getCloseData() {
     return this.module.queueTask(async () => ({
       data: this.getDataWasm(),
-      primaryAddress: ZephyrWalletError.checkBridgeResult("other", this.module.get_address(this.cppAddress, 0, 0))
+      primaryAddress: WalletErrors.checkBridgeResult("other", this.module.get_address(this.cppAddress, 0, 0))
     }));
   }
 
@@ -1993,7 +1994,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       
         // create wallet in wasm which invokes callback when done
         module.open_wallet_full(config.password, config.networkType, config.keysData ?? "", config.cacheData ?? "", daemonUri, daemonUsername, daemonPassword, rejectUnauthorizedFnId, config.getRegtest() === undefined ? false : config.getRegtest(), (cppAddress) => {
-          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("open", cppAddress)); // fixed bridge identifier only
+          if (typeof cppAddress === "string") reject(WalletErrors.fromBridgeResult("open", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletFull(cppAddress, config.path, config.password, config.fs, rejectUnauthorized, rejectUnauthorizedFnId));
         });
       });
@@ -2261,7 +2262,7 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   }
   
   async setSubaddressLabel(accountIdx: number, subaddressIdx: number, label: string): Promise<void> {
-    throw ZephyrWalletError.unsupported("NATIVE_EXPORT");
+    throw WalletErrors.unsupported("NATIVE_EXPORT");
   }
   
   /** The worker re-validates the address from its normalized text */
@@ -2270,7 +2271,7 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   }
 
   async setDaemonConnection(uriOrRpcConnection, isTrusted?) {
-    if (isTrusted === false) throw ZephyrWalletError.unsupported("UNTRUSTED_DAEMON");
+    if (isTrusted === false) throw WalletErrors.unsupported("UNTRUSTED_DAEMON");
     return this.setDaemonRoute(uriOrRpcConnection === undefined || uriOrRpcConnection === null || uriOrRpcConnection === "" ? undefined : parseDaemonAddress(uriOrRpcConnection));
   }
 
@@ -2370,8 +2371,8 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   }
   
   async sync(listenerOrStartHeight?: ZephyrWalletListener | number, startHeight?: number, allowConcurrentCalls = false): Promise<ZephyrSyncResult> {
-    if (listenerOrStartHeight instanceof ZephyrWalletListener) throw ZephyrWalletError.unsupported("LISTENERS");
-    if (startHeight !== undefined || allowConcurrentCalls !== false) throw ZephyrWalletError.unsupported("SYNC");
+    if (listenerOrStartHeight instanceof ZephyrWalletListener) throw WalletErrors.unsupported("LISTENERS");
+    if (startHeight !== undefined || allowConcurrentCalls !== false) throw WalletErrors.unsupported("SYNC");
     if (listenerOrStartHeight !== undefined && !isRestoreHeight(listenerOrStartHeight)) throw new ZephyrWalletError("INVALID_CONFIG", "SYNC_START_HEIGHT");
     return this.syncFrom(listenerOrStartHeight);
   }
@@ -2424,11 +2425,11 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     return BigInt(unlockedBalanceStr);
   }
   
-  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async createAccount(label?: string): Promise<ZephyrAccountInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
-  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async getAccounts(includeSubaddresses?: boolean, tag?: string): Promise<ZephyrAccountInherited[]> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async getAccount(accountIdx: number, includeSubaddresses?: boolean): Promise<ZephyrAccountInherited> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async createAccount(label?: string): Promise<ZephyrAccountInherited> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async getSubaddresses(accountIdx: number, subaddressIndices?: number[]): Promise<ZephyrSubaddressInherited[]> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async createSubaddress(accountIdx: number, label?: string): Promise<ZephyrSubaddressInherited> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
 
   async getAccountsChecked(includeSubaddresses: boolean): Promise<ReadonlyArray<ZephyrAccount>> {
     return fromAccountsDto(await this.invokeWorker("getAccounts", [includeSubaddresses]), includeSubaddresses, MAX_ACCOUNTS_PER_CALL);
@@ -2496,7 +2497,7 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     return result;
   }
 
-  async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); }
+  async getTxs(query?: string[] | Partial<ZephyrTxQuery>): Promise<ZephyrTxWallet[]> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
   
   async getTransfers(query) {
     query = ZephyrWalletBase.normalizeTransferQuery(query);

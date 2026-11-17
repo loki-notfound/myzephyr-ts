@@ -1,4 +1,5 @@
-import ZephyrWalletError, { ZephyrWalletErrorDiagnostic, ZephyrWalletErrorCode, ZephyrNativeErrorContext } from "./ZephyrWalletError";
+import ZephyrWalletError, { ZephyrWalletErrorDiagnostic, ZephyrWalletErrorCode } from "./ZephyrWalletError";
+import type { ZephyrNativeErrorContext } from "./ZephyrWalletErrorMapping";
 import { checkTxHashes } from "./ZephyrHistory";
 
 /**

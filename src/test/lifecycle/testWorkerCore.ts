@@ -7,6 +7,7 @@
 import "../../main/ts/common/ZephyrWebWorker";
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import ZephyrWalletError from "../../main/ts/common/ZephyrWalletError";
+import * as WalletErrors from "../../main/ts/common/ZephyrWalletErrorMapping";
 import { ModuleInstrumentation, useTestModule } from "./testSupport";
 
 declare const self: any;
@@ -40,11 +41,11 @@ export function installTestWorker(testGlue: () => unknown): void {
     __testHandlePresent: async (walletId) => { const e = self.WORKER_WALLETS.get(walletId); return e !== undefined && e.wallet.cppAddress !== undefined; },
     __testNativeChangePassword: async (walletId, oldPassword, newPassword) => {
       const e = self.WORKER_WALLETS.get(walletId);
-      if (e === undefined) throw ZephyrWalletError.walletClosed();
+      if (e === undefined) throw WalletErrors.walletClosed();
       try {
         await instrumentation!.nativeChangePassword(e.wallet, oldPassword, newPassword);
       } catch (err) {
-        throw ZephyrWalletError.fromUnknown("changePassword", err);
+        throw WalletErrors.fromUnknown("changePassword", err);
       }
     }
   };
@@ -91,7 +92,7 @@ export function installTestWorker(testGlue: () => unknown): void {
       try {
         productionPost([objectId, callbackId, { result: await tests[fnName](...args) }]);
       } catch (err) {
-        productionPost([objectId, callbackId, { error: ZephyrWalletError.fromUnknown("other", err).toEnvelope() }]);
+        productionPost([objectId, callbackId, { error: WalletErrors.fromUnknown("other", err).toEnvelope() }]);
       }
       return;
     }

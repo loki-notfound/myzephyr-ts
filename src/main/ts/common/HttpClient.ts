@@ -2,6 +2,7 @@ import GenUtils from "./GenUtils";
 import LibraryUtils from "./LibraryUtils";
 import ThreadPool from "./ThreadPool";
 import ZephyrWalletError from "./ZephyrWalletError";
+import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { matchRoute, routeKey } from "./ZephyrDaemonAddress";
 import http from "http";
 import https from "https";
@@ -117,13 +118,13 @@ export default class HttpClient {
       HttpClient.BLOCKED_REQUESTS++;
       const key = httpMethod + " relay";
       HttpClient.BLOCKED_REQUEST_SUMMARY[key] = (HttpClient.BLOCKED_REQUEST_SUMMARY[key] ?? 0) + 1;
-      throw ZephyrWalletError.unsupported("RELAY_REQUEST");
+      throw WalletErrors.unsupported("RELAY_REQUEST");
     }
     if (endpoint === undefined) {
       HttpClient.BLOCKED_REQUESTS++;
       const key = httpMethod + " " + (rpcMatch ? rpcMatch[1] : "-");
       HttpClient.BLOCKED_REQUEST_SUMMARY[key] = (HttpClient.BLOCKED_REQUEST_SUMMARY[key] ?? 0) + 1;
-      throw ZephyrWalletError.unsupported("NETWORK_REQUEST");
+      throw WalletErrors.unsupported("NETWORK_REQUEST");
     }
     HttpClient.ALLOWED_REQUESTS++;
     const key = httpMethod + " " + endpoint + " " + (rpcMatch ? rpcMatch[1] : "-");
@@ -138,8 +139,8 @@ export default class HttpClient {
    * process environment is never used (see axiosRequest).
    */
   protected static rejectUnsupported(request: any): void {
-    if ((request?.username !== undefined && request.username !== "") || (request?.password !== undefined && request.password !== "")) throw ZephyrWalletError.unsupported("DAEMON_CREDENTIALS");
-    if (request?.proxyUri !== undefined && request.proxyUri !== "") throw ZephyrWalletError.unsupported("DAEMON_PROXY");
+    if ((request?.username !== undefined && request.username !== "") || (request?.password !== undefined && request.password !== "")) throw WalletErrors.unsupported("DAEMON_CREDENTIALS");
+    if (request?.proxyUri !== undefined && request.proxyUri !== "") throw WalletErrors.unsupported("DAEMON_PROXY");
   }
 
   // default request config

@@ -37,15 +37,6 @@ readonly proxied: boolean;
 `true` when the wallet runs in its own worker (`proxyToWorker`, the default). Guide:
 [One worker per wallet](../02-wallets.md#one-worker-per-wallet).
 
-### `wrap`
-
-```ts signature
-static wrap(inner: InnerWallet, kind: "full" | "keys", proxied: boolean, daemon?: ZephyrDaemonRoute): ZephyrWallet;
-```
-
-Marked `@internal` in the declarations: the construction functions use it to create the facade. Its
-parameter types are not exported. Applications do not call it.
-
 ## Lifecycle
 
 ### `isClosed`

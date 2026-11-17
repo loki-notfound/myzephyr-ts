@@ -1,4 +1,5 @@
 import ZephyrWalletError from "./ZephyrWalletError";
+import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { checkSubaddressIndices, isAddressIndex } from "./ZephyrLifecycleContract";
 import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalances";
 
@@ -127,7 +128,7 @@ export function checkTransferConfig(config: unknown): ZephyrTransferRequest {
   if (!V2_ASSETS.includes(asset)) invalid("ASSET_TYPE");
   if (c.destinationAsset !== undefined) {
     if (!isAssetTypeToken(c.destinationAsset)) invalid("ASSET_TYPE");
-    if (c.destinationAsset !== asset) throw ZephyrWalletError.unsupported("CONVERSION");
+    if (c.destinationAsset !== asset) throw WalletErrors.unsupported("CONVERSION");
   }
   if (!Array.isArray(c.destinations) || c.destinations.length === 0) invalid("DESTINATIONS");
   const dests = c.destinations as unknown[];

@@ -1,4 +1,5 @@
 import ZephyrWalletError, { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic, isBridgeErrorIdentifier } from "./ZephyrWalletError";
+import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { Bad, TX_HASH, ZephyrTransferBuild, ZephyrTransferRequest, buildFromFields, fields, toBuildDto } from "./ZephyrTransfer";
 import { ZephyrConversionBuild, ZephyrConversionRequest, conversionFromFields, toConversionDto } from "./ZephyrConversion";
 
@@ -147,7 +148,7 @@ export function parseBridgeRelay(json: unknown, hashes?: readonly string[]): Zep
     if (t.code !== undefined || t.diagnostic !== undefined) unexpected();
     if (t.error === undefined) return {};
     if (!isBridgeErrorIdentifier(t.error)) unexpected();
-    const err = ZephyrWalletError.fromBridge("relay", t.error as never);
+    const err = WalletErrors.fromBridge("relay", t.error as never);
     return { code: err.code, diagnostic: err.diagnostic };
   }, hashes);
 }

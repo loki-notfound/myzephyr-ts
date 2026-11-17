@@ -10,6 +10,7 @@ import * as F from "../../main/ts/index";
 import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import ZephyrWalletError, { bridgeErrorOf, bridgePasswordErrorOf } from "../../main/ts/common/ZephyrWalletError";
+import * as WalletErrors from "../../main/ts/common/ZephyrWalletErrorMapping";
 import { RawWorker, channelOf, combinedGuard, installGuardLedger, newMessageId, postRawWorkerMessage, sanitize, skipGuardRead, walletIdOf } from "./testSupport";
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
@@ -927,7 +928,7 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     let conversion: unknown = undefined;
     try { module.get_network_type(marker); } catch (err) { conversion = err; }
     const quoted = conversion !== undefined && scanText(conversion).includes(marker.toLowerCase());
-    const mapped = ZephyrWalletError.fromUnknown("other", conversion);
+    const mapped = WalletErrors.fromUnknown("other", conversion);
     expect(conversion !== undefined && mapped.code === "NATIVE_ERROR" && mapped.diagnostic === "UNCLASSIFIED_ERROR", "embind conversion failure maps to the fixed fallback");
     scanFor("embind conversion failure after mapping", mapped, [marker]);
     notes.push("raw embind conversion failure " + (quoted ? "quotes" : "does not quote") + " the argument; mapped -> " + mapped.code + "/" + String(mapped.diagnostic) + " without text");
@@ -957,13 +958,13 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       ["unknown code", { type: "ZephyrWalletError", code: marker }], ["wrong type", { type: "Error", code: "NATIVE_ERROR" }], ["class instance", new Shaped()],
       ["non-enumerable extra field", withHidden], ["array", ["ZephyrWalletError", "NATIVE_ERROR"]], ["null", null], ["string", marker]];
     for (const [label, value] of envelopes) {
-      const e = ZephyrWalletError.fromEnvelope(value);
+      const e = WalletErrors.fromEnvelope(value);
       expect(e.code === "MALFORMED_MESSAGE" && e.diagnostic === "MESSAGE_SHAPE", "envelope (" + label + ") rejects MALFORMED_MESSAGE, got " + e.code);
       scanFor("envelope " + label, e, [marker]);
     }
-    const valid = ZephyrWalletError.fromEnvelope({ type: "ZephyrWalletError", code: "INVALID_ADDRESS", diagnostic: "CORE_INVALID_ADDRESS" });
+    const valid = WalletErrors.fromEnvelope({ type: "ZephyrWalletError", code: "INVALID_ADDRESS", diagnostic: "CORE_INVALID_ADDRESS" });
     expect(valid.code === "INVALID_ADDRESS" && valid.diagnostic === "CORE_INVALID_ADDRESS", "valid envelope accepted");
-    expect(ZephyrWalletError.fromEnvelope({ type: "ZephyrWalletError", code: "WALLET_CLOSED" }).code === "WALLET_CLOSED", "valid envelope without diagnostic accepted");
+    expect(WalletErrors.fromEnvelope({ type: "ZephyrWalletError", code: "WALLET_CLOSED" }).code === "WALLET_CLOSED", "valid envelope without diagnostic accepted");
     const replies: Array<[string, unknown, string]> = [["extra reply field", { result: 1, extra: marker }, "MALFORMED_MESSAGE"], ["result and error", { result: 1, error: { type: "ZephyrWalletError", code: "NATIVE_ERROR" } }, "MALFORMED_MESSAGE"],
       ["unknown reply field", { value: 1 }, "MALFORMED_MESSAGE"], ["empty reply object", {}, "MALFORMED_MESSAGE"], ["error envelope with message", { error: { type: "ZephyrWalletError", code: "NATIVE_ERROR", message: marker } }, "MALFORMED_MESSAGE"],
       ["reply not an object", marker, "MALFORMED_MESSAGE"], ["valid error reply", { error: { type: "ZephyrWalletError", code: "WRONG_PASSWORD" } }, "WRONG_PASSWORD"], ["valid result reply", { result: 7 }, "RESULT:7"]];
@@ -974,7 +975,7 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     notes.push(envelopes.length + " malformed envelopes and " + (replies.length - 2) + " malformed worker replies rejected MALFORMED_MESSAGE; valid envelopes and replies accepted");
     // fixed fallback for failures that are neither wallet errors nor bridge results
     for (const [ctx, code] of [["open", "INVALID_WALLET_DATA"], ["restore", "INVALID_RECOVERY_MATERIAL"], ["address", "INVALID_ADDRESS"], ["close", "NATIVE_ERROR"], ["other", "NATIVE_ERROR"]] as const) {
-      const e = ZephyrWalletError.fromUnknown(ctx, new Error("wrong password " + marker));
+      const e = WalletErrors.fromUnknown(ctx, new Error("wrong password " + marker));
       expect(e.code === code && (e.diagnostic === "UNCLASSIFIED_ERROR" || (ctx === "close" && e.diagnostic === "CORE_CLOSE_FAILED")), "fromUnknown(" + ctx + ") gives " + code + " without reading the text, got " + e.code + diagnosticOf(e));
       scanFor("fromUnknown " + ctx, e, [marker]);
     }

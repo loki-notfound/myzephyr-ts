@@ -1,4 +1,5 @@
 import ZephyrWalletError from "./ZephyrWalletError";
+import * as WalletErrors from "./ZephyrWalletErrorMapping";
 
 /**
  * Daemon address contract of the read-only daemon access.
@@ -40,14 +41,14 @@ export function parseDaemonAddress(input: unknown): ZephyrDaemonRoute {
     const fields = input as Record<string, unknown>;
     for (const key of Object.keys(fields)) {
       if (key === "uri" || key === "trusted") continue;
-      if (key === "username" || key === "password") { if (fields[key] !== undefined && fields[key] !== "") throw ZephyrWalletError.unsupported("DAEMON_CREDENTIALS"); continue; }
-      if (key === "proxyUri" || key === "proxy") { if (fields[key] !== undefined && fields[key] !== "") throw ZephyrWalletError.unsupported("DAEMON_PROXY"); continue; }
-      if (key === "rejectUnauthorized") { if (fields[key] !== undefined) throw ZephyrWalletError.unsupported("CONFIG_FIELD"); continue; }
+      if (key === "username" || key === "password") { if (fields[key] !== undefined && fields[key] !== "") throw WalletErrors.unsupported("DAEMON_CREDENTIALS"); continue; }
+      if (key === "proxyUri" || key === "proxy") { if (fields[key] !== undefined && fields[key] !== "") throw WalletErrors.unsupported("DAEMON_PROXY"); continue; }
+      if (key === "rejectUnauthorized") { if (fields[key] !== undefined) throw WalletErrors.unsupported("CONFIG_FIELD"); continue; }
       throw new ZephyrWalletError("INVALID_CONFIG", "UNKNOWN_FIELD");
     }
     const trusted = fields.trusted;
     if (trusted !== undefined && typeof trusted !== "boolean") throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
-    if (trusted === false) throw ZephyrWalletError.unsupported("UNTRUSTED_DAEMON");
+    if (trusted === false) throw WalletErrors.unsupported("UNTRUSTED_DAEMON");
     text = fields.uri;
   }
   if (typeof text !== "string") throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
@@ -62,11 +63,11 @@ export function parseDaemonAddress(input: unknown): ZephyrDaemonRoute {
   const slash = rest.indexOf("/");
   const authority = slash < 0 ? rest : rest.substring(0, slash);
   const rawPath = slash < 0 ? "" : rest.substring(slash);
-  if (authority.includes("@")) throw ZephyrWalletError.unsupported("DAEMON_CREDENTIALS");
+  if (authority.includes("@")) throw WalletErrors.unsupported("DAEMON_CREDENTIALS");
   if (/(^|\/)\.\.?(\/|$)/.test(rawPath)) invalid(); // dot segments would be resolved silently
   let url: URL;
   try { url = new URL(text); } catch (err) { invalid(); }
-  if (url.username !== "" || url.password !== "") throw ZephyrWalletError.unsupported("DAEMON_CREDENTIALS");
+  if (url.username !== "" || url.password !== "") throw WalletErrors.unsupported("DAEMON_CREDENTIALS");
   if (url.search !== "" || url.hash !== "" || url.hostname === "") invalid();
   if (url.protocol !== protocol + ":") invalid();
   let basePath = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");

@@ -4,6 +4,7 @@ import GenUtils from "./GenUtils";
 import LibraryUtils from "./LibraryUtils";
 import ZephyrError from "./ZephyrError";
 import ZephyrWalletError from "./ZephyrWalletError";
+import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import ZephyrIntegratedAddress from "../wallet/model/ZephyrIntegratedAddress";
 import ZephyrNetworkType from "../daemon/model/ZephyrNetworkType";
 import ConnectionType from "../daemon/model/ConnectionType";
@@ -168,7 +169,7 @@ export default class ZephyrUtils {
     
     // get integrated address in queue
     return LibraryUtils.getWasmModule().queueTask(async () => {
-      let integratedAddressJson = ZephyrWalletError.checkBridgeResult("address", LibraryUtils.getWasmModule().get_integrated_address_util(networkType, standardAddress, paymentId ? paymentId : "")); // fixed bridge identifier on failure
+      let integratedAddressJson = WalletErrors.checkBridgeResult("address", LibraryUtils.getWasmModule().get_integrated_address_util(networkType, standardAddress, paymentId ? paymentId : "")); // fixed bridge identifier on failure
       if (typeof integratedAddressJson !== "string" || integratedAddressJson.charAt(0) !== '{') throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
       return new ZephyrIntegratedAddress(JSON.parse(integratedAddressJson));
     });
@@ -211,7 +212,7 @@ export default class ZephyrUtils {
     // validate address in queue
     return LibraryUtils.getWasmModule().queueTask(async function() {
       let result = LibraryUtils.getWasmModule().validate_address(address, networkType); // "" or a fixed bridge identifier
-      if (result !== "") throw ZephyrWalletError.fromBridgeResult("address", result);
+      if (result !== "") throw WalletErrors.fromBridgeResult("address", result);
     });
   }
   

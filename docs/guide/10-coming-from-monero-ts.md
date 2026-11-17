@@ -35,7 +35,7 @@ reshaped, and what is not ported.
 | `moneroTs.openWalletFull({ keysData, cacheData })` | `openWalletData({ keysData, cacheData })`; no `path` |
 | `moneroTs.createWalletKeys(config)` | `createKeysWallet(config)` |
 | `MoneroWalletFull`, `MoneroWalletKeys` | one class, `ZephyrWallet`, with `kind` `"full"` or `"keys"` |
-| `MoneroError` | `ZephyrWalletError` with a fixed `code` and `diagnostic`, no native text |
+| `MoneroError` | `ZephyrWalletError` with a fixed `code` and `diagnostic`, no native text; its public members are the constructor, `code`, `diagnostic`, `isCode`, `isDiagnostic` and `toEnvelope` |
 | `MoneroUtils.validateAddress(address, networkType)` | `validateAddress(address, networkType)` |
 | `LibraryUtils.setWorkerDistPath(path)` | `setWorkerDistPath(path)`, and `setWasmModuleUrl(location)` for the separate module |
 | `moneroTs.shutdown()` | `terminateWorker()` |

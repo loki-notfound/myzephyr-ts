@@ -37,6 +37,7 @@
  */
 import GenUtils from "./GenUtils";
 import ZephyrWalletError from "./ZephyrWalletError";
+import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { isWorkerId } from "./ZephyrLifecycleContract";
 
 /** Concurrent proxied constructions per SDK runtime (bounds the workers that construct at once). */
@@ -178,7 +179,7 @@ export class ZephyrWorkerChannel {
    */
   invoke(objectId: string | undefined, fnName: string, args: readonly unknown[]): Promise<unknown> {
     if (this.stateValue === "failed") return Promise.reject(workerFailed());
-    if (this.stateValue === "terminated") return Promise.reject(ZephyrWalletError.walletClosed());
+    if (this.stateValue === "terminated") return Promise.reject(WalletErrors.walletClosed());
     const randomObject = objectId === undefined;
     const target = randomObject ? GenUtils.getUUID() : objectId as string;
     const callbackId = GenUtils.getUUID();
@@ -208,7 +209,7 @@ export class ZephyrWorkerChannel {
    * Terminate the worker deliberately. Pending requests settle with reasonFactory(); callbacks and
    * objects are removed. Idempotent; a failed worker stays failed.
    */
-  terminate(reasonFactory: () => ZephyrWalletError = () => ZephyrWalletError.walletClosed()): void {
+  terminate(reasonFactory: () => ZephyrWalletError = () => WalletErrors.walletClosed()): void {
     if (this.stateValue !== "open") return;
     this.stateValue = "terminated";
     this.end(reasonFactory);
@@ -265,7 +266,7 @@ export class ZephyrWorkerChannel {
     const names = Object.getOwnPropertyNames(resp);
     if (names.length !== 1 || Object.getOwnPropertySymbols(resp).length !== 0 || Object.keys(resp).length !== 1) return malformed();
     if (names[0] === "result") return resolve((resp as { result: unknown }).result);
-    if (names[0] === "error") return reject(ZephyrWalletError.fromEnvelope((resp as { error: unknown }).error));
+    if (names[0] === "error") return reject(WalletErrors.fromEnvelope((resp as { error: unknown }).error));
     return malformed();
   }
 }
@@ -433,7 +434,7 @@ export class ZephyrWalletWorkers {
       channel.terminate(); // discard the construction worker at once (no further message); idempotent if it already ended
       release();
       if (aborted) throw constructionAborted();
-      throw err instanceof ZephyrWalletError ? err : ZephyrWalletError.fromUnknown("other", err);
+      throw err instanceof ZephyrWalletError ? err : WalletErrors.fromUnknown("other", err);
     }
   }
 
@@ -481,7 +482,7 @@ export class ZephyrWalletWorkers {
     this.gate.rejectAll(constructionAborted);
     for (const channel of Array.from(this.channels)) {
       if (!channel.isOpen()) continue;
-      channel.terminate(channel.role === "construction" ? constructionAborted : () => ZephyrWalletError.walletClosed());
+      channel.terminate(channel.role === "construction" ? constructionAborted : () => WalletErrors.walletClosed());
     }
   }
 

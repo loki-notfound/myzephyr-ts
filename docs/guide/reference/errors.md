@@ -55,57 +55,6 @@ static isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic;
 
 Whether a value is one of the diagnostics.
 
-### `unsupported`
-
-```ts signature
-static unsupported(diagnostic: ZephyrWalletErrorDiagnostic): ZephyrWalletError;
-```
-
-Creates an `UNSUPPORTED_CAPABILITY` error with the diagnostic. Used by the library.
-
-### `walletClosed`
-
-```ts signature
-static walletClosed(): ZephyrWalletError;
-```
-
-Creates a `WALLET_CLOSED` error. Used by the library.
-
-### `fromBridge`
-
-```ts signature
-static fromBridge(context: ZephyrNativeErrorContext, identifier: ZephyrBridgeErrorIdentifier): ZephyrWalletError;
-```
-
-Maps a fixed identifier of the native bridge, in a call context, to its error. Used by the library;
-its parameter types are not exported.
-
-### `fromBridgeResult`
-
-```ts signature
-static fromBridgeResult(context: ZephyrNativeErrorContext, result: unknown): ZephyrWalletError;
-```
-
-Maps a native result that reported a failure to its error; never throws. Used by the library.
-
-### `checkBridgeResult`
-
-```ts signature
-static checkBridgeResult<T>(context: ZephyrNativeErrorContext, result: T): T;
-```
-
-Throws the error of a native failure result, or returns the result unchanged. Used by the library.
-
-### `fromUnknown`
-
-```ts signature
-static fromUnknown(context: ZephyrNativeErrorContext, err: unknown): ZephyrWalletError;
-```
-
-Returns a `ZephyrWalletError` unchanged and maps any other value to the fixed error of its context
-(diagnostic `UNCLASSIFIED_ERROR`) without reading its message, stack, cause or fields. Used by the
-library.
-
 ### `toEnvelope`
 
 ```ts signature
@@ -115,22 +64,9 @@ toEnvelope(): ZephyrWalletErrorEnvelope;
 The plain object `{ type: "ZephyrWalletError", code, diagnostic? }` that crosses the worker boundary.
 Used by the library; the envelope type is not exported.
 
-### `isEnvelope`
-
-```ts signature
-static isEnvelope(value: unknown): value is ZephyrWalletErrorEnvelope;
-```
-
-Whether a received value is exactly a valid envelope. Used by the library.
-
-### `fromEnvelope`
-
-```ts signature
-static fromEnvelope(value: unknown): ZephyrWalletError;
-```
-
-Rebuilds an error from an envelope; anything that is not exactly a valid envelope becomes
-`MALFORMED_MESSAGE`/`MESSAGE_SHAPE`. Used by the library.
+The static helpers the library uses to create and map errors (`unsupported`, `walletClosed`,
+`fromBridge`, `fromBridgeResult`, `checkBridgeResult`, `fromUnknown`, `isEnvelope`, `fromEnvelope`) were
+members of the class in version `2.3.0-sec.2-ts.1`; they are internal now and no longer on the class.
 
 ## Error types
 

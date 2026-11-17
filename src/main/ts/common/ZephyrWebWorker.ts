@@ -9,6 +9,7 @@ import ZephyrDaemonListener from "../daemon/model/ZephyrDaemonListener";
 import ZephyrDaemonRpc from "../daemon/ZephyrDaemonRpc";
 import ZephyrError from "./ZephyrError";
 import ZephyrWalletError, { ZephyrWalletErrorDiagnostic } from "./ZephyrWalletError";
+import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { isWorkerId, lifecycleWorkerMethod, validateWorkerArgs } from "./ZephyrLifecycleContract";
 import { validateCreateConfig, validateOpenConfig } from "../wallet/model/ZephyrWalletCoreConfig";
 import ZephyrKeyImage from "../daemon/model/ZephyrKeyImage";
@@ -93,7 +94,7 @@ self.dispatchLifecycleMessage = async function(data: unknown) {
   const fail = (err: ZephyrWalletError) => postMessage([objectId, callbackId, {error: err.toEnvelope()}]);
   if (typeof fnName !== "string" || fnName.length === 0) return fail(new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE"));
   const method = lifecycleWorkerMethod(fnName);
-  if (method === undefined) return fail(ZephyrWalletError.unsupported("WORKER_FUNCTION")); // the name is not echoed
+  if (method === undefined) return fail(WalletErrors.unsupported("WORKER_FUNCTION")); // the name is not echoed
   const args = data.slice(3);
   let reserved = false;
   try {
@@ -103,19 +104,19 @@ self.dispatchLifecycleMessage = async function(data: unknown) {
       if (entry === undefined) {
         if (fnName === "isClosed") return postMessage([objectId, callbackId, {result: true}]);
         if (fnName === "close") return postMessage([objectId, callbackId, {result: undefined}]);
-        throw ZephyrWalletError.walletClosed();
+        throw WalletErrors.walletClosed();
       }
-      if (method.kinds === undefined || !method.kinds.includes(entry.kind)) throw ZephyrWalletError.unsupported(Object.prototype.hasOwnProperty.call(KIND_DIAGNOSTICS, fnName) ? KIND_DIAGNOSTICS[fnName] : "WALLET_KIND");
+      if (method.kinds === undefined || !method.kinds.includes(entry.kind)) throw WalletErrors.unsupported(Object.prototype.hasOwnProperty.call(KIND_DIAGNOSTICS, fnName) ? KIND_DIAGNOSTICS[fnName] : "WALLET_KIND");
     } else if (method.scope === "create") {
       validateConstructionMessage(fnName, args);
       if (self.WORKER_WALLETS.has(objectId) || self.WORKER_RESERVED_IDS.has(objectId)) throw new ZephyrWalletError("MALFORMED_MESSAGE", "DUPLICATE_WALLET_ID");
-      if (!firstMessage) throw ZephyrWalletError.unsupported("WORKER_FUNCTION"); // one construction per worker, as its first message
+      if (!firstMessage) throw WalletErrors.unsupported("WORKER_FUNCTION"); // one construction per worker, as its first message
       self.WORKER_RESERVED_IDS.add(objectId);
       reserved = true;
     }
     postMessage([objectId, callbackId, {result: await LIFECYCLE_IMPL[fnName](objectId, ...args)}]);
   } catch (err: any) {
-    fail(ZephyrWalletError.fromUnknown(method.errorContext, err)); // wallet errors pass unchanged; anything else gets a fixed code
+    fail(WalletErrors.fromUnknown(method.errorContext, err)); // wallet errors pass unchanged; anything else gets a fixed code
   } finally {
     if (reserved) self.WORKER_RESERVED_IDS.delete(objectId);
   }

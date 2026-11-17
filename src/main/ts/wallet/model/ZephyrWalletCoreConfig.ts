@@ -1,4 +1,5 @@
 import ZephyrWalletError, { ZephyrWalletErrorDiagnostic } from "../../common/ZephyrWalletError";
+import * as WalletErrors from "../../common/ZephyrWalletErrorMapping";
 import { isLookahead, isNetworkTypeNumber, isRestoreHeight, isWithinLookaheadLimit } from "../../common/ZephyrLifecycleContract";
 
 /**
@@ -136,21 +137,21 @@ function optionalLookahead(fields: Map<string, unknown>, key: string): number | 
 /** Shared checks for fields that are known but not supported. */
 function checkCommonFields(fields: Map<string, unknown>, allowed: Set<string>): void {
   for (const key of fields.keys()) {
-    if (UNSUPPORTED_FIELDS.has(key)) throw ZephyrWalletError.unsupported("CONFIG_FIELD");
+    if (UNSUPPORTED_FIELDS.has(key)) throw WalletErrors.unsupported("CONFIG_FIELD");
     if (!allowed.has(key)) throw invalid("UNKNOWN_FIELD");
   }
   const proxyToWorker = fields.get("proxyToWorker");
   if (proxyToWorker !== undefined && typeof proxyToWorker !== "boolean") throw invalid("FIELD_TYPE");
   const path = fields.get("path");
-  if (path !== undefined && path !== "") throw ZephyrWalletError.unsupported("FILE_PATH");
+  if (path !== undefined && path !== "") throw WalletErrors.unsupported("FILE_PATH");
   const server = fields.get("server");
-  if (server !== undefined && server !== "") throw ZephyrWalletError.unsupported("DAEMON_CONNECTION");
+  if (server !== undefined && server !== "") throw WalletErrors.unsupported("DAEMON_CONNECTION");
   const trusted = fields.get("isTrustedDaemon");
-  if (trusted === false) throw ZephyrWalletError.unsupported("UNTRUSTED_DAEMON");
+  if (trusted === false) throw WalletErrors.unsupported("UNTRUSTED_DAEMON");
   if (trusted !== undefined && trusted !== true) throw invalid("FIELD_TYPE");
   for (const [flag, diagnostic] of [["regtest", "REGTEST"], ["isMultisig", "MULTISIG"], ["saveCurrent", "SAVE_CURRENT"]] as const) {
     const value = fields.get(flag);
-    if (value === true) throw ZephyrWalletError.unsupported(diagnostic);
+    if (value === true) throw WalletErrors.unsupported(diagnostic);
     if (value !== undefined && value !== false) throw invalid("FIELD_TYPE");
   }
 }
@@ -192,8 +193,8 @@ export function validateCreateConfig(raw: unknown, keysOnly: boolean, expectedIn
   if (seed !== undefined && hasKeys) throw invalid("SEED_AND_KEYS");
   if (seedOffset !== undefined && intent !== "seed") throw invalid("SEED_OFFSET");
   if ((accountLookahead === undefined) !== (subaddressLookahead === undefined)) throw invalid("LOOKAHEAD_PAIR");
-  if (keysOnly && restoreHeight !== undefined) throw ZephyrWalletError.unsupported("KEYS_ONLY_RESTORE_HEIGHT");
-  if (keysOnly && accountLookahead !== undefined) throw ZephyrWalletError.unsupported("KEYS_ONLY_LOOKAHEAD");
+  if (keysOnly && restoreHeight !== undefined) throw WalletErrors.unsupported("KEYS_ONLY_RESTORE_HEIGHT");
+  if (keysOnly && accountLookahead !== undefined) throw WalletErrors.unsupported("KEYS_ONLY_LOOKAHEAD");
   if (accountLookahead !== undefined && subaddressLookahead !== undefined && !isWithinLookaheadLimit(accountLookahead, subaddressLookahead)) throw invalid("LOOKAHEAD_LIMIT");
 
   if (intent === "random") {

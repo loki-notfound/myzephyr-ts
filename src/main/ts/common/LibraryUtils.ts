@@ -2,6 +2,7 @@ import assert from "assert";
 import GenUtils from "./GenUtils";
 import ZephyrError from "./ZephyrError";
 import ZephyrWalletError from "./ZephyrWalletError";
+import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { isLogLevel, LIFECYCLE_NATIVE_EXPORTS, UNBUILT_BRIDGE_EXPORTS, UNBUILT_KEEPALIVE_EXPORTS } from "./ZephyrLifecycleContract";
 import { ZephyrWalletWorkerHandle, ZephyrWalletWorkers, ZephyrWorkerAccounting, ZephyrWorkerChannel, ZephyrWorkerLike } from "./ZephyrWalletWorkers";
 import ThreadPool from "./ThreadPool";
@@ -85,10 +86,10 @@ export default class LibraryUtils {
   static async setLogLevel(level) {
     if (!isLogLevel(level)) throw new ZephyrWalletError("INVALID_CONFIG", "LOG_LEVEL_RANGE"); // bridge int parameter
     LibraryUtils.LOG_LEVEL = level;
-    if (LibraryUtils.WASM_MODULE) ZephyrWalletError.checkBridgeResult("other", LibraryUtils.WASM_MODULE.set_log_level(level)); // "" or a fixed bridge identifier
+    if (LibraryUtils.WASM_MODULE) WalletErrors.checkBridgeResult("other", LibraryUtils.WASM_MODULE.set_log_level(level)); // "" or a fixed bridge identifier
     // forward to every open SDK-owned worker (utility, construction and wallet workers); the first failure is reported
     const results = await Promise.allSettled(LibraryUtils.WORKERS.openChannels().map((c) => c.invoke(undefined, "setLogLevel", [level])));
-    for (const r of results) if (r.status === "rejected") throw r.reason instanceof ZephyrWalletError ? r.reason : ZephyrWalletError.fromUnknown("other", r.reason);
+    for (const r of results) if (r.status === "rejected") throw r.reason instanceof ZephyrWalletError ? r.reason : WalletErrors.fromUnknown("other", r.reason);
   }
   
   /**
@@ -467,7 +468,7 @@ export default class LibraryUtils {
     try {
       return await LibraryUtils.getUtilityChannel().invoke(objectId, fnName, args === undefined ? [] : GenUtils.listify(args));
     } catch (e: any) {
-      throw e instanceof ZephyrWalletError ? e : ZephyrWalletError.fromEnvelope(undefined);
+      throw e instanceof ZephyrWalletError ? e : WalletErrors.fromEnvelope(undefined);
     }
   }
 
@@ -476,12 +477,12 @@ export default class LibraryUtils {
    * diagnostic). Any other error gets its context's fixed code; no message, stack or cause is posted.
    */
   static serializeError(err) {
-    return ZephyrWalletError.fromUnknown("other", err).toEnvelope();
+    return WalletErrors.fromUnknown("other", err).toEnvelope();
   }
 
   /** Rebuild a received worker error; anything but an exactly valid envelope is MALFORMED_MESSAGE. */
   protected static deserializeError(serializedErr) {
-    return ZephyrWalletError.fromEnvelope(serializedErr);
+    return WalletErrors.fromEnvelope(serializedErr);
   }
 
   /**
@@ -510,11 +511,11 @@ export default class LibraryUtils {
   
   protected static initWasmModule(wasmModule) {
     for (const name of UNBUILT_BRIDGE_EXPORTS.concat(UNBUILT_KEEPALIVE_EXPORTS)) {
-      if (wasmModule[name] === undefined) wasmModule[name] = function() { throw ZephyrWalletError.unsupported("NATIVE_EXPORT"); };
+      if (wasmModule[name] === undefined) wasmModule[name] = function() { throw WalletErrors.unsupported("NATIVE_EXPORT"); };
     }
     wasmModule.taskQueue = new ThreadPool(1);
     wasmModule.queueTask = async function(asyncFn) { return wasmModule.taskQueue.submit(asyncFn); }
-    if (LibraryUtils.LOG_LEVEL > 0) ZephyrWalletError.checkBridgeResult("other", wasmModule.set_log_level(LibraryUtils.LOG_LEVEL)); // apply log level set before load
+    if (LibraryUtils.LOG_LEVEL > 0) WalletErrors.checkBridgeResult("other", wasmModule.set_log_level(LibraryUtils.LOG_LEVEL)); // apply log level set before load
 
     // assign utilities to globalThis
     const HttpClient = typeof require !== 'undefined' ? require("./HttpClient").default : (globalThis as any).HttpClient;

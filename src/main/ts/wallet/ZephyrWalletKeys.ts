@@ -10,6 +10,7 @@ import ZephyrVersion from "../daemon/model/ZephyrVersion";
 import ZephyrWalletBase from "./ZephyrWalletBase";
 import ZephyrWalletConfig from "./model/ZephyrWalletConfig";
 import ZephyrWalletError from "../common/ZephyrWalletError";
+import * as WalletErrors from "../common/ZephyrWalletErrorMapping";
 import { checkAddressIndices } from "../common/ZephyrLifecycleContract";
 import { configFields, toCoreConfigJson, validateCreateConfig } from "./model/ZephyrWalletCoreConfig";
 import { ZephyrWorkerChannel } from "../common/ZephyrWalletWorkers";
@@ -111,7 +112,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
         
         // create wallet in wasm which invokes callback when done
         module.create_keys_wallet_random(coreConfigJson, (cppAddress: number | string) => {
-          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("create", cppAddress)); // fixed bridge identifier only
+          if (typeof cppAddress === "string") reject(WalletErrors.fromBridgeResult("create", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletKeys(cppAddress));
         });
       });
@@ -135,7 +136,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
 
         // create wallet in wasm which invokes callback when done
         module.create_keys_wallet_from_seed(coreConfigJson, (cppAddress: number | string) => {
-          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
+          if (typeof cppAddress === "string") reject(WalletErrors.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletKeys(cppAddress));
         });
       });
@@ -161,7 +162,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
         
         // create wallet in wasm which invokes callback when done
         module.create_keys_wallet_from_keys(coreConfigJson, (cppAddress: number | string) => {
-          if (typeof cppAddress === "string") reject(ZephyrWalletError.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
+          if (typeof cppAddress === "string") reject(WalletErrors.fromBridgeResult("restore", cppAddress)); // fixed bridge identifier only
           else resolve(new ZephyrWalletKeys(cppAddress));
         });
       });
@@ -171,7 +172,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
   static async getSeedLanguages(): Promise<string[]> {
     let module = await LibraryUtils.loadWasmModule();
     return module.queueTask(async () => {
-      return JSON.parse(ZephyrWalletError.checkBridgeResult("other", module.get_keys_wallet_seed_languages())).languages;
+      return JSON.parse(WalletErrors.checkBridgeResult("other", module.get_keys_wallet_seed_languages())).languages;
     });
   }
   
@@ -219,7 +220,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getVersion();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let versionStr = ZephyrWalletError.checkBridgeResult("other", this.module.get_version(this.cppAddress));
+      let versionStr = WalletErrors.checkBridgeResult("other", this.module.get_version(this.cppAddress));
       let versionJson = JSON.parse(versionStr);
       return new ZephyrVersion(versionJson.number, versionJson.isRelease);
     });
@@ -236,7 +237,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getSeed();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_seed(this.cppAddress)); // fixed bridge identifier on failure
+      let resp = WalletErrors.checkBridgeResult("other", this.module.get_seed(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -245,7 +246,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getSeedLanguage();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_seed_language(this.cppAddress)); // fixed bridge identifier on failure
+      let resp = WalletErrors.checkBridgeResult("other", this.module.get_seed_language(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -254,7 +255,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getPrivateSpendKey();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_private_spend_key(this.cppAddress)); // fixed bridge identifier on failure
+      let resp = WalletErrors.checkBridgeResult("other", this.module.get_private_spend_key(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -263,7 +264,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getPrivateViewKey();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_private_view_key(this.cppAddress)); // fixed bridge identifier on failure
+      let resp = WalletErrors.checkBridgeResult("other", this.module.get_private_view_key(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -272,7 +273,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getPublicViewKey();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_public_view_key(this.cppAddress)); // fixed bridge identifier on failure
+      let resp = WalletErrors.checkBridgeResult("other", this.module.get_public_view_key(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -281,7 +282,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getPublicSpendKey();
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = ZephyrWalletError.checkBridgeResult("other", this.module.get_public_spend_key(this.cppAddress)); // fixed bridge identifier on failure
+      let resp = WalletErrors.checkBridgeResult("other", this.module.get_public_spend_key(this.cppAddress)); // fixed bridge identifier on failure
       return resp ? resp : undefined;
     });
   }
@@ -291,7 +292,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getAddress(accountIdx, subaddressIdx);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return ZephyrWalletError.checkBridgeResult("other", this.module.get_address(this.cppAddress, accountIdx, subaddressIdx));
+      return WalletErrors.checkBridgeResult("other", this.module.get_address(this.cppAddress, accountIdx, subaddressIdx));
     });
   }
   
@@ -299,7 +300,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
     if (this.getWalletProxy()) return this.getWalletProxy().getAddressIndex(address);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      let resp = ZephyrWalletError.checkBridgeResult("address", this.module.get_address_index(this.cppAddress, address));
+      let resp = WalletErrors.checkBridgeResult("address", this.module.get_address_index(this.cppAddress, address));
       if (typeof resp !== "string" || resp.charAt(0) !== '{') throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
       return new ZephyrSubaddressInherited(JSON.parse(resp));
     });
@@ -338,7 +339,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
       await this.module.queueTask(async () => {
         return new Promise<void>((resolve, reject) => {
           this.module.close(this.cppAddress, false, listenerHandle, (errMsg) => { // saving handled external to webassembly
-            if (errMsg) reject(ZephyrWalletError.fromBridgeResult("close", errMsg)); // handle kept; close may be retried
+            if (errMsg) reject(WalletErrors.fromBridgeResult("close", errMsg)); // handle kept; close may be retried
             else {
               delete this.cppAddress;
               resolve();
@@ -372,7 +373,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
    * with NATIVE_ERROR/PASSWORD_STATE_UNKNOWN. Close does not use this check.
    */
   protected assertNotClosed() {
-    if (this._isClosed) throw ZephyrWalletError.walletClosed();
+    if (this._isClosed) throw WalletErrors.walletClosed();
     if (this.passwordStateUnknown) throw new ZephyrWalletError("NATIVE_ERROR", "PASSWORD_STATE_UNKNOWN");
   }
 
@@ -383,7 +384,7 @@ export class ZephyrWalletKeys extends ZephyrWalletBase {
    * cannot be stopped this way (UNSUPPORTED_CAPABILITY/TERMINATE).
    */
   terminateProxiedWorker(): void {
-    if (!this.walletProxy) throw ZephyrWalletError.unsupported("TERMINATE");
+    if (!this.walletProxy) throw WalletErrors.unsupported("TERMINATE");
     this._isClosed = true;
     this.walletProxy.terminateWorker();
   }
@@ -531,7 +532,7 @@ export class ZephyrWalletKeysProxy extends ZephyrWalletBase {
     try {
       return await this.channel.invoke(this.walletId, fnName, args === undefined ? [] : GenUtils.listify(args));
     } catch (e: any) {
-      throw e instanceof ZephyrWalletError ? e : ZephyrWalletError.fromEnvelope(undefined);
+      throw e instanceof ZephyrWalletError ? e : WalletErrors.fromEnvelope(undefined);
     }
   }
 }

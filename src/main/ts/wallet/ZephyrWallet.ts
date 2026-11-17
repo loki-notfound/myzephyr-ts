@@ -5,7 +5,9 @@
  */
 import LibraryUtils from "../common/LibraryUtils";
 import HttpClient from "../common/HttpClient";
-import ZephyrWalletError, { ZephyrWalletErrorDiagnostic, ZephyrWalletErrorCode, ZephyrNativeErrorContext } from "../common/ZephyrWalletError";
+import ZephyrWalletError, { ZephyrWalletErrorDiagnostic, ZephyrWalletErrorCode } from "../common/ZephyrWalletError";
+import * as WalletErrors from "../common/ZephyrWalletErrorMapping";
+import type { ZephyrNativeErrorContext } from "../common/ZephyrWalletErrorMapping";
 import { checkAddressIndices } from "../common/ZephyrLifecycleContract";
 import ZephyrUtils from "../common/ZephyrUtils";
 import ZephyrWalletConfig from "./model/ZephyrWalletConfig";
@@ -93,7 +95,7 @@ type InnerWallet = ZephyrWalletFull | ZephyrWalletKeys;
 
 /** Wallet errors pass unchanged; any other failure gets its context's fixed code (its text is never read). */
 function toWalletError(context: ZephyrNativeErrorContext, err: unknown): ZephyrWalletError {
-  return ZephyrWalletError.fromUnknown(context, err);
+  return WalletErrors.fromUnknown(context, err);
 }
 
 function proxyFlag(raw: unknown): boolean {
@@ -105,6 +107,9 @@ function proxyFlag(raw: unknown): boolean {
   }
   return true;
 }
+
+/** Wraps an inner wallet in the facade; set by the class's static block (module-internal, not a member of the class). */
+let wrapWallet: (inner: InnerWallet, kind: "full" | "keys", proxied: boolean, daemon?: ZephyrDaemonRoute) => ZephyrWallet;
 
 /**
  * Wallet facade. Supported methods delegate to the inherited wallet; representative
@@ -129,16 +134,18 @@ export class ZephyrWallet {
     this.proxied = proxied;
   }
 
-  /** @internal */
-  static wrap(inner: InnerWallet, kind: "full" | "keys", proxied: boolean, daemon?: ZephyrDaemonRoute): ZephyrWallet {
-    const wallet = new ZephyrWallet(inner, kind, proxied);
-    wallet.daemon = daemon;
-    return wallet;
+  static {
+    // the construction functions below wrap an inner wallet; the class declares no member for it
+    wrapWallet = (inner, kind, proxied, daemon) => {
+      const wallet = new ZephyrWallet(inner, kind, proxied);
+      wallet.daemon = daemon;
+      return wallet;
+    };
   }
 
   /** WALLET_CLOSED, with the diagnostic WALLET_TERMINATED after a forced stop. */
   private closedError(): ZephyrWalletError {
-    return this.terminated ? new ZephyrWalletError("WALLET_CLOSED", "WALLET_TERMINATED") : ZephyrWalletError.walletClosed();
+    return this.terminated ? new ZephyrWalletError("WALLET_CLOSED", "WALLET_TERMINATED") : WalletErrors.walletClosed();
   }
 
   private async call<T>(context: ZephyrNativeErrorContext, fn: () => Promise<T>): Promise<T> {
@@ -152,7 +159,7 @@ export class ZephyrWallet {
   }
 
   private full(keysOnlyDiagnostic: ZephyrWalletErrorDiagnostic): ZephyrWalletFull {
-    if (this.kind !== "full") throw ZephyrWalletError.unsupported(keysOnlyDiagnostic);
+    if (this.kind !== "full") throw WalletErrors.unsupported(keysOnlyDiagnostic);
     return this.inner as ZephyrWalletFull;
   }
 
@@ -261,7 +268,7 @@ export class ZephyrWallet {
    * runs in the caller's own context cannot be interrupted.
    */
   async terminate(): Promise<void> {
-    if (!this.proxied) throw ZephyrWalletError.unsupported("TERMINATE");
+    if (!this.proxied) throw WalletErrors.unsupported("TERMINATE");
     if (this.terminated || this.closeSettled) return;
     this.terminated = true;
     this.closed = true;
@@ -329,7 +336,7 @@ export class ZephyrWallet {
   async sync(startHeight?: number): Promise<ZephyrWalletSyncResult> {
     const wallet = this.full("KEYS_ONLY_DAEMON");
     if (startHeight !== undefined && (typeof startHeight !== "number" || !Number.isSafeInteger(startHeight) || startHeight < 0)) throw new ZephyrWalletError("INVALID_CONFIG", "SYNC_START_HEIGHT");
-    if (arguments.length > 1) throw ZephyrWalletError.unsupported("SYNC");
+    if (arguments.length > 1) throw WalletErrors.unsupported("SYNC");
     const result = await this.call("sync", () => wallet.sync(startHeight));
     return { numBlocksFetched: result.getNumBlocksFetched(), receivedMoney: result.getReceivedMoney() };
   }
@@ -369,7 +376,7 @@ export class ZephyrWallet {
       checkAddressIndices(args[1], args.length === 3 ? args[2] : 0);
       return this.call("other", () => wallet.getAssetBalance(unlocked, args[0] as string, args[1] as number, args.length === 3 ? args[2] as number : undefined));
     }
-    if (typeof args[0] === "number") throw ZephyrWalletError.unsupported("BALANCE"); // the inherited asset-less (account, subaddress) scalar
+    if (typeof args[0] === "number") throw WalletErrors.unsupported("BALANCE"); // the inherited asset-less (account, subaddress) scalar
     throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
   }
 
@@ -618,12 +625,12 @@ export class ZephyrWallet {
 
   // ----------------------- representative unsupported calls -----------------------
 
-  async startSyncing(): Promise<never> { throw ZephyrWalletError.unsupported("SYNC"); }
-  async createTxs(): Promise<never> { throw ZephyrWalletError.unsupported("TRANSACTIONS"); }
-  async addListener(): Promise<never> { throw ZephyrWalletError.unsupported("LISTENERS"); }
-  async getReserveProofWallet(): Promise<never> { throw ZephyrWalletError.unsupported("RESERVE_PROOF"); }
-  async rescanSpent(): Promise<never> { throw ZephyrWalletError.unsupported("DAEMON_SETTINGS"); }
-  async importKeyImages(): Promise<never> { throw ZephyrWalletError.unsupported("DAEMON_SETTINGS"); }
+  async startSyncing(): Promise<never> { throw WalletErrors.unsupported("SYNC"); }
+  async createTxs(): Promise<never> { throw WalletErrors.unsupported("TRANSACTIONS"); }
+  async addListener(): Promise<never> { throw WalletErrors.unsupported("LISTENERS"); }
+  async getReserveProofWallet(): Promise<never> { throw WalletErrors.unsupported("RESERVE_PROOF"); }
+  async rescanSpent(): Promise<never> { throw WalletErrors.unsupported("DAEMON_SETTINGS"); }
+  async importKeyImages(): Promise<never> { throw WalletErrors.unsupported("DAEMON_SETTINGS"); }
 }
 
 /**
@@ -636,8 +643,8 @@ function splitServer(raw: unknown, keysOnly: boolean): { rest: unknown; daemon: 
   const server = fields.server;
   delete fields.server;
   if (server === undefined || server === "") return { rest: fields, daemon: undefined };
-  if (keysOnly) throw ZephyrWalletError.unsupported("KEYS_ONLY_DAEMON");
-  if (fields.isTrustedDaemon === false) throw ZephyrWalletError.unsupported("UNTRUSTED_DAEMON");
+  if (keysOnly) throw WalletErrors.unsupported("KEYS_ONLY_DAEMON");
+  if (fields.isTrustedDaemon === false) throw WalletErrors.unsupported("UNTRUSTED_DAEMON");
   return { rest: fields, daemon: parseDaemonAddress(server) };
 }
 
@@ -649,7 +656,7 @@ async function createFull(raw: unknown, expectedIntent: ZephyrWalletCreateIntent
   const config = new ZephyrWalletConfig(Object.assign({}, rest as object, { proxyToWorker: proxied }) as Partial<ZephyrWalletConfig>);
   try {
     const wallet = await ZephyrWalletFull.createWallet(config, signal, daemon);
-    return ZephyrWallet.wrap(wallet, "full", proxied, daemon);
+    return wrapWallet(wallet, "full", proxied, daemon);
   } catch (err) {
     throw toWalletError(validated.intent === "random" ? "create" : "restore", err);
   }
@@ -688,7 +695,7 @@ export async function createKeysWallet(raw: unknown, options?: ZephyrWalletConst
   const config = new ZephyrWalletConfig(Object.assign({}, raw as object, { proxyToWorker: proxied }) as Partial<ZephyrWalletConfig>);
   try {
     const wallet = await ZephyrWalletKeys.createWallet(config, signal);
-    return ZephyrWallet.wrap(wallet, "keys", proxied);
+    return wrapWallet(wallet, "keys", proxied);
   } catch (err) {
     throw toWalletError(validated.intent === "random" ? "create" : "restore", err);
   }
@@ -702,7 +709,7 @@ export async function openWalletData(raw: unknown, options?: ZephyrWalletConstru
   const proxied = proxyFlag(rest);
   try {
     const wallet = await ZephyrWalletFull.openWallet({ networkType: validated.networkType, password: validated.password, keysData: validated.keysData, cacheData: validated.cacheData, proxyToWorker: proxied }, signal, daemon);
-    return ZephyrWallet.wrap(wallet, "full", proxied, daemon);
+    return wrapWallet(wallet, "full", proxied, daemon);
   } catch (err) {
     throw toWalletError("open", err);
   }

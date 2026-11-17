@@ -6,6 +6,7 @@
 import GenUtils from "../../main/ts/common/GenUtils";
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import ZephyrWalletError, { bridgePasswordErrorOf } from "../../main/ts/common/ZephyrWalletError";
+import * as WalletErrors from "../../main/ts/common/ZephyrWalletErrorMapping";
 import { ZephyrWorkerChannel, ZephyrWorkerLike } from "../../main/ts/common/ZephyrWalletWorkers";
 import type { ZephyrWallet, ZephyrNetworkGuardReport } from "../../main/ts/wallet/ZephyrWallet";
 import * as Sdk from "../../main/ts/index";
@@ -458,12 +459,12 @@ export class ModuleInstrumentation {
   nativeChangePassword(inner: any, oldPassword: string, newPassword: string): Promise<void> {
     const module = this.module;
     return module.queueTask(async () => {
-      if (inner._isClosed) throw ZephyrWalletError.walletClosed();
+      if (inner._isClosed) throw WalletErrors.walletClosed();
       const result = await new Promise<unknown>((resolve) => module.change_wallet_password(inner.cppAddress, oldPassword, newPassword, (r: unknown) => resolve(r)));
       if (result === undefined) return;
       const parsed = bridgePasswordErrorOf(result);
       if (parsed.state !== "unchanged") throw new ZephyrWalletError("NATIVE_ERROR", parsed.state === "changed" ? "PASSWORD_CHANGED_WITH_ERROR" : "PASSWORD_STATE_UNKNOWN");
-      throw ZephyrWalletError.fromBridge("changePassword", parsed.identifier);
+      throw WalletErrors.fromBridge("changePassword", parsed.identifier);
     });
   }
 }
@@ -496,7 +497,7 @@ export class DirectInstrumentation implements Instrumentation {
     try {
       await this.i.nativeChangePassword(innerOf(wallet), oldPassword, newPassword);
     } catch (err) {
-      throw ZephyrWalletError.fromUnknown("changePassword", err); // wallet errors unchanged; no text is read
+      throw WalletErrors.fromUnknown("changePassword", err); // wallet errors unchanged; no text is read
     }
   }
   async handlePresent(wallet: ZephyrWallet): Promise<boolean> { return innerOf(wallet).cppAddress !== undefined; }
@@ -637,7 +638,7 @@ export class WorkerInstrumentation implements Instrumentation {
   async nativeChangePassword(wallet: ZephyrWallet, oldPassword: string, newPassword: string): Promise<void> {
     const r = await postRawWorkerMessage([newMessageId(), "__testNativeChangePassword", newMessageId(), walletIdOf(wallet), oldPassword, newPassword], 120000, wallet);
     if (!r.replied) throw new Error("test worker did not reply");
-    if (r.error) throw ZephyrWalletError.fromEnvelope(r.error);
+    if (r.error) throw WalletErrors.fromEnvelope(r.error);
   }
   async handlePresent(wallet: ZephyrWallet): Promise<boolean> {
     const t = this.trackedOf(channelOf(wallet).worker);
