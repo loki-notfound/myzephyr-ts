@@ -79,6 +79,142 @@ export interface ZephyrWalletConstructionOptions {
   readonly signal?: AbortSignal;
 }
 
+/*
+ * The five construction configurations below list exactly the fields the run-time validation accepts for
+ * each function, with the types it accepts; the validation stays the authority and rejects everything else
+ * with the same fixed errors whatever the declared type (so a JavaScript caller gets them too). Not
+ * declared, although the validation accepts them, are fields that it accepts with one value only and that
+ * then have no effect: path "", isTrustedDaemon true (every daemon is trusted by the fixed core), regtest,
+ * isMultisig and saveCurrent false, and in the object form of server the fields trusted true and an empty
+ * username, password, proxyUri or proxy. A field whose value is undefined counts as absent at run time.
+ * Value domains and rules between fields are checked at run time only (for example the seed's word count,
+ * the key format, the lookahead limit, which keys a keys restore needs).
+ */
+
+/** Configuration of createRandomWallet. */
+export interface ZephyrRandomWalletConfig {
+  /** required */
+  readonly networkType: ZephyrNetworkTypeInput;
+  /** encrypts the wallet bytes; default "" */
+  readonly password?: string;
+  /** the seed language, for example "English" */
+  readonly language?: string;
+  /** a pair with subaddressLookahead: integers, each and their product at most 20,000 */
+  readonly accountLookahead?: number;
+  readonly subaddressLookahead?: number;
+  /** default true: the wallet runs in its own worker */
+  readonly proxyToWorker?: boolean;
+  /** an optional daemon, set right after the construction: an address ("" means none), or an object with the address in uri */
+  readonly server?: string | { readonly uri: string };
+}
+
+/** Configuration of restoreWalletFromSeed. */
+export interface ZephyrSeedWalletConfig {
+  /** required */
+  readonly networkType: ZephyrNetworkTypeInput;
+  /** encrypts the wallet bytes; default "" */
+  readonly password?: string;
+  /** required: 12, 13, 24 or 25 words */
+  readonly seed: string;
+  /** an optional passphrase that changes the derived wallet */
+  readonly seedOffset?: string;
+  /** the height the first sync starts from; default 0 */
+  readonly restoreHeight?: number;
+  /** a pair with subaddressLookahead: integers, each and their product at most 20,000 */
+  readonly accountLookahead?: number;
+  readonly subaddressLookahead?: number;
+  /** default true: the wallet runs in its own worker */
+  readonly proxyToWorker?: boolean;
+  /** an optional daemon, set right after the construction: an address ("" means none), or an object with the address in uri */
+  readonly server?: string | { readonly uri: string };
+}
+
+/**
+ * Configuration of restoreWalletFromKeys: at least one key field. An address with a private view key and
+ * no spend key restores a view-only wallet; a private spend key alone derives the rest.
+ */
+export interface ZephyrKeysWalletConfig {
+  /** required */
+  readonly networkType: ZephyrNetworkTypeInput;
+  /** encrypts the wallet bytes; default "" */
+  readonly password?: string;
+  /** the standard address; required with privateViewKey */
+  readonly primaryAddress?: string;
+  /** 64 hexadecimal characters */
+  readonly privateViewKey?: string;
+  /** 64 hexadecimal characters */
+  readonly privateSpendKey?: string;
+  /** the height the first sync starts from; default 0 */
+  readonly restoreHeight?: number;
+  /** the seed language, for example "English" */
+  readonly language?: string;
+  /** a pair with subaddressLookahead: integers, each and their product at most 20,000 */
+  readonly accountLookahead?: number;
+  readonly subaddressLookahead?: number;
+  /** default true: the wallet runs in its own worker */
+  readonly proxyToWorker?: boolean;
+  /** an optional daemon, set right after the construction: an address ("" means none), or an object with the address in uri */
+  readonly server?: string | { readonly uri: string };
+}
+
+/**
+ * Configuration of createKeysWallet, one of three forms chosen by the fields present: random (no recovery
+ * field), from a seed, or from keys (at least one key field). A keys-only wallet takes no restore height,
+ * lookahead or daemon; a password is accepted, but a keys-only wallet has no wallet bytes it would encrypt.
+ */
+export type ZephyrKeysOnlyWalletConfig =
+  | {
+    readonly networkType: ZephyrNetworkTypeInput;
+    readonly password?: string;
+    /** the seed language, for example "English" */
+    readonly language?: string;
+    readonly proxyToWorker?: boolean;
+    readonly seed?: undefined;
+    readonly seedOffset?: undefined;
+    readonly primaryAddress?: undefined;
+    readonly privateViewKey?: undefined;
+    readonly privateSpendKey?: undefined;
+  }
+  | {
+    readonly networkType: ZephyrNetworkTypeInput;
+    readonly password?: string;
+    /** 12, 13, 24 or 25 words */
+    readonly seed: string;
+    readonly seedOffset?: string;
+    readonly proxyToWorker?: boolean;
+    readonly language?: undefined;
+    readonly primaryAddress?: undefined;
+    readonly privateViewKey?: undefined;
+    readonly privateSpendKey?: undefined;
+  }
+  | {
+    readonly networkType: ZephyrNetworkTypeInput;
+    readonly password?: string;
+    readonly primaryAddress?: string;
+    readonly privateViewKey?: string;
+    readonly privateSpendKey?: string;
+    /** the seed language, for example "English" */
+    readonly language?: string;
+    readonly proxyToWorker?: boolean;
+    readonly seed?: undefined;
+    readonly seedOffset?: undefined;
+  };
+
+/** Configuration of openWalletData: the bytes getData returned and the password they were saved with. */
+export interface ZephyrOpenWalletConfig {
+  /** required: the network the bytes were created for */
+  readonly networkType: ZephyrNetworkTypeInput;
+  /** default "" */
+  readonly password?: string;
+  /** required, not empty */
+  readonly keysData: Uint8Array;
+  readonly cacheData?: Uint8Array;
+  /** default true: the wallet runs in its own worker */
+  readonly proxyToWorker?: boolean;
+  /** an optional daemon, set right after the construction: an address ("" means none), or an object with the address in uri */
+  readonly server?: string | { readonly uri: string };
+}
+
 /** Validate construction options before any native or worker call. */
 function constructionSignal(options: unknown): AbortSignal | undefined {
   if (options === undefined) return undefined;
@@ -174,10 +310,13 @@ export class ZephyrWallet {
     const wallet = this.full("KEYS_ONLY_NETWORK_TYPE"); // the inherited keys-only wallet has no network type getter
     return this.call("other", async () => Number(await wallet.getNetworkType()));
   }
-  async getSeed(): Promise<string> { return this.call("other", () => this.inner.getSeed()); }
-  async getSeedLanguage(): Promise<string> { return this.call("other", () => this.inner.getSeedLanguage()); }
+  /** The 25-word seed; undefined for a view-only wallet (full or keys-only). */
+  async getSeed(): Promise<string | undefined> { return this.call("other", () => this.inner.getSeed()); }
+  /** The seed language, for example "English"; undefined for a view-only wallet (full or keys-only). */
+  async getSeedLanguage(): Promise<string | undefined> { return this.call("other", () => this.inner.getSeedLanguage()); }
   async getPrivateViewKey(): Promise<string> { return this.call("other", () => this.inner.getPrivateViewKey()); }
-  async getPrivateSpendKey(): Promise<string> { return this.call("other", () => this.inner.getPrivateSpendKey()); }
+  /** The private spend key; undefined for a view-only wallet (full or keys-only). */
+  async getPrivateSpendKey(): Promise<string | undefined> { return this.call("other", () => this.inner.getPrivateSpendKey()); }
   async getPublicViewKey(): Promise<string> { return this.call("other", () => this.inner.getPublicViewKey()); }
   async getPublicSpendKey(): Promise<string> { return this.call("other", () => this.inner.getPublicSpendKey()); }
   async isViewOnly(): Promise<boolean> { return this.call("other", () => this.inner.isViewOnly()); }

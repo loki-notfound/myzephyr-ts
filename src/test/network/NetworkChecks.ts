@@ -15,7 +15,7 @@ import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import HttpClient from "../../main/ts/common/HttpClient";
 import http from "http";
 import { parseDaemonAddress } from "../../main/ts/common/ZephyrDaemonAddress";
-import { CheckFailure, CheckResult, codeOf, diagnosticOf, expect, expectCode, randomPassword, withDeadline } from "../lifecycle/LifecycleChecks";
+import { CheckFailure, CheckResult, codeOf, diagnosticOf, expect, expectCode, present, randomPassword, withDeadline } from "../lifecycle/LifecycleChecks";
 import { GUARD_LEDGER, channelOf, combinedGuard, installGuardLedger, readGuardInto } from "../lifecycle/testSupport";
 
 /** Thrown by a check whose optional configuration is absent: the check is reported as not run. */
@@ -434,7 +434,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
   async function measuredFresh(checkId: string, target: string, label: string, notes: string[], save: boolean): Promise<void> {
     const password = randomPassword();
     const helper = await F.createRandomWallet({ networkType: 0, password, server: target, proxyToWorker: proxy });
-    const seedText = await helper.getSeed();
+    const seedText = present(await helper.getSeed(), "seed");
     const daemonHeight = await helper.getDaemonHeight();
     await helper.close();
     const restoreHeight = daemonHeight - FRESH_SYNC_BLOCKS;

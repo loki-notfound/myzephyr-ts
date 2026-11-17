@@ -60,6 +60,12 @@ export function expect(condition: boolean, what: string): void {
   if (!condition) throw new CheckFailure(what);
 }
 
+/** A getter's value where the test needs one (a seed, a spend key of a wallet that has it); undefined fails the check. */
+export function present<T>(value: T | undefined, what: string): T {
+  if (value === undefined) throw new CheckFailure(what + " resolved to undefined");
+  return value;
+}
+
 export function codeOf(err: unknown): string {
   if (err !== null && typeof err === "object" && "code" in err) return String((err as { code: unknown }).code);
   return "NO_CODE:" + (err instanceof Error ? err.name : typeof err);
@@ -205,6 +211,109 @@ export async function waitWorkerMonitor(live: number, timeoutMs: number): Promis
   return m;
 }
 
+/**
+ * The getters of ZephyrWallet, called offline (no daemon is configured, so no request is sent): what each
+ * resolves to is described by describeGetterResult and pinned per wallet kind in GETTER_RESULTS (check C40).
+ */
+export const GETTER_CALLS: ReadonlyArray<[string, (w: F.ZephyrWallet) => unknown]> = [
+  ["isClosed", (w) => w.isClosed()],
+  ["getPrimaryAddress", (w) => w.getPrimaryAddress()],
+  ["getAddress(0,0)", (w) => w.getAddress(0, 0)],
+  ["getAddress(0,1)", (w) => w.getAddress(0, 1)],
+  ["getNetworkType", (w) => w.getNetworkType()],
+  ["getSeed", (w) => w.getSeed()],
+  ["getSeedLanguage", (w) => w.getSeedLanguage()],
+  ["getPrivateViewKey", (w) => w.getPrivateViewKey()],
+  ["getPrivateSpendKey", (w) => w.getPrivateSpendKey()],
+  ["getPublicViewKey", (w) => w.getPublicViewKey()],
+  ["getPublicSpendKey", (w) => w.getPublicSpendKey()],
+  ["isViewOnly", (w) => w.isViewOnly()],
+  ["getRestoreHeight", (w) => w.getRestoreHeight()],
+  ["getData", (w) => w.getData()],
+  ["getDaemonConnection", (w) => w.getDaemonConnection()],
+  ["isConnectedToDaemon", (w) => w.isConnectedToDaemon()],
+  ["getDaemonHeight", (w) => w.getDaemonHeight()],
+  ["isDaemonSynced", (w) => w.isDaemonSynced()],
+  ["getHeight", (w) => w.getHeight()],
+  ["getBalance", (w) => w.getBalance()],
+  ["getUnlockedBalance", (w) => w.getUnlockedBalance()],
+  ["getAccounts", (w) => w.getAccounts()],
+  ["getAccount(0)", (w) => w.getAccount(0)],
+  ["getSubaddresses(0)", (w) => w.getSubaddresses(0)],
+  ["getSubaddress(0,0)", (w) => w.getSubaddress(0, 0)],
+  ["getTxs", (w) => w.getTxs()],
+  ["getTransfers", (w) => w.getTransfers()]
+];
+
+/** Shape of a getter's result, without its value: a kind of string, undefined, a number, a structure, or the rejection's pair. */
+export async function describeGetterResult(call: () => unknown): Promise<string> {
+  let v: unknown;
+  try { v = await call(); } catch (err) { return "rejects " + codeOf(err) + diagnosticOf(err); }
+  if (v === undefined) return "undefined";
+  if (v === null) return "null";
+  if (typeof v === "string") {
+    if (v === "") return "empty string";
+    if (/^[0-9a-f]{64}$/.test(v)) return "key";
+    if (/^ZEPH[0-9A-Za-z]{90,}$/.test(v)) return "address";
+    if (/^[a-z]+( [a-z]+){24}$/.test(v)) return "seed";
+    if (/^[A-Z][a-z]+$/.test(v)) return "language";
+    return "string";
+  }
+  if (typeof v === "boolean") return String(v);
+  if (typeof v === "number") return Number.isSafeInteger(v) ? "integer" : "number";
+  if (v instanceof Map) return "map";
+  if (Array.isArray(v)) return "array of " + v.length;
+  if (typeof v === "object") return "object {" + Object.keys(v as object).sort().join(",") + "}";
+  return typeof v;
+}
+
+/** The getters whose declarations say string | undefined (or ZephyrDaemonConnection | undefined): the only ones that resolve to undefined. */
+export const GETTERS_WITH_UNDEFINED: readonly string[] = ["getSeed", "getSeedLanguage", "getPrivateSpendKey", "getDaemonConnection"];
+
+const FULL_KINDS = ["full-random", "full-seed", "full-keys", "full-spend-key", "full-view-only", "opened-full", "opened-view-only"];
+const KEYS_ONLY_KINDS = ["keys-only-random", "keys-only-seed", "keys-only-keys", "keys-only-spend-key", "keys-only-view-only"];
+const VIEW_ONLY_KINDS = ["full-view-only", "opened-view-only", "keys-only-view-only"];
+/** One getter's result per kind: one for full wallets, one for keys-only wallets, optionally another for every view-only kind. */
+function getterRow(full: string, keysOnly: string, viewOnly?: string): Readonly<Record<string, string>> {
+  const row: Record<string, string> = {};
+  for (const k of FULL_KINDS) row[k] = full;
+  for (const k of KEYS_ONLY_KINDS) row[k] = keysOnly;
+  if (viewOnly !== undefined) for (const k of VIEW_ONLY_KINDS) row[k] = viewOnly;
+  return row;
+}
+const KEYS_ONLY = (diagnostic: string) => "rejects UNSUPPORTED_CAPABILITY/" + diagnostic;
+
+/** Results per getter and wallet kind (check C40), as observed offline in Node.js and browsers, direct and in workers. */
+export const GETTER_RESULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "isClosed": getterRow("false", "false"),
+  "getPrimaryAddress": getterRow("address", "address"),
+  "getAddress(0,0)": getterRow("address", "address"),
+  "getAddress(0,1)": getterRow("address", "address"),
+  "getNetworkType": getterRow("integer", KEYS_ONLY("KEYS_ONLY_NETWORK_TYPE")),
+  "getSeed": getterRow("seed", "seed", "undefined"),
+  "getSeedLanguage": getterRow("language", "language", "undefined"),
+  "getPrivateViewKey": getterRow("key", "key"),
+  "getPrivateSpendKey": getterRow("key", "key", "undefined"),
+  "getPublicViewKey": getterRow("key", "key"),
+  "getPublicSpendKey": getterRow("key", "key"),
+  "isViewOnly": getterRow("false", "false", "true"),
+  "getRestoreHeight": getterRow("integer", KEYS_ONLY("KEYS_ONLY_RESTORE_HEIGHT")),
+  "getData": getterRow("object {cache,keys}", KEYS_ONLY("KEYS_ONLY_DATA")),
+  "getDaemonConnection": getterRow("undefined", "undefined"),
+  "isConnectedToDaemon": getterRow("false", KEYS_ONLY("KEYS_ONLY_DAEMON")),
+  "getDaemonHeight": getterRow("rejects DAEMON_ERROR/DAEMON_NOT_CONNECTED", KEYS_ONLY("KEYS_ONLY_DAEMON")),
+  "isDaemonSynced": getterRow("rejects DAEMON_ERROR/DAEMON_NOT_CONNECTED", KEYS_ONLY("KEYS_ONLY_DAEMON")),
+  "getHeight": getterRow("integer", KEYS_ONLY("KEYS_ONLY_DAEMON")),
+  "getBalance": getterRow("map", KEYS_ONLY("KEYS_ONLY_DAEMON")),
+  "getUnlockedBalance": getterRow("map", KEYS_ONLY("KEYS_ONLY_DAEMON")),
+  "getAccounts": getterRow("array of 1", KEYS_ONLY("KEYS_ONLY_ACCOUNTS")),
+  "getAccount(0)": getterRow("object {balance,index,label,primaryAddress,subaddressCount,unlockedBalance}", KEYS_ONLY("KEYS_ONLY_ACCOUNTS")),
+  "getSubaddresses(0)": getterRow("array of 1", KEYS_ONLY("KEYS_ONLY_ACCOUNTS")),
+  "getSubaddress(0,0)": getterRow("object {accountIndex,address,balance,index,isUsed,label,numUnspentOutputs,unlockedBalance}", KEYS_ONLY("KEYS_ONLY_ACCOUNTS")),
+  "getTxs": getterRow("array of 0", KEYS_ONLY("KEYS_ONLY_HISTORY")),
+  "getTransfers": getterRow("array of 0", KEYS_ONLY("KEYS_ONLY_HISTORY"))
+};
+
 export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<LifecycleReport> {
   const log = opts.log ?? (() => undefined);
   const proxy = opts.proxyToWorker;
@@ -260,11 +369,11 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
   await check("C02", "Generated recovery material is captured privately (memory only)", async (notes) => {
     expect(base !== undefined, "base wallet");
     const w = base as F.ZephyrWallet;
-    seed = await w.getSeed();
+    seed = present(await w.getSeed(), "seed");
     expect(seed.split(" ").length === 25, "25-word seed");
     expect((await w.getSeedLanguage()) === "English", "seed language");
     pubView = await w.getPublicViewKey(); pubSpend = await w.getPublicSpendKey();
-    privView = await w.getPrivateViewKey(); privSpend = await w.getPrivateSpendKey();
+    privView = await w.getPrivateViewKey(); privSpend = present(await w.getPrivateSpendKey(), "private spend key");
     for (const k of [pubView, pubSpend, privView, privSpend]) expect(/^[0-9a-f]{64}$/.test(k), "64-hex key");
     expect(!(await w.isViewOnly()), "not view-only");
     notes.push("seed 25 words, four 64-hex keys held in memory only");
@@ -1955,6 +2064,44 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     try { Relay.parseBridgeDiscard("1"); expect(false, "discard result accepted"); } catch (err) { expect(codeOf(err) === "NATIVE_ERROR", "a malformed discard result rejected"); }
     for (const t of ["", token.toUpperCase(), 7]) { try { Relay.checkRelayToken(t); expect(false, "token accepted"); } catch (err) { expect(codeOf(err) + diagnosticOf(err) === "INVALID_CONFIG/RELAY_TOKEN", "worker token " + String(t) + " rejected"); } }
     notes.push(total + " deviations rejected by the bridge and worker parsers");
+  });
+
+  await check("C40", "Getter results per wallet kind: full, view-only and spend-key-only wallets, keys-only wallets of each form and wallets opened from bytes; each getter resolves to a string, undefined or a fixed rejection as GETTER_RESULTS states, and only the getters declared string | undefined resolve to undefined", async (notes) => {
+    const kinds: Array<[string, () => Promise<F.ZephyrWallet>]> = [
+      ["full-random", () => F.createRandomWallet({ networkType: 0, password: pw, proxyToWorker: proxy })],
+      ["full-seed", () => F.restoreWalletFromSeed({ networkType: 0, password: pw, seed, proxyToWorker: proxy })],
+      ["full-keys", () => F.restoreWalletFromKeys({ networkType: 0, password: pw, primaryAddress: address, privateViewKey: privView, privateSpendKey: privSpend, proxyToWorker: proxy })],
+      ["full-spend-key", () => F.restoreWalletFromKeys({ networkType: 0, password: pw, privateSpendKey: privSpend, proxyToWorker: proxy })],
+      ["full-view-only", () => F.restoreWalletFromKeys({ networkType: 0, password: pw, primaryAddress: address, privateViewKey: privView, proxyToWorker: proxy })],
+      ["opened-full", async () => { const w = await F.restoreWalletFromSeed({ networkType: 0, password: pw, seed, proxyToWorker: proxy }); const d = await w.getData(); await w.close(); return F.openWalletData({ networkType: 0, password: pw, keysData: d.keys, cacheData: d.cache, proxyToWorker: proxy }); }],
+      ["opened-view-only", async () => { const w = await F.restoreWalletFromKeys({ networkType: 0, password: pw, primaryAddress: address, privateViewKey: privView, proxyToWorker: proxy }); const d = await w.getData(); await w.close(); return F.openWalletData({ networkType: 0, password: pw, keysData: d.keys, cacheData: d.cache, proxyToWorker: proxy }); }],
+      ["keys-only-random", () => F.createKeysWallet({ networkType: 0, proxyToWorker: proxy })],
+      ["keys-only-seed", () => F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy })],
+      ["keys-only-keys", () => F.createKeysWallet({ networkType: 0, primaryAddress: address, privateViewKey: privView, privateSpendKey: privSpend, proxyToWorker: proxy })],
+      ["keys-only-spend-key", () => F.createKeysWallet({ networkType: 0, privateSpendKey: privSpend, proxyToWorker: proxy })],
+      ["keys-only-view-only", () => F.createKeysWallet({ networkType: 0, primaryAddress: address, privateViewKey: privView, proxyToWorker: proxy })]
+    ];
+    const observed: Record<string, Record<string, string>> = {};
+    let differences = 0;
+    for (const [kind, make] of kinds) {
+      const w = await make();
+      const row: Record<string, string> = {};
+      for (const [getter, call] of GETTER_CALLS) row[getter] = await describeGetterResult(() => call(w));
+      await w.close();
+      observed[kind] = row;
+      for (const [getter] of GETTER_CALLS) {
+        const want = GETTER_RESULTS[getter][kind];
+        if (row[getter] !== want) { differences++; notes.push("DIFFERS " + kind + " " + getter + ": " + row[getter] + " (expected " + want + ")"); }
+      }
+    }
+    for (const [getter] of GETTER_CALLS) notes.push("getter " + getter + ": " + kinds.map(([kind]) => kind + "=" + observed[kind][getter]).join(" "));
+    // a getter that resolved to undefined for some kind must be declared string | undefined, and only such a getter
+    for (const [getter] of GETTER_CALLS) {
+      const undef = kinds.some(([kind]) => observed[kind][getter] === "undefined");
+      expect(undef === GETTERS_WITH_UNDEFINED.includes(getter), getter + ": resolves to undefined " + undef + ", declared with undefined " + GETTERS_WITH_UNDEFINED.includes(getter));
+    }
+    expect(differences === 0, differences + " getter results differ from GETTER_RESULTS");
+    notes.push(kinds.length + " wallet kinds x " + GETTER_CALLS.length + " getters as expected; undefined only from " + GETTERS_WITH_UNDEFINED.join(", "));
   });
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close

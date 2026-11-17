@@ -16,9 +16,11 @@ A `ZephyrWallet` is one of two kinds, shown by its read-only `kind` property:
   diagnostic.
 
 A full wallet restored from an address and a private view key is **view-only**: `isViewOnly()`
-returns `true`, and building or relaying rejects with `UNSUPPORTED_CAPABILITY`/`VIEW_ONLY_TX`. With
-the release package, `getSeed()` and `getPrivateSpendKey()` of a view-only wallet resolve without a
-value (`undefined`), although their declared type is `string`; check `isViewOnly()` first.
+returns `true`, and building or relaying rejects with `UNSUPPORTED_CAPABILITY`/`VIEW_ONLY_TX`.
+`getSeed()`, `getSeedLanguage()` and `getPrivateSpendKey()` of a view-only wallet (full or keys-only)
+resolve to `undefined`, and their declared type is `Promise<string | undefined>`. The
+[reference](reference/wallet.md#what-the-getters-return) lists what every getter returns for every kind
+of wallet.
 
 ## Network types
 
@@ -60,7 +62,7 @@ import { createRandomWallet } from "@loki-notfound/zephyr-ts";
 
 const wallet = await createRandomWallet({ networkType: "mainnet", password: "a long passphrase" });
 console.log("kind:", wallet.kind, "in a worker:", wallet.proxied);
-console.log("seed words:", (await wallet.getSeed()).split(" ").length, await wallet.getSeedLanguage());
+console.log("seed words:", (await wallet.getSeed() ?? "").split(" ").length, await wallet.getSeedLanguage());
 console.log("restore height:", await wallet.getRestoreHeight());
 await wallet.close();
 ```
@@ -139,7 +141,9 @@ derive addresses or to check recovery material without the cost of a full wallet
 import { createKeysWallet, createRandomWallet } from "@loki-notfound/zephyr-ts";
 
 const full = await createRandomWallet({ networkType: "mainnet", password: "a long passphrase" });
-const keys = await createKeysWallet({ networkType: "mainnet", seed: await full.getSeed() });
+const seed = await full.getSeed(); // undefined only for a view-only wallet
+if (seed === undefined) throw new Error("a view-only wallet has no seed");
+const keys = await createKeysWallet({ networkType: "mainnet", seed });
 console.log("kind:", keys.kind);
 console.log("same address:", (await keys.getPrimaryAddress()) === (await full.getPrimaryAddress()));
 console.log("subaddress 0/1 equal:", (await keys.getAddress(0, 1)) === (await full.getAddress(0, 1)));

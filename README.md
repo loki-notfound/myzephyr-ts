@@ -69,7 +69,8 @@ The package entry (`src/main/ts/index.ts`) exports:
   (mainnet, testnet, stagenet), and `openWalletData` to open a full wallet from its keys and
   cache bytes; no file paths;
 * on a wallet (`ZephyrWallet`): primary address and subaddresses, seed and seed language, private and public keys,
-  view-only state; for full wallets also the network type, restore height, `getData` (keys and
+  view-only state (a view-only wallet has no seed, seed language or private spend key: those three
+  getters resolve to `undefined` there, as their declarations say); for full wallets also the network type, restore height, `getData` (keys and
   cache bytes) and `changePassword`; `close` (idempotent, retried after a failed close) and, for a
   wallet in its own worker, `terminate` (a forced stop that does not wait; unsaved state is lost);
 * read-only daemon access for full wallets: a daemon address at construction (`server`) or with

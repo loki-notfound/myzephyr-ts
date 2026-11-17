@@ -15,7 +15,7 @@ import * as F from "../../main/ts/index";
 import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import { useTestModule } from "./testSupport";
-import { randomPassword } from "./LifecycleChecks";
+import { present, randomPassword } from "./LifecycleChecks";
 
 const HARD_CAP_PER_VALUE = 400;
 const HARD_CAP_PRODUCT = 20000;
@@ -60,7 +60,7 @@ async function main(): Promise<number> {
   let t = process.hrtime.bigint();
   const w = await F.createRandomWallet({ networkType: 0, password: pw, proxyToWorker: false, ...lookahead });
   result.createMs = ms(t); result.memAfterCreate = mem(); result.heapAfterCreate = heap();
-  const seed = await w.getSeed();
+  const seed = present(await w.getSeed(), "seed");
   const address = await w.getPrimaryAddress();
   const lastMajor = (major ?? 50) - 1; const lastMinor = (minor ?? 200) - 1;
   const edge = await w.getAddress(lastMajor, lastMinor); // inside the lookahead table

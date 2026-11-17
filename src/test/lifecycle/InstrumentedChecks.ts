@@ -8,7 +8,7 @@
 import * as F from "../../main/ts/index";
 import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
-import { CheckFailure, CheckResult, LifecycleCheckOptions, LifecycleReport, brokenChecksumSeed, codeOf, copyBytes, diagnosticOf, expect, expectCode, openingPasswords, randomPassword, scanText, waitUntil, waitWorkerMonitor, withDeadline, workerMonitor } from "./LifecycleChecks";
+import { CheckFailure, CheckResult, LifecycleCheckOptions, LifecycleReport, brokenChecksumSeed, codeOf, copyBytes, diagnosticOf, expect, expectCode, openingPasswords, present, randomPassword, scanText, waitUntil, waitWorkerMonitor, withDeadline, workerMonitor } from "./LifecycleChecks";
 import { DirectInstrumentation, Instrumentation, InstrumentationState, WorkerInstrumentation, channelOf, combinedGuard, innerOf, installGuardLedger, newMessageId, postRawWorkerMessage, walletIdOf } from "./testSupport";
 import HttpClient from "../../main/ts/common/HttpClient";
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
@@ -351,8 +351,8 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     const marker = "Zq-INJECT-" + randomPassword().substring(0, 10);
     const w = await open();
     await hooks.target(w);
-    const seed = await w.getSeed();
-    const spend = await w.getPrivateSpendKey();
+    const seed = present(await w.getSeed(), "seed");
+    const spend = present(await w.getPrivateSpendKey(), "private spend key");
     const view = await w.getPrivateViewKey();
     const secrets = [marker, pw, seed.split(" ").slice(0, 3).join(" "), spend, view];
     const leaks: string[] = [];
@@ -580,8 +580,8 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
   await check("T10", "Lookahead limit: over-limit and invalid pairs reject before dispatch with no native call, handle or allocation in facade, direct and raw worker paths", async (notes) => {
     const w = await open();
     await hooks.target(w);
-    const seedText = await w.getSeed();
-    const spend = await w.getPrivateSpendKey();
+    const seedText = present(await w.getSeed(), "seed");
+    const spend = present(await w.getPrivateSpendKey(), "private spend key");
     await hooks.resetCounters();
     const before = await hooks.state();
     const startedBefore = LibraryUtils.getWorkerAccounting().workersStarted;
@@ -728,7 +728,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     const live = await open();
     await hooks.target(live);
     for (let i = 0; i < 3; i++) await live.getData(); // warm-up
-    const seedText = await live.getSeed(); // also warm-up: the first seed call lazily builds the core's word lists (about 2.5 MB, once per instance)
+    const seedText = present(await live.getSeed(), "seed"); // also warm-up: the first seed call lazily builds the core's word lists (about 2.5 MB, once per instance)
     const aux = await F.createRandomWallet({ networkType: 0, password: pw, proxyToWorker: proxy }); // supplies a spend key of another wallet
     const otherSpend = await aux.getPrivateSpendKey();
     await aux.close();
@@ -845,7 +845,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
       expect(HttpClient.daemonRouteCount() === routesBefore, "the direct wallet's daemon route was released with its close");
     }
     const t = await open();
-    const seedText = await t.getSeed();
+    const seedText = present(await t.getSeed(), "seed");
     await t.close();
     if (!proxy) await hooks.resetCounters();
     await hooks.armNext({ fail: { "error.daemon": 1 }, kind: { "error.daemon": 2 } });

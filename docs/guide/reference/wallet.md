@@ -16,6 +16,37 @@ constructor is private. Every method that returns a promise rejects with a
 - Account and subaddress indices are integers from 0 to 2^32-1 (`INVALID_CONFIG`/`ADDRESS_INDEX_RANGE`).
 - Results are frozen plain objects and arrays; amounts are `bigint` in atomic units.
 
+## What the getters return
+
+Tested offline for every kind of wallet (check `C40` of the repository's lifecycle suite, in Node.js and
+in a browser, directly and in workers). Only `getSeed`, `getSeedLanguage`, `getPrivateSpendKey` and
+`getDaemonConnection` can resolve to `undefined`, and their declarations say so. Kinds: full wallets
+created at random, restored from a seed, from keys with a spend key, from a spend key alone, opened from
+bytes; view-only wallets (an address and a view key, full, opened from bytes, or keys-only); keys-only
+wallets of each form.
+
+| Getter | Full wallet | View-only full wallet | Keys-only wallet | View-only keys-only wallet |
+|---|---|---|---|---|
+| `getPrimaryAddress`, `getAddress` | address | address | address | address |
+| `getSeed` | 25 words | `undefined` | 25 words | `undefined` |
+| `getSeedLanguage` | language | `undefined` | language | `undefined` |
+| `getPrivateViewKey` | key | key | key | key |
+| `getPrivateSpendKey` | key | `undefined` | key | `undefined` |
+| `getPublicViewKey`, `getPublicSpendKey` | key | key | key | key |
+| `isViewOnly` | `false` | `true` | `false` | `true` |
+| `getNetworkType` | number | number | rejects `KEYS_ONLY_NETWORK_TYPE` | rejects `KEYS_ONLY_NETWORK_TYPE` |
+| `getRestoreHeight` | number | number | rejects `KEYS_ONLY_RESTORE_HEIGHT` | rejects `KEYS_ONLY_RESTORE_HEIGHT` |
+| `getData` | bytes | bytes | rejects `KEYS_ONLY_DATA` | rejects `KEYS_ONLY_DATA` |
+| `getHeight`, `getBalance`, `getUnlockedBalance`, `isConnectedToDaemon` | value | value | rejects `KEYS_ONLY_DAEMON` | rejects `KEYS_ONLY_DAEMON` |
+| `getDaemonHeight`, `isDaemonSynced` without a daemon | rejects `DAEMON_NOT_CONNECTED` | rejects `DAEMON_NOT_CONNECTED` | rejects `KEYS_ONLY_DAEMON` | rejects `KEYS_ONLY_DAEMON` |
+| `getDaemonConnection` without a daemon | `undefined` | `undefined` | `undefined` | `undefined` |
+| `getAccounts`, `getAccount`, `getSubaddresses`, `getSubaddress` | value | value | rejects `KEYS_ONLY_ACCOUNTS` | rejects `KEYS_ONLY_ACCOUNTS` |
+| `getTxs`, `getTransfers` | value | value | rejects `KEYS_ONLY_HISTORY` | rejects `KEYS_ONLY_HISTORY` |
+| `isClosed` | `false` until closed | `false` until closed | `false` until closed | `false` until closed |
+
+A key is 64 hexadecimal characters; every rejection in the table is `UNSUPPORTED_CAPABILITY` with the
+named diagnostic, except `DAEMON_ERROR`/`DAEMON_NOT_CONNECTED`.
+
 ## Properties
 
 ### `kind`
@@ -151,20 +182,21 @@ Rejects with: `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_NETWORK_TYPE`. Guide:
 ### `getSeed`
 
 ```ts signature
-getSeed(): Promise<string>;
+getSeed(): Promise<string | undefined>;
 ```
 
-The 25-word seed. Full and keys-only wallets. A view-only wallet has no seed; with the release package
-the promise resolves to `undefined` in that case. Guide:
+The 25-word seed. Full and keys-only wallets; `undefined` for a view-only wallet, which has no seed.
+Guide:
 [Creating a random wallet](../02-wallets.md#creating-a-random-wallet).
 
 ### `getSeedLanguage`
 
 ```ts signature
-getSeedLanguage(): Promise<string>;
+getSeedLanguage(): Promise<string | undefined>;
 ```
 
-The language of the seed, for example `"English"`. Full and keys-only wallets.
+The language of the seed, for example `"English"`. Full and keys-only wallets; `undefined` for a
+view-only wallet.
 
 ### `getPrivateViewKey`
 
@@ -178,11 +210,11 @@ The private view key, 64 hexadecimal characters. Full and keys-only wallets. Gui
 ### `getPrivateSpendKey`
 
 ```ts signature
-getPrivateSpendKey(): Promise<string>;
+getPrivateSpendKey(): Promise<string | undefined>;
 ```
 
-The private spend key, 64 hexadecimal characters. Full and keys-only wallets. A view-only wallet has
-none; with the release package the promise resolves to `undefined` in that case. Guide:
+The private spend key, 64 hexadecimal characters. Full and keys-only wallets; `undefined` for a
+view-only wallet, which has none. Guide:
 [Restoring from keys](../02-wallets.md#restoring-from-keys).
 
 ### `getPublicViewKey`

@@ -13,6 +13,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import * as F from "../../main/ts/index";
+import { present } from "./LifecycleChecks";
 import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
 
 /** Accounts and subaddresses of a wallet: per account, its subaddresses' addresses and labels in index order. */
@@ -90,14 +91,14 @@ async function exportPhase(dir: string): Promise<Record<string, unknown>> {
   const meta = readMeta(dir);
   const pw = (): string => crypto.randomBytes(16).toString("hex");
   const a = await F.createRandomWallet({ networkType: 0, password: pw(), proxyToWorker: false });
-  const aSeed = await a.getSeed();
+  const aSeed = present(await a.getSeed(), "seed");
   const pa = pw();
   const a2 = await F.restoreWalletFromSeed({ networkType: 0, password: pa, seed: aSeed, restoreHeight: 222222, proxyToWorker: false });
   await saveWallet(dir, meta, a2, { id: "sdk-mainnet-seed", origin: "sdk", networkType: 0, password: pa, seed: aSeed, address: await a2.getPrimaryAddress(), restoreHeight: await a2.getRestoreHeight() });
   await a2.close();
   const pr = pw();
   const r = await F.createRandomWallet({ networkType: 0, password: pr, proxyToWorker: false });
-  await saveWallet(dir, meta, r, { id: "sdk-mainnet-random", origin: "sdk", networkType: 0, password: pr, seed: await r.getSeed(), address: await r.getPrimaryAddress(), restoreHeight: await r.getRestoreHeight() });
+  await saveWallet(dir, meta, r, { id: "sdk-mainnet-random", origin: "sdk", networkType: 0, password: pr, seed: present(await r.getSeed(), "seed"), address: await r.getPrimaryAddress(), restoreHeight: await r.getRestoreHeight() });
   await r.close(); await a.close();
   // accounts, subaddresses and labels: created, changed and cleared here, read and extended by the reference library
   const pc = pw();
@@ -109,11 +110,11 @@ async function exportPhase(dir: string): Promise<Record<string, unknown>> {
   await c.createSubaddress(1, testLabel("cleared"));
   await c.setSubaddressLabel(0, 1, testLabel("changed"));
   await c.setSubaddressLabel(1, 3, "");
-  await saveWallet(dir, meta, c, { id: "sdk-mainnet-accounts", origin: "sdk", networkType: 0, password: pc, seed: await c.getSeed(), address: await c.getPrimaryAddress(), restoreHeight: await c.getRestoreHeight(), accounts: await accountsRecord(c) });
+  await saveWallet(dir, meta, c, { id: "sdk-mainnet-accounts", origin: "sdk", networkType: 0, password: pc, seed: present(await c.getSeed(), "seed"), address: await c.getPrimaryAddress(), restoreHeight: await c.getRestoreHeight(), accounts: await accountsRecord(c) });
   await c.close();
   const pt = pw();
   const t = await F.createRandomWallet({ networkType: 1, password: pt, proxyToWorker: false });
-  await saveWallet(dir, meta, t, { id: "sdk-testnet-random", origin: "sdk", networkType: 1, password: pt, seed: await t.getSeed(), address: await t.getPrimaryAddress(), restoreHeight: await t.getRestoreHeight() });
+  await saveWallet(dir, meta, t, { id: "sdk-testnet-random", origin: "sdk", networkType: 1, password: pt, seed: present(await t.getSeed(), "seed"), address: await t.getPrimaryAddress(), restoreHeight: await t.getRestoreHeight() });
   await t.close();
   fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 1), { mode: 0o600 });
   return { exported: meta.filter((m) => m.origin === "sdk").map((m) => m.id) };

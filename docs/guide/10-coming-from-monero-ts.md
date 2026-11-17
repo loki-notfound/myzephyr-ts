@@ -20,7 +20,9 @@ reshaped, and what is not ported.
   `getDaemonHeight`, `isConnectedToDaemon`, `setDaemonConnection`, `sync`, `changePassword`,
   `close`, `getAccounts`, `getAccount`, `createAccount`, `getSubaddresses`, `getSubaddress`,
   `createSubaddress`, `setSubaddressLabel`, `getAddressIndex`, `getTxs`, `getTransfers`, `getTx`.
-  Their arguments and results differ in many cases (below).
+  Their arguments and results differ in many cases (below). `getSeed`, `getSeedLanguage` and
+  `getPrivateSpendKey` are declared `Promise<string | undefined>`: a view-only wallet has no seed and
+  no spend key.
 - **Amounts** are `bigint` in atomic units, 10^12 per coin.
 - **The construction configuration** keeps the field names of `MoneroWalletConfig` that it supports:
   `networkType`, `password`, `seed`, `seedOffset`, `primaryAddress`, `privateViewKey`,

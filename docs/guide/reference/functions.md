@@ -92,10 +92,13 @@ function createKeysWallet(raw: unknown, options?: ZephyrWalletConstructionOption
 ```
 
 Creates a keys-only wallet: random without recovery fields, from a `seed` (with an optional
-`seedOffset`), or from keys, chosen by the fields present. It has no password, restore height,
-lookahead, daemon or bytes. Accepted fields: `networkType`, `seed`, `seedOffset`, `primaryAddress`,
-`privateViewKey`, `privateSpendKey`, `language`, `proxyToWorker`, and `password` (accepted; a
-keys-only wallet has no password).
+`seedOffset`), or from keys, chosen by the fields present
+([`ZephyrKeysOnlyWalletConfig`](types.md#zephyrkeysonlywalletconfig), a union of the three forms). It
+has no password, restore height, lookahead, daemon or bytes. Accepted fields: `networkType`, `seed`,
+`seedOffset`, `primaryAddress`, `privateViewKey`, `privateSpendKey`, `language`, `proxyToWorker`, and
+`password` (accepted; a keys-only wallet has no password). A `server` of `""` passes the validation, but
+the construction then rejects with `NATIVE_ERROR`/`UNCLASSIFIED_ERROR`; the type does not declare
+`server`.
 
 Rejects with: `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON` for a non-empty `server`,
 `KEYS_ONLY_RESTORE_HEIGHT` for `restoreHeight`, `KEYS_ONLY_LOOKAHEAD` for a lookahead; the seed and key
