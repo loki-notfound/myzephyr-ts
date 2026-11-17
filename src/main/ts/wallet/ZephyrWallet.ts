@@ -855,7 +855,11 @@ export async function openWalletData(config: ZephyrOpenWalletConfig, options?: Z
   }
 }
 
-/** Validate an address for a network type; rejects with INVALID_ADDRESS. */
+/**
+ * Validate an address for a network type with the core's parser: an address it does not accept for that
+ * network (or an empty one) rejects with INVALID_ADDRESS; a network type outside the three with
+ * INVALID_CONFIG/NETWORK_TYPE.
+ */
 export async function validateAddress(address: string, networkType: ZephyrNetworkTypeInput, proxyToWorker = true): Promise<void> {
   if (typeof address !== "string" || address.length === 0) throw new ZephyrWalletError("INVALID_ADDRESS", "ADDRESS_TYPE");
   const net = networkType === "mainnet" ? 0 : networkType === "testnet" ? 1 : networkType === "stagenet" ? 2 : networkType;
@@ -906,7 +910,7 @@ export async function getNetworkGuardReport(): Promise<ZephyrNetworkGuardReport>
  * zephyr.worker.js beside the browser entry, which a bundler emits and rewrites), a file path in
  * Node (default: the file in the package). Without an argument the default is restored.
  */
-export function setWorkerDistPath(path: string): void {
+export function setWorkerDistPath(path?: string): void {
   LibraryUtils.setWorkerDistPath(path);
 }
 

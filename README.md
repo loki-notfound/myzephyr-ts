@@ -101,8 +101,9 @@ The package entry (`src/main/ts/index.ts`) exports:
   `ZephyrConversionDestinationInput`, `ZephyrConversionBuild`, `ZephyrPreparedTransfer`,
   `ZephyrPreparedConversion`, `ZephyrRelayResult`, `ZephyrRelayedTx` and `ZephyrRelayOutcome` (below);
 * `validateAddress`, `ZephyrWalletError` (a fixed code and an optional fixed diagnostic; no
-  native or daemon text, no secrets), `setWorkerDistPath`, `setWasmModuleUrl` and
-  `terminateWorker`;
+  native or daemon text, no secrets; the constructor, `code`, `diagnostic`, `isCode`, `isDiagnostic`
+  and `toEnvelope`), `setWorkerDistPath`, `setWasmModuleUrl` and `terminateWorker` (both setters
+  restore their default when called without an argument);
 * the types `ZephyrWalletData`, `ZephyrDaemonConnection`, `ZephyrWalletSyncResult`,
   `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, the five construction configurations
   above, `ZephyrAssetBalances` (the map by

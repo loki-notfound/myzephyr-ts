@@ -21,8 +21,10 @@ import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalances";
  *   recorded for it, and no asset when the core recorded none (absent stays absent);
  * - the core reports no fee asset; feeAsset is the asset of the outgoing transfer (fees are paid in
  *   the source asset) and absent for a transaction without an outgoing transfer;
- * - outgoing amounts, fees and conversion amounts are the core's own computation and are not proven
- *   on real data (no transaction has been sent from a test wallet).
+ * - outgoing amounts, fees and conversion amounts are the core's own computation. On real data (the
+ *   mainnet test of 2026-11-15 with a funded test wallet) outgoing transfers with their destinations, the
+ *   fees paid and conversions with their burnt and minted amounts were read as the transactions stated
+ *   them; own transactions in the pool and failed ones are tested with constructed records only.
  *
  * Text stored in the wallet or derived from the chain (destination addresses as the sender's wallet
  * stored them) is untrusted: the bridge writes an address only if it has the form of an address, and
@@ -68,7 +70,10 @@ export interface ZephyrWalletTransfer {
   readonly confirmations: number;
 }
 
-/** Source and destination of a conversion, as far as the core reports them (unproven on real data). */
+/**
+ * Source and destination of a conversion, as far as the core reports them (on real data: the four
+ * conversions relayed on mainnet on 2026-11-15).
+ */
 export interface ZephyrTxConversion {
   readonly sourceAsset: string;
   readonly destinationAsset: string;

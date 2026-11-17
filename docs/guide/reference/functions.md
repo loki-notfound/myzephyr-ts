@@ -154,14 +154,13 @@ Guide: [Validating an address](../02-wallets.md#validating-an-address).
 ### `setWorkerDistPath`
 
 ```ts signature
-function setWorkerDistPath(path: string): void;
+function setWorkerDistPath(path?: string): void;
 ```
 
 Sets where the wallet worker script is loaded from: a URL in the browser (default: the
 `zephyr.worker.js` beside the browser entry, which a bundler emits and rewrites), a file path in Node.js
-(default: the file in the package). Call it before the first construction. The worker script must have
-the page's origin. The declaration comment says that calling it without an argument restores the
-default, but the declared parameter is required.
+(default: the file in the package). Without an argument (or with `undefined` or `""`) the default is
+restored. Call it before the first construction. The worker script must have the page's origin.
 
 Throws nothing documented; a wrong location shows at the next construction (`NATIVE_ERROR`/
 `WORKER_FAILED`).

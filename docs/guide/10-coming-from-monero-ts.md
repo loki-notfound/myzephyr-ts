@@ -43,7 +43,7 @@ reshaped, and what is not ported.
 | `MoneroWalletFull`, `MoneroWalletKeys` | one class, `ZephyrWallet`, with `kind` `"full"` or `"keys"` |
 | `MoneroError` | `ZephyrWalletError` with a fixed `code` and `diagnostic`, no native text; its public members are the constructor, `code`, `diagnostic`, `isCode`, `isDiagnostic` and `toEnvelope` |
 | `MoneroUtils.validateAddress(address, networkType)` | `validateAddress(address, networkType)` |
-| `LibraryUtils.setWorkerDistPath(path)` | `setWorkerDistPath(path)`, and `setWasmModuleUrl(location)` for the separate module |
+| `LibraryUtils.setWorkerDistPath(path)` | `setWorkerDistPath(path?)` (no argument: the default), and `setWasmModuleUrl(location?)` for the separate module |
 | `moneroTs.shutdown()` | `terminateWorker()` |
 | `MoneroNetworkType.MAINNET` | `"mainnet"` or `0` |
 | `getBalance(accountIdx?, subaddressIdx?)`: one `bigint` | `getBalance()`: a map by asset; `getBalance(accountIdx)`: a map by subaddress index; `getBalance(asset, accountIdx, subaddressIdx?)`: one `bigint` |

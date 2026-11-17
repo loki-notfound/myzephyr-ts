@@ -2118,6 +2118,26 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     notes.push(kinds.length + " wallet kinds x " + GETTER_CALLS.length + " getters as expected; undefined only from " + GETTERS_WITH_UNDEFINED.join(", "));
   });
 
+  await check("C41", "setWorkerDistPath without an argument (or with undefined) restores the default worker location; a location set before is restored afterwards", async (notes) => {
+    const before = LibraryUtils.WORKER_DIST_PATH;
+    const restored = (LibraryUtils as unknown as { prefixWindowsPath(p: string): string }).prefixWindowsPath(LibraryUtils.WORKER_DIST_PATH_DEFAULT);
+    try {
+      F.setWorkerDistPath("/elsewhere/zephyr.worker.js");
+      expect(LibraryUtils.WORKER_DIST_PATH !== restored, "an explicit location replaces the default");
+      F.setWorkerDistPath();
+      expect(LibraryUtils.WORKER_DIST_PATH === restored, "no argument restores the default");
+      F.setWorkerDistPath("/elsewhere/zephyr.worker.js");
+      F.setWorkerDistPath(undefined);
+      expect(LibraryUtils.WORKER_DIST_PATH === restored, "undefined restores the default");
+    } finally {
+      F.setWorkerDistPath(before === restored ? undefined : before);
+    }
+    expect(LibraryUtils.WORKER_DIST_PATH === before, "the run's own location is in place again");
+    // a new location retires the utility worker: start it again, with the module, as it was before this check
+    if (proxy) await F.validateAddress(address, "mainnet", true);
+    notes.push("explicit, none, undefined: default restored twice; the run's location " + (before === restored ? "(the default)" : "(set by the runner)") + " back in place");
+  });
+
   await check("C42", "A worker's module from its parent only: without it WASM_MODULE_UNAVAILABLE; after a message it could not receive in the place of the module message WASM_MODULE_REJECTED; such a message after another message or after the module changes nothing (the module state of this context is restored afterwards)", async (notes) => {
     const L = LibraryUtils as unknown as { WASM_COMPILED: unknown; WASM_COMPILED_VALUE: unknown; WASM_SHARED_REQUIRED: boolean; WASM_SHARED_REFUSED: boolean };
     const saved = { compiled: L.WASM_COMPILED, value: L.WASM_COMPILED_VALUE, required: L.WASM_SHARED_REQUIRED, refused: L.WASM_SHARED_REFUSED };
