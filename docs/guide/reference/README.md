@@ -65,6 +65,8 @@ only.
 | `ZephyrWalletErrorCode` | type | [ZephyrWalletErrorCode](errors.md#zephyrwalleterrorcode) |
 | `ZephyrWalletErrorDiagnostic` | type | [ZephyrWalletErrorDiagnostic](errors.md#zephyrwalleterrordiagnostic) |
 
-The declarations also contain names that the entry does not export, such as `createWallet` and
-`getNetworkGuardReport` in the wallet module; they serve the repository's tests and are not part of
-the package's surface.
+The declaration files also contain names that the entry does not export, such as `createWallet` and
+`getNetworkGuardReport` in the wallet module and the parsers and worker data shapes beside the result
+types; they serve the library and the repository's tests and are not part of the package's surface.
+The changes of the declared surface since the release are listed in
+[docs/CHANGES.md](../../CHANGES.md).

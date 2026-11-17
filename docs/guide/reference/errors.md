@@ -66,7 +66,8 @@ Used by the library; the envelope type is not exported.
 
 The static helpers the library uses to create and map errors (`unsupported`, `walletClosed`,
 `fromBridge`, `fromBridgeResult`, `checkBridgeResult`, `fromUnknown`, `isEnvelope`, `fromEnvelope`) were
-members of the class in version `2.3.0-sec.2-ts.1`; they are internal now and no longer on the class.
+members of the class in version `2.3.0-sec.2-ts.1`; they are internal now and no longer on the class
+([docs/CHANGES.md](../../CHANGES.md)).
 
 ## Error types
 

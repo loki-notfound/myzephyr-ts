@@ -121,6 +121,8 @@ on a plain `http://` origin other than `localhost`) with `NATIVE_ERROR`/`WASM_MO
 This detects a wrong file next to the JavaScript; it is not a signature.
 
 Calls outside this surface reject with `UNSUPPORTED_CAPABILITY` before any native code runs.
+The changes of the declared surface since the release `2.3.0-sec.2-ts.1` are listed, with what a
+caller has to change, in [docs/CHANGES.md](docs/CHANGES.md).
 
 ### Accounts and subaddresses
 
