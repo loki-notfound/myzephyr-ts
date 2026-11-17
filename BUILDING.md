@@ -300,6 +300,47 @@ PASS or FAIL per check, the browser and system it detected and a short result bl
 forwards a daemon under `/rpc` of the same origin, it also offers an optional, read-only online step
 (connect, height, a new wallet at that height and its sync). The platform tests never use it.
 
+## The guide and its site
+
+The user guide is Markdown in `docs/guide/`, readable on GitHub as it is. Its examples are checked
+against an installed package:
+
+    bin/check_guide.sh <directory with node_modules/@loki-notfound/zephyr-ts>
+
+type-checks every TypeScript block of the guide under `strict` (a block may opt out only with a
+`no-check: <reason>` marker, which the check counts and prints), runs the blocks marked `run` in Node.js
+under `consumers/node/offlineGuard.cjs` (each must exit with status 0 and attempt no network access),
+checks that every declaration in the API reference appears in the package's shipped declarations, and
+that the reference names exactly the package's exports, the public members of `ZephyrWallet` and
+`ZephyrWalletError`, the error codes and the diagnostics (`site/check_guide.cjs`). It uses the TypeScript
+compiler and the Node.js types of the repository's devDependencies, which `bin/build_ts.sh` installs;
+`TYPESCRIPT_DIR` names another directory that holds both. To check against a packed or released tarball,
+install it into an empty project first:
+
+    mkdir -p build/guide-consumer
+    echo '{ "name": "guide-consumer", "private": true }' > build/guide-consumer/package.json
+    (cd build/guide-consumer && npm install ../package/*.tgz)
+    bin/check_guide.sh build/guide-consumer
+
+The guide is also published as a static site:
+
+    bin/build_site.sh
+    bin/check_site.sh
+
+write the site to `build/site/` (`site/build_site.cjs`: one page per Markdown file, relative links only,
+no JavaScript, with a converter for exactly the Markdown the guide uses that fails on anything else) and
+check it (`site/check_site.cjs`): a page for every guide file, the page policy
+`default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'` in every
+page, no script, style attribute, external resource or absolute path, one level-1 heading and no skipped
+heading level, and every relative link and anchor resolves. Both need only Node.js and git. The site
+takes its look from the lateo house style: `site/assets/` holds unchanged copies of its stylesheets and
+favicons (`STYLE-VERSION`, `NOTICE.txt`), and `site/assets/site.css` the site's own additions.
+
+The build job of the workflow runs `bin/check_guide.sh` with the packed tarball, `bin/build_site.sh` and
+`bin/check_site.sh` after `bin/pack.sh`. `.github/workflows/pages.yml` builds and checks the site from
+`main` and publishes it with GitHub Pages at `https://loki-notfound.github.io/myzephyr-ts/`, on pushes
+that change the guide, the site tooling or that workflow, and by manual dispatch.
+
 ## Continuous integration
 
 `.github/workflows/build.yml` runs on every pull request to `main` and on every push to `main`. The

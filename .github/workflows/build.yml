@@ -76,6 +76,21 @@ jobs:
       - name: Pack and check the package (bin/pack.sh)
         run: bin/pack.sh
 
+      - name: Check the guide's examples and reference against the packed package (bin/check_guide.sh)
+        # the packed tarball installed into a throwaway project, as an application installs it
+        run: |
+          GUIDE_CONSUMER="$RUNNER_TEMP/guide-consumer"
+          mkdir -p "$GUIDE_CONSUMER"
+          echo '{ "name": "guide-check-consumer", "version": "0.0.0", "private": true }' > "$GUIDE_CONSUMER/package.json"
+          TARBALL=$(ls "$GITHUB_WORKSPACE"/build/package/*.tgz)
+          ( cd "$GUIDE_CONSUMER" && npm install --no-audit --no-fund --ignore-scripts "$TARBALL" )
+          bin/check_guide.sh "$GUIDE_CONSUMER"
+
+      - name: Build and check the guide site (bin/build_site.sh, bin/check_site.sh)
+        run: |
+          bin/build_site.sh
+          bin/check_site.sh
+
       - name: Keep the package tarball and its SHA-256 for the platform jobs
         run: |
           mkdir -p build/platform-artifact

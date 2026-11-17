@@ -1,0 +1,17 @@
+/* Additions of the zephyr-ts guide site to the house stylesheet (content.css, copied unchanged):
+   the title block, heading anchors, previous and next links, the navigation column and long code. */
+.site-title{display:flex;flex-direction:column;gap:.1rem}
+.site-tagline{margin:0;font-size:.875rem;color:var(--lt-muted)}
+h1,h2,h3,h4{overflow-wrap:anywhere}
+p code,li code{overflow-wrap:anywhere}
+td code,th code{white-space:nowrap}
+.heading-anchor{margin-left:.4rem;color:var(--lt-muted);font-weight:400;text-decoration:none}
+.heading-anchor:hover,.heading-anchor:focus-visible{color:var(--lt-accent);text-decoration:underline}
+.lt-toc nav+h2{margin-top:1rem}
+.lt-toc ol ol{margin-left:.75rem}
+.site-pager{display:flex;flex-wrap:wrap;justify-content:space-between;gap:1rem;border-top:1px solid var(--lt-line);padding-top:1rem;margin-top:1rem}
+.site-pager a{max-width:100%}
+.site-pager .site-next{margin-left:auto;text-align:right}
+.lt-footer p{margin:0 0 .5rem}
+@media(min-width:56rem){.lt-toc{max-height:calc(100vh - 3rem);overflow-y:auto}}
+@media not all and (min-width:56rem){.lt-docs-layout>.lt-toc{order:1}}

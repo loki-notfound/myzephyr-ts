@@ -1,0 +1,13 @@
+Notice for the files in this directory
+
+Files taken from the lateo house style, @lateo/style 0.1.0 (see STYLE-VERSION), unchanged:
+
+- content.css, print.css: BSD 3-Clause License, Copyright (c) 2026, Loki Notfound. The license text
+  is in LICENSE-style.txt.
+- favicon.svg, favicon-32.png, apple-touch-icon-180.png, and the lateo name and mark in the family
+  bar at the top of every page of the site: these identify the lateo projects. They are not covered
+  by the MIT license of this repository, nor by the BSD 3-Clause License above; all rights in them
+  are reserved by their owner. TRADEMARKS.txt, a copy of the house style's TRADEMARKS.md, states
+  the terms.
+
+site.css is part of this repository and under its MIT license (LICENSE.txt).

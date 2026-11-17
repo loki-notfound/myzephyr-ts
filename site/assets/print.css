@@ -1,0 +1,17 @@
+@media print{
+  @page{margin:1.5cm}
+  :root,html,body,[data-theme]{background:#fff!important;color:#000!important;color-scheme:light!important}
+  *{box-shadow:none!important;text-shadow:none!important}
+  .lt-family-bar,header.site nav,.lt-header nav,.lt-nav,.lt-subnav,.lt-skip-link,.lt-toc,.lt-filter-bar,.lt-search-bar,.lt-pagination,.lt-admin-sidebar,button,.lt-btn,.lt-state-actions{display:none!important}
+  a{color:#000!important;text-decoration:underline}
+  main a[href^="http"]::after{content:" (" attr(href) ")";font-size:.85em;word-break:break-all}
+  pre,code,pre.addr{white-space:pre-wrap!important;word-break:break-word!important;background:#fff!important;color:#000!important;border-color:#666!important}
+  pre.diagram{font-size:9pt;overflow:visible!important}
+  h1,h2,h3,h4{break-after:avoid;page-break-after:avoid}
+  .card,.lt-card,.lt-product-card,.note,.lt-callout,.lt-stat-tile,.lt-confirm-box,.lt-error-summary,.lt-flash,.lt-donate,.lt-pubkey,.lt-contact,.lt-kv,table,tr,pre,blockquote{break-inside:avoid;page-break-inside:avoid}
+  thead{display:table-header-group}
+  .lt-wrap,.wrap,.lt-wrap-wide,.lt-docs-main,.lt-admin-main{max-width:none!important;width:auto!important;padding:0!important}
+  .lt-docs-layout,.lt-admin-layout{display:block!important}
+  .lt-table-scroll,.table-scroll{overflow:visible!important;border:0!important}
+  .card,.lt-card,.note,.lt-callout,.lt-stat-tile,.lt-pubkey,.lt-contact,.lt-kv{background:#fff!important;color:#000!important;border-color:#666!important}
+}

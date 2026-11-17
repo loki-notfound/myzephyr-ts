@@ -9,8 +9,18 @@ Protocol project. It is a port of [monero-ts](https://github.com/woodser/monero-
 wallet files, transactions, fees and network rules; this library adapts the TypeScript API, the
 worker and transport layers and the WebAssembly bridge around it and does not change those rules.
 
-The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not published yet
-(`"private": true`); build it from source as described in [BUILDING.md](BUILDING.md).
+The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not on the npm registry.
+Each release on GitHub carries the package tarball with signed checksums: download it, verify it and
+install it by path (`npm install ./loki-notfound-zephyr-ts-2.3.0-sec.2-ts.1.tgz`), as
+[the guide](docs/guide/01-getting-started.md#installing-from-the-signed-release) describes. To build it
+from source, see [BUILDING.md](BUILDING.md).
+
+## Documentation
+
+The user guide is Markdown under [docs/guide/](docs/guide/README.md), published as a site at
+[https://loki-notfound.github.io/myzephyr-ts/](https://loki-notfound.github.io/myzephyr-ts/). It explains how to build a wallet with the library, from
+installation to sending and deployment, and its API reference lists every exported name. Its examples
+are type-checked against the package and the offline ones are run (`bin/check_guide.sh`).
 
 ## Status
 
@@ -494,3 +504,8 @@ the git history of monero-ts is kept. The WebAssembly module is compiled from ze
 parts from CryptoNote and Boolberry, `external/zephyr-cpp/external/zephyr/LICENSE`), together with
 the third-party code those trees include (among others Boost under the Boost Software License
 1.0 and parts of libsodium under the ISC license); their license files are in the pinned sources.
+The guide site uses the lateo house stylesheet (`site/assets/content.css` and `print.css`), under the
+BSD 3-Clause License with its notice in `site/assets/LICENSE-style.txt`; the lateo name, the mark in the
+site's family bar and the favicon files in `site/assets/` are not covered by this repository's MIT
+license: they identify the lateo projects, and all rights in them are reserved by their owner
+(`site/assets/NOTICE.txt`, `site/assets/TRADEMARKS.txt`).
