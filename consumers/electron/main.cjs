@@ -23,7 +23,7 @@ const arg = (n, d) => { const i = argv.indexOf("--" + n); return i >= 0 ? argv[i
 const OUT = path.resolve(arg("out"));
 const ROOT = path.resolve(arg("root"));
 const guard = require(path.resolve(arg("guard")));
-const { judgeRun, PAGE_POLICY, WORKER_POLICY } = require(path.resolve(arg("page-server")));
+const { judgeRun, PAGE_POLICY, WORKER_POLICY, PROGRESS_MARK } = require(path.resolve(arg("page-server")));
 const CHECKS_FILE = path.resolve(arg("checks"));
 const TIMEOUT = Number(arg("timeout-ms", "900000"));
 const { app, BrowserWindow, protocol, session } = require("electron");
@@ -56,7 +56,7 @@ function servePage() {
   const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else files.set("/" + path.relative(ROOT, p).split(path.sep).join("/"), p); } };
   walk(ROOT);
   const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".wasm": "application/wasm", ".json": "application/json" };
-  const state = { requests: [], cspReports: [], result: undefined, resolve: undefined };
+  const state = { requests: [], cspReports: [], result: undefined, resolve: undefined, progress: { last: undefined, marks: 0, unrecognized: 0 } };
   const done = new Promise((r) => { state.resolve = r; });
   protocol.handle("app", async (request) => {
     const url = new URL(request.url);
@@ -71,6 +71,13 @@ function servePage() {
     }
     if (request.method === "POST" && url.pathname === "/csp-report") {
       try { const r = JSON.parse(await request.text()); const b = r["csp-report"] || r; state.cspReports.push({ directive: b["effective-directive"] || b["violated-directive"], blocked: String(b["blocked-uri"] || "").substring(0, 80) }); } catch (e) { state.cspReports.push({ unparseable: true }); }
+      entry.status = 204;
+      return new Response(null, { status: 204, headers });
+    }
+    if (request.method === "POST" && url.pathname === "/progress") {
+      // how far the page got: the last mark of the fixed set the page server knows; no other text of the page is kept
+      const mark = (await request.text()).trim();
+      if (PROGRESS_MARK.test(mark)) { state.progress.last = mark; state.progress.marks++; } else state.progress.unrecognized++;
       entry.status = 204;
       return new Response(null, { status: 204, headers });
     }
@@ -109,11 +116,11 @@ async function rendererChecks(wasmSha256) {
   const result = state.result;
   if (result) { result.renderer = true; result.env = Object.assign({}, result.env, { electron: process.versions.electron, chrome: process.versions.chrome, platform: process.platform, arch: process.arch }); }
   const snapshot = { requests: state.requests, cspReports: state.cspReports };
-  const problems = result ? judgeRun(result, snapshot, { ids: result.checks.map((c) => c.id).length ? ["K01", "K02", "K03", "K04", "K05", "K06", "K07", "K08", "K09", "K10", "K11"] : ["none"], wasmSha256 }) : ["no result from the renderer" + (crashed ? " (renderer gone: " + crashed + ")" : "")];
+  const problems = result ? judgeRun(result, snapshot, { ids: result.checks.map((c) => c.id).length ? ["K01", "K02", "K03", "K04", "K05", "K06", "K07", "K08", "K09", "K10", "K11"] : ["none"], wasmSha256 }) : ["no result from the renderer" + (crashed ? " (renderer gone: " + crashed + ")" : "") + "; last progress " + (state.progress.last === undefined ? "none" : state.progress.last) + " (" + state.progress.marks + " marks)"];
   if (blocked.length) problems.push("renderer requests outside app:// cancelled: " + blocked.join(" "));
   fs.writeFileSync(path.join(OUT, "electron-renderer.json"), JSON.stringify(result || { fatal: "no result" }, null, 1) + "\n");
   fs.writeFileSync(path.join(OUT, "electron-renderer-summary.json"), JSON.stringify({ userAgent, scheme: "app://bundle", pagePolicy: PAGE_POLICY, workerPolicy: WORKER_POLICY,
-    requests: state.requests, cspReports: state.cspReports, blocked, problems, passed: problems.length === 0 }, null, 1) + "\n");
+    requests: state.requests, cspReports: state.cspReports, progress: state.progress, blocked, problems, passed: problems.length === 0 }, null, 1) + "\n");
   process.stdout.write("renderer checks: " + (result ? result.checks.map((c) => c.id + "=" + c.status).join(" ") : "none") + "\n");
   if (userAgent) process.stdout.write("renderer user agent: " + userAgent + "\n");
   for (const p of problems) process.stdout.write("renderer problem: " + p + "\n");

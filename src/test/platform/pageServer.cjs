@@ -159,4 +159,4 @@ function judgeRun(result, snapshot, expect) {
   return problems;
 }
 
-module.exports = { startPageServer, judgeRun, PAGE_POLICY, WORKER_POLICY };
+module.exports = { startPageServer, judgeRun, PAGE_POLICY, WORKER_POLICY, PROGRESS_MARK };
