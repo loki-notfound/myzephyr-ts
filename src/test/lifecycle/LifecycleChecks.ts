@@ -7,7 +7,7 @@
  * codes only: never recovery material, passwords, keys or wallet bytes.
  */
 import * as F from "../../main/ts/index";
-import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
+import * as Internal from "../../main/ts/wallet/ZephyrWalletTestSupport"; // not exported by the package entry
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import ZephyrWalletError from "../../main/ts/common/ZephyrWalletError";
 import * as WalletErrors from "../../main/ts/common/ZephyrWalletErrorMapping";

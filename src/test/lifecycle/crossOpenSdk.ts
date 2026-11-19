@@ -14,7 +14,7 @@ import path from "path";
 import crypto from "crypto";
 import * as F from "../../main/ts/index";
 import { present } from "./LifecycleChecks";
-import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
+import * as Internal from "../../main/ts/wallet/ZephyrWalletTestSupport"; // not exported by the package entry
 
 /** Accounts and subaddresses of a wallet: per account, its subaddresses' addresses and labels in index order. */
 type AccountsRecord = Array<Array<{ address: string; label: string }>>;

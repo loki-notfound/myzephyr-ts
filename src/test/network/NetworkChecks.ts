@@ -10,7 +10,7 @@
  * reached a configured daemon.
  */
 import * as F from "../../main/ts/index";
-import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
+import * as Internal from "../../main/ts/wallet/ZephyrWalletTestSupport"; // not exported by the package entry
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import HttpClient from "../../main/ts/common/HttpClient";
 import http from "http";

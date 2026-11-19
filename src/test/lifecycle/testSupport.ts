@@ -9,7 +9,8 @@ import ZephyrWalletError from "../../main/ts/common/ZephyrWalletError";
 import * as WalletErrors from "../../main/ts/common/ZephyrWalletErrorMapping";
 import { bridgePasswordErrorOf } from "../../main/ts/common/ZephyrWalletErrorMapping";
 import { ZephyrWorkerChannel, ZephyrWorkerLike } from "../../main/ts/common/ZephyrWalletWorkers";
-import type { ZephyrWallet, ZephyrNetworkGuardReport } from "../../main/ts/wallet/ZephyrWallet";
+import type { ZephyrWallet } from "../../main/ts/wallet/ZephyrWallet";
+import type { ZephyrNetworkGuardReport } from "../../main/ts/wallet/ZephyrWalletTestSupport";
 import * as Sdk from "../../main/ts/index";
 import { ZephyrWalletWorkers } from "../../main/ts/common/ZephyrWalletWorkers";
 

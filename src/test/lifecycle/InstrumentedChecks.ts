@@ -6,7 +6,7 @@
  * outcomes, counts and codes, never recovery material, passwords, keys or wallet bytes.
  */
 import * as F from "../../main/ts/index";
-import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
+import * as Internal from "../../main/ts/wallet/ZephyrWalletTestSupport"; // not exported by the package entry
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import { CheckFailure, CheckResult, LifecycleCheckOptions, LifecycleReport, brokenChecksumSeed, codeOf, copyBytes, diagnosticOf, expect, expectCode, openingPasswords, present, randomPassword, scanText, waitUntil, waitWorkerMonitor, withDeadline, workerMonitor } from "./LifecycleChecks";
 import { DirectInstrumentation, Instrumentation, InstrumentationState, WorkerInstrumentation, channelOf, combinedGuard, innerOf, installGuardLedger, newMessageId, postRawWorkerMessage, walletIdOf } from "./testSupport";
