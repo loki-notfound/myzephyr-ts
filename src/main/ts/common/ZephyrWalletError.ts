@@ -7,12 +7,12 @@
  * they can contain recovery material, passwords, keys or credentials. Only the code and the
  * diagnostic cross the worker boundary; a received envelope is validated strictly and rebuilt.
  *
- * The native bridge reports failures only as fixed identifiers
- * ({"error":"<IDENTIFIER>"}, see BRIDGE_ERROR_IDENTIFIERS); no native text reaches JavaScript.
- * Any other failure (an inherited TypeScript error, an embind conversion error) is mapped by
- * its context to a fixed code without reading its message. That mapping and the envelope checks are
- * internal (common/ZephyrWalletErrorMapping.ts); applications use the constructor, code, diagnostic,
- * isCode and isDiagnostic.
+ * The native bridge reports failures only as fixed identifiers ({"error":"<IDENTIFIER>"});
+ * no native text reaches JavaScript. Any other failure (an inherited TypeScript error, an embind
+ * conversion error) is mapped by its context to a fixed code without reading its message. That
+ * mapping, the bridge identifiers and the worker envelope are internal
+ * (common/ZephyrWalletErrorMapping.ts); applications use the constructor, code, diagnostic, isCode
+ * and isDiagnostic.
  */
 export type ZephyrWalletErrorCode =
   | "UNSUPPORTED_CAPABILITY"
@@ -166,79 +166,8 @@ export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];
 
-/**
- * Fixed identifiers the native bridge can report (src/main/cpp/zephyr_wasm_bridge.cpp, fixed error
- * protocol). This list must equal the identifiers in the bridge source exactly. Each is also an
- * approved diagnostic.
- */
-export const BRIDGE_ERROR_IDENTIFIERS = [
-  // typed core exceptions, the exact fixed-message tables and the context fallbacks
-  "CORE_INVALID_PASSWORD", "CORE_INVALID_MNEMONIC", "CORE_INVALID_KEY", "CORE_INVALID_ADDRESS", "CORE_UNKNOWN_LANGUAGE",
-  "CORE_WALLET_DATA", "CORE_LOOKAHEAD", "CORE_CLOSE_FAILED", "CORE_UNCLASSIFIED",
-  // owned byte buffers
-  "BUFFER_ALLOCATION_FAILED", "NATIVE_BUFFER_FAILED", "BUFFER_FORMAT_FAILED", "BUFFER_TOO_LARGE",
-  // the bridge's own argument checks
-  "NETWORK_TYPE", "KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "CREATE_MODE",
-  "SEED_EMPTY", "SEED_LANGUAGE", "SEED_AND_KEYS", "KEYS_MISSING", "REGTEST", "LISTENER", "SAVE_ON_CLOSE",
-  // Daemon, sync and balance bindings
-  "DAEMON_ADDRESS", "DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED", "SYNC_FAILED",
-  "SYNC_START_HEIGHT", "ASSET_TYPE", "UNEXPECTED_ASSET_TYPE",
-  // accounts and subaddresses (and the index checks of the account and asset balance bindings)
-  "KEYS_ONLY_ACCOUNTS", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS",
-  "SUBADDRESS_INDICES", "ADDRESS_NOT_IN_WALLET", "UNEXPECTED_RESULT",
-  // read-only history
-  "KEYS_ONLY_HISTORY", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND",
-  // building transactions without relay
-  "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS", "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE",
-  "ADDRESS_NETWORK", "NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE", "TX_BUILD_FAILED",
-  // building conversions without relay
-  "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT",
-  // relaying a prepared build
-  "RELAY_TOKEN", "RELAY_TOKEN_VOID", "PRICING_RECORD_AGE", "RELAY_HASH_MISMATCH", "RELAY_REQUEST", "RELAY_FAILED", "RELAY_RECORD_FAILED",
-  "LOW_RING_SIZE", "DOUBLE_SPEND", "INVALID_INPUT", "INVALID_OUTPUT", "TOO_BIG", "OVERSPEND", "FEE_TOO_LOW", "TOO_FEW_OUTPUTS",
-  "TX_EXTRA_TOO_BIG", "SANITY_CHECK_FAILED", "NOT_RELAYED", "REJECTED", "DAEMON_BUSY", "NO_ANSWER", "HTTP_STATUS", "ANSWER_UNREADABLE"
-] as const;
-
-export type ZephyrBridgeErrorIdentifier = typeof BRIDGE_ERROR_IDENTIFIERS[number];
-
-/** Password state the bridge reports after a failed native password change. */
-export type ZephyrBridgePasswordState = "unchanged" | "changed" | "unknown";
-
-const BRIDGE_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})"\}$/;
-const BRIDGE_PASSWORD_ERROR_RESULT = /^\{"error":"([A-Z_]{1,40})","passwordState":"(unchanged|changed|unknown)"\}$/;
-
 function isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic {
   return typeof value === "string" && (ZEPHYR_WALLET_ERROR_DIAGNOSTICS as readonly string[]).includes(value);
-}
-
-export function isBridgeErrorIdentifier(value: unknown): value is ZephyrBridgeErrorIdentifier {
-  return typeof value === "string" && (BRIDGE_ERROR_IDENTIFIERS as readonly string[]).includes(value);
-}
-
-/**
- * Identifier of a fixed bridge error result, or undefined if the value is not an error result
- * (string results never start with '{"error"' otherwise). A value that starts like an error
- * result but is not exactly one with an approved identifier rejects with UNEXPECTED_RESULT.
- */
-export function bridgeErrorOf(result: unknown): ZephyrBridgeErrorIdentifier | undefined {
-  if (typeof result !== "string" || !result.startsWith("{\"error\"")) return undefined;
-  const match = BRIDGE_ERROR_RESULT.exec(result);
-  if (match === null || !isBridgeErrorIdentifier(match[1])) throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
-  return match[1];
-}
-
-/** Parsed error result of change_wallet_password (identifier and the reported password state). */
-export function bridgePasswordErrorOf(result: unknown): { identifier: ZephyrBridgeErrorIdentifier; state: ZephyrBridgePasswordState } {
-  const match = typeof result === "string" ? BRIDGE_PASSWORD_ERROR_RESULT.exec(result) : null;
-  if (match === null || !isBridgeErrorIdentifier(match[1])) throw new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT");
-  return { identifier: match[1], state: match[2] as ZephyrBridgePasswordState };
-}
-
-/** The only fields that cross the worker boundary. */
-export interface ZephyrWalletErrorEnvelope {
-  readonly type: "ZephyrWalletError";
-  readonly code: ZephyrWalletErrorCode;
-  readonly diagnostic?: ZephyrWalletErrorDiagnostic;
 }
 
 export default class ZephyrWalletError extends Error {
@@ -260,9 +189,5 @@ export default class ZephyrWalletError extends Error {
 
   static isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic {
     return isDiagnostic(value);
-  }
-
-  toEnvelope(): ZephyrWalletErrorEnvelope {
-    return this.diagnostic === undefined ? { type: "ZephyrWalletError", code: this.code } : { type: "ZephyrWalletError", code: this.code, diagnostic: this.diagnostic };
   }
 }

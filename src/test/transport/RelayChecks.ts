@@ -13,6 +13,7 @@ import { createRandomWallet, ZephyrWalletError } from "../../main/ts/index";
 import type { ZephyrRelayResult, ZephyrWallet } from "../../main/ts/index";
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import HttpClient from "../../main/ts/common/HttpClient";
+import { toEnvelope } from "../../main/ts/common/ZephyrWalletErrorMapping";
 import type { Instrumentation } from "../lifecycle/testSupport";
 
 export interface RelayCheckTargets {
@@ -43,7 +44,7 @@ function armSynthetic(): void {
 
 function errorText(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
-  return [err.message, err.stack ?? "", JSON.stringify(err instanceof ZephyrWalletError ? err.toEnvelope() : {})].join(" ");
+  return [err.message, err.stack ?? "", JSON.stringify(err instanceof ZephyrWalletError ? toEnvelope(err) : {})].join(" ");
 }
 
 export async function runRelayChecks(targets: RelayCheckTargets): Promise<RelayCheckResult> {

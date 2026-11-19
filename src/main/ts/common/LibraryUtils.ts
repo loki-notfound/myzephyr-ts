@@ -495,7 +495,7 @@ export default class LibraryUtils {
    * diagnostic). Any other error gets its context's fixed code; no message, stack or cause is posted.
    */
   static serializeError(err) {
-    return WalletErrors.fromUnknown("other", err).toEnvelope();
+    return WalletErrors.toEnvelope(WalletErrors.fromUnknown("other", err));
   }
 
   /** Rebuild a received worker error; anything but an exactly valid envelope is MALFORMED_MESSAGE. */

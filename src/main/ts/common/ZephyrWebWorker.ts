@@ -91,7 +91,7 @@ self.dispatchLifecycleMessage = async function(data: unknown) {
   const callbackId = data[2];
   const firstMessage = self.WORKER_ROUTABLE_MESSAGES === 0;
   self.WORKER_ROUTABLE_MESSAGES++;
-  const fail = (err: ZephyrWalletError) => postMessage([objectId, callbackId, {error: err.toEnvelope()}]);
+  const fail = (err: ZephyrWalletError) => postMessage([objectId, callbackId, {error: WalletErrors.toEnvelope(err)}]);
   if (typeof fnName !== "string" || fnName.length === 0) return fail(new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE"));
   const method = lifecycleWorkerMethod(fnName);
   if (method === undefined) return fail(WalletErrors.unsupported("WORKER_FUNCTION")); // the name is not echoed

@@ -9,8 +9,9 @@
 import * as F from "../../main/ts/index";
 import * as Internal from "../../main/ts/wallet/ZephyrWallet"; // not exported by the package entry
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
-import ZephyrWalletError, { bridgeErrorOf, bridgePasswordErrorOf } from "../../main/ts/common/ZephyrWalletError";
+import ZephyrWalletError from "../../main/ts/common/ZephyrWalletError";
 import * as WalletErrors from "../../main/ts/common/ZephyrWalletErrorMapping";
+import { bridgeErrorOf, bridgePasswordErrorOf } from "../../main/ts/common/ZephyrWalletErrorMapping";
 import { RawWorker, channelOf, combinedGuard, installGuardLedger, newMessageId, postRawWorkerMessage, sanitize, skipGuardRead, walletIdOf } from "./testSupport";
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";

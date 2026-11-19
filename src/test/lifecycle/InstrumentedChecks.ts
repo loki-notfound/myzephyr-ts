@@ -13,6 +13,7 @@ import { DirectInstrumentation, Instrumentation, InstrumentationState, WorkerIns
 import HttpClient from "../../main/ts/common/HttpClient";
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
+import { toEnvelope } from "../../main/ts/common/ZephyrWalletErrorMapping";
 
 /**
  * The construction functions and validateAddress with untyped arguments: these checks pass configurations
@@ -961,7 +962,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
       const err = await expectCode(fn(), "NATIVE_ERROR", "injected failure in " + what, notes, "CORE_UNCLASSIFIED");
       const st = await hooks.state();
       expect(st.events.includes("injected:error.accounts"), what + ": the injection fired");
-      expect(!scanText(err).includes(marker.toLowerCase()) && !scanText(err.toEnvelope()).includes(marker.toLowerCase()), what + ": the label is not in the error or its envelope");
+      expect(!scanText(err).includes(marker.toLowerCase()) && !scanText(toEnvelope(err)).includes(marker.toLowerCase()), what + ": the label is not in the error or its envelope");
     }
     const labels = (await w.getSubaddresses(0)).map((s) => s.label);
     expect(!labels.includes(marker) && (await w.getAccounts()).length === 2, "no injected creation or label change reached the core");
@@ -1010,7 +1011,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     const err = await expectCode(w.getTx(hash), "NATIVE_ERROR", "injected failure in get_txs", notes, "CORE_UNCLASSIFIED");
     const st = await hooks.state();
     expect(st.events.includes("injected:error.history"), "the injection fired");
-    expect(!scanText(err).includes(hash) && !scanText(err.toEnvelope()).includes(hash), "the hash is not in the error or its envelope");
+    expect(!scanText(err).includes(hash) && !scanText(toEnvelope(err)).includes(hash), "the hash is not in the error or its envelope");
     expect((await w.getTxs()).length === 0, "the wallet still answers after the injected failure");
     await w.close();
   });
@@ -1082,7 +1083,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
       await hooks.resetCounters();
       await hooks.arm({ fail: { "build.core": 1 }, kind: { "build.core": kind } });
       const err = await expectCode(w.buildTransfer(cfg), code, "injected build failure kind " + kind, notes, diag);
-      const text = scanText(err) + scanText(err.toEnvelope());
+      const text = scanText(err) + scanText(toEnvelope(err));
       expect(!text.includes(own.toLowerCase()) && !text.includes("123456789") && !text.includes("injected"), "kind " + kind + ": no destination or injected text in the error");
       expect((await hooks.state()).events.includes("injected:build.core"), "kind " + kind + " fired");
     }
@@ -1119,7 +1120,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
       await hooks.resetCounters();
       await hooks.arm({ fail: { "conversion.core": 1 }, kind: { "conversion.core": kind } });
       const err = await expectCode(w.buildConversion(cfg), code, "injected conversion failure kind " + kind, notes, diag);
-      const text = scanText(err) + scanText(err.toEnvelope());
+      const text = scanText(err) + scanText(toEnvelope(err));
       expect(!text.includes(own.toLowerCase()) && !text.includes("123400000000") && !text.includes("injected") && !/612345|598765|587654|minimum 4\.0/.test(text) && !text.includes("satisfied") && !text.includes("pricing record"), "kind " + kind + ": no destination, ratio or core text in the error");
       expect((await hooks.state()).events.includes("injected:conversion.core"), "kind " + kind + " fired");
     }
@@ -1136,7 +1137,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     for (const kind of [36, 37]) {
       await hooks.arm({ fail: { "build.core": 1 }, kind: { "build.core": kind } });
       const err = await expectCode(w.buildTransfer({ asset: "ZPH", destinations: [{ address: own, amount: BigInt(1) }], accountIndex: 0 }), "DAEMON_ERROR", "injected build read failure kind " + kind, notes, "DAEMON_RESPONSE");
-      expect(!/circulating|history|pricing/i.test(scanText(err) + scanText(err.toEnvelope())), "kind " + kind + ": no core text in the error");
+      expect(!/circulating|history|pricing/i.test(scanText(err) + scanText(toEnvelope(err))), "kind " + kind + ": no core text in the error");
       await hooks.resetCounters();
     }
     const heap = async () => (await hooks.state()).heapInUse;

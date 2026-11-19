@@ -92,7 +92,7 @@ export function installTestWorker(testGlue: () => unknown): void {
       try {
         productionPost([objectId, callbackId, { result: await tests[fnName](...args) }]);
       } catch (err) {
-        productionPost([objectId, callbackId, { error: WalletErrors.fromUnknown("other", err).toEnvelope() }]);
+        productionPost([objectId, callbackId, { error: WalletErrors.toEnvelope(WalletErrors.fromUnknown("other", err)) }]);
       }
       return;
     }

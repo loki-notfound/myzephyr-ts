@@ -1,5 +1,6 @@
-import ZephyrWalletError, { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic, isBridgeErrorIdentifier } from "./ZephyrWalletError";
+import ZephyrWalletError, { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./ZephyrWalletError";
 import * as WalletErrors from "./ZephyrWalletErrorMapping";
+import { isBridgeErrorIdentifier } from "./ZephyrWalletErrorMapping";
 import { Bad, TX_HASH, ZephyrTransferBuild, ZephyrTransferRequest, buildFromFields, fields, toBuildDto } from "./ZephyrTransfer";
 import { ZephyrConversionBuild, ZephyrConversionRequest, conversionFromFields, toConversionDto } from "./ZephyrConversion";
 
