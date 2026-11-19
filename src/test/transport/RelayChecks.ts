@@ -13,6 +13,7 @@ import { createRandomWallet, ZephyrWalletError } from "../../main/ts/index";
 import type { ZephyrRelayResult, ZephyrWallet } from "../../main/ts/index";
 import LibraryUtils from "../../main/ts/common/LibraryUtils";
 import HttpClient from "../../main/ts/common/HttpClient";
+import type { Instrumentation } from "../lifecycle/testSupport";
 
 export interface RelayCheckTargets {
   readonly first: string;
@@ -144,4 +145,74 @@ export async function runRelayChecks(targets: RelayCheckTargets): Promise<RelayC
   if (refused !== 0) fail("the transport refused " + refused + " submit requests");
   return { check: { id: "S03", title: "Relay against constructed daemons (test module, a synthetic kept transaction): every reason of the daemon's reply maps to its fixed pair and voids the token; a busy daemon, an HTTP error, an unreadable answer, a dropped connection and a late answer keep it for a retry of the same bytes; a refused connection sends nothing; a kept build survives setDaemonConnection and goes to the daemon configured at the relay call; acceptance (also not relayed) reports the core's failed record of a transaction that spends nothing of the wallet; exactly one submit request per relay call, none for a void token; no node text in any error", status: notes.length === 0 ? "pass" : "fail", notes },
     outcomes, submitsPerCall, permits, sinkRequests, passedInTransport: passed, refusedInTransport: refused };
+}
+
+export interface RelayAllocationResult {
+  readonly check: { id: string; title: string; status: "pass" | "fail"; notes: string[] };
+  /** allocator bytes in use after minus before, per whole cycle, by path */
+  readonly deltas: Record<string, number[]>;
+}
+
+/**
+ * The allocator around relay failures in the test module (S04), with the wallet in this context (direct) or in its
+ * own worker: after two warm-ups, five whole cycles per path (prepare a synthetic kept transaction, relay it, the token
+ * void: by the refusal, or by a discard when the failure keeps it). A refused relay (tools::error::tx_rejected from the
+ * core's commit, carrying a copy of the transaction) and a relay to a closed port (no connection, thrown through the
+ * core's RPC status check) leave nothing; a relay with a void token allocates nothing that stays. The transport keeps
+ * the last answer it received until the next request, and its size varies by up to 32 bytes from one answer to the
+ * next, so a cycle that ends with a refusal may differ from zero by that much (an allocation trace shows that nothing
+ * of a cycle outlives the next one); the sum over the five cycles stays within the same bound.
+ */
+export async function runRelayAllocationCheck(targets: RelayCheckTargets, hooks: Instrumentation, proxyToWorker: boolean): Promise<RelayAllocationResult> {
+  const failures: string[] = [];
+  const deltas: Record<string, number[]> = {};
+  const fail = (what: string) => failures.push(what);
+  await hooks.install();
+  const w: ZephyrWallet = await createRandomWallet({ networkType: "mainnet", password: "relay-allocation", proxyToWorker });
+  try {
+    await hooks.target(w);
+    const own = await w.getPrimaryAddress();
+    const heap = async (): Promise<number> => (await hooks.state()).heapInUse;
+    const cycle = async (want: string): Promise<number> => {
+      const h0 = await heap();
+      await hooks.resetCounters();
+      await hooks.arm({ fail: { "prepare.synthetic": 1 } });
+      const p = await w.prepareTransfer({ asset: "ZPH", destinations: [{ address: own, amount: BigInt("100000000") }], accountIndex: 0 });
+      let got = "accepted";
+      try { await w.relayPrepared(p.token); } catch (err) { got = err instanceof ZephyrWalletError ? err.code + "/" + String(err.diagnostic) : "untyped"; }
+      if (got !== want) fail("outcome " + got + ", expected " + want);
+      if (got !== "TX_REJECTED/DOUBLE_SPEND") await w.discardPrepared(p.token);
+      return (await heap()) - h0;
+    };
+    const path = async (label: string, server: string, want: string): Promise<void> => {
+      await w.setDaemonConnection(server);
+      for (let i = 0; i < 2; i++) await cycle(want);
+      deltas[label] = [];
+      for (let i = 0; i < 5; i++) deltas[label].push(await cycle(want));
+    };
+    await path("refused by the sink", targets.first + "/sink/reject-double_spend", "TX_REJECTED/DOUBLE_SPEND");
+    await path("unreachable daemon", targets.closed, "DAEMON_ERROR/DAEMON_UNREACHABLE");
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "prepare.synthetic": 1 } });
+    const p = await w.prepareTransfer({ asset: "ZPH", destinations: [{ address: own, amount: BigInt("100000000") }], accountIndex: 0 });
+    await w.discardPrepared(p.token);
+    deltas["void token"] = [];
+    for (let i = 0; i < 5; i++) {
+      const h0 = await heap();
+      try { await w.relayPrepared(p.token); fail("a void token was relayed"); } catch (err) { /* RELAY_TOKEN_VOID */ }
+      deltas["void token"].push((await heap()) - h0);
+    }
+  } catch (err) {
+    fail("unexpected failure: " + (err instanceof ZephyrWalletError ? err.code + "/" + String(err.diagnostic) : err instanceof Error ? err.name : typeof err));
+  } finally {
+    await w.close();
+  }
+  const notes = ["allocator growth per cycle (" + (proxyToWorker ? "worker" : "direct") + "): " + Object.entries(deltas).map(([k, v]) => k + " " + v.join(",")).join("; ")];
+  const refused = deltas["refused by the sink"] ?? [];
+  if (refused.length !== 5 || !refused.every((d) => Math.abs(d) <= 32) || Math.abs(refused.reduce((a, b) => a + b, 0)) > 32) fail("a refused relay left something behind (" + refused.join(",") + ")");
+  for (const label of ["unreachable daemon", "void token"]) {
+    const v = deltas[label] ?? [];
+    if (v.length !== 5 || !v.every((d) => d === 0)) fail(label + ": the allocator did not return to its level (" + v.join(",") + ")");
+  }
+  return { check: { id: "S04", title: "Relay failures leave nothing in the test module (a wallet in the main thread, and one in its worker, with a synthetic kept transaction): whole cycles of prepare, relay and void to a refusing sink and to a closed port, and relays with a void token, return the allocator to its level (a refusal within the 32-byte size variation of the transport's kept last answer)", status: failures.length === 0 ? "pass" : "fail", notes: notes.concat(failures) }, deltas };
 }

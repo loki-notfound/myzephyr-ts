@@ -1101,7 +1101,7 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await w.close();
   });
 
-  await check("T22", "Conversion failures of the core map to fixed pairs (failures injected in the test module): the reserve ratio messages with their computed ratios, a missing or unusable pricing record, a conversion that would need splitting, a zero converted amount, more than one destination, more than four decimals, an invalid pair; the build's typed failures; a failed read of the circulating supply or the pricing record history (conversions and same-asset builds); an untyped failure never carries the destination; rejected conversions leave the allocator unchanged", async (notes) => {
+  await check("T22", "Conversion failures of the core map to fixed pairs (failures injected in the test module): the reserve ratio messages with their computed ratios, a missing or unusable pricing record, a conversion that would need splitting, a zero converted amount, more than one destination, more than four decimals, an invalid pair; the build's typed failures; a failed read of the circulating supply or the pricing record history (conversions and same-asset builds); an untyped failure never carries the destination; rejected conversions and every failure injected as the core throws it (each typed failure of the build and of the conversion, the untyped ones, and the test module's other typed failures) leave the allocator unchanged", async (notes) => {
     const w = await open();
     await hooks.target(w);
     const own = await w.getPrimaryAddress();
@@ -1145,19 +1145,29 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     for (let i = 0; i < 5; i++) { const h0 = await heap(); try { await w.buildConversion(cfg); } catch (err) { /* NOT_ENOUGH_MONEY */ } deltas.push((await heap()) - h0); }
     notes.push("allocator growth of 5 conversions the bridge rejects: " + deltas.join(","));
     expect(deltas.every((d) => d === 0), "conversions the bridge rejects retain nothing");
-    // failures injected as the core throws them (measured, reported: see the round's evidence)
+    // failures injected as the core throws them: every typed failure goes through the core's throw_wallet_ex, whose
+    // instantiations the module keeps with their exception cleanups (the exception whitelist), so nothing of a failure
+    // stays. Per kind one warm-up, then three measured failures; a typed failure of the core used to leave its message
+    // (40 to 128 bytes) behind. "conversion.core" kinds: the build's and the conversion's typed failures and the
+    // untyped 19, 33 and 35; "error.conversion" kinds: the test module's other injection (1 untyped carrying the inputs,
+    // 4 tools::error::invalid_password, 5 tools::error::wallet_internal_error).
     const injected: Record<string, number[]> = {};
-    for (const kind of [21, 26, 12, 16, 19]) {
-      injected[String(kind)] = [];
-      for (let i = 0; i < 3; i++) {
-        await hooks.arm({ fail: { "conversion.core": 1 }, kind: { "conversion.core": kind } });
-        const h0 = await heap(); try { await w.buildConversion(cfg); } catch (err) { /* the kind's pair */ } injected[String(kind)].push((await heap()) - h0);
+    const points: Array<[string, number]> = [11, 12, 13, 14, 15, 16, 17, 18, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 36, 37, 19, 33, 35].map((k): [string, number] => ["conversion.core", k]);
+    points.push(["error.conversion", 1], ["error.conversion", 4], ["error.conversion", 5]);
+    for (const [point, kind] of points) {
+      const label = (point === "error.conversion" ? "e" : "") + kind;
+      injected[label] = [];
+      for (let i = 0; i < 4; i++) {
+        await hooks.arm({ fail: { [point]: 1 }, kind: { [point]: kind } });
+        const h0 = await heap(); try { await w.buildConversion(cfg); } catch (err) { /* the kind's pair */ }
+        const d = (await heap()) - h0;
+        if (i > 0) injected[label].push(d);
+        expect((await hooks.state()).events.includes("injected:" + point), "kind " + label + " fired");
         await hooks.resetCounters();
       }
     }
-    notes.push("allocator growth of injected core failures by kind: " + Object.entries(injected).map(([k, v]) => k + ":" + v.join(",")).join(" "));
-    // the allocator rounds a block to its own granularity, so two equal failures may differ by a few bytes
-    expect(Object.values(injected).every((v) => v.every((d) => Math.abs(d - v[0]) <= 16)), "the growth per injected failure is the same per kind within 16 bytes (no accumulation beyond one exception object)");
+    notes.push("allocator growth per injected failure by kind (after one warm-up): " + Object.entries(injected).map(([k, v]) => k + ":" + v.join(",")).join(" "));
+    expect(Object.values(injected).every((v) => v.length === 3 && v.every((d) => d === 0)), "no injected failure of the core leaves anything in the allocator (" + Object.entries(injected).filter(([, v]) => v.some((d) => d !== 0)).map(([k, v]) => k + ":" + v.join(",")).join(" ") + ")");
     expect((await w.getTxs()).length === 0, "nothing recorded");
     await w.close();
   });

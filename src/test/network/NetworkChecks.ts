@@ -1456,8 +1456,9 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       } else notes.push("no pair is refused at this chain state");
       report.measurements.N25 = { built: { pair: builds.join(" to "), deltas: built }, refused: refused === undefined ? null : { pair: refused.join(" to "), deltas: refusedDeltas } };
       expect(built.every((d) => d === built[0]) && built[0] <= 0, "every built conversion returns the allocator to its level (growth " + built.join(",") + ")");
-      // a refusal is a typed core exception (wallet_internal_error): measured and reported; each refusal must cost the same
-      // (no accumulation beyond one failure's own amount; see the round's evidence on typed core exceptions)
+      // a refusal is a typed core exception (wallet_internal_error), thrown through the core's throw_wallet_ex, which the
+      // module keeps with its exception cleanups: measured and reported; each refusal must cost the same (no
+      // accumulation); the bound stays at what was measured on the funded copies
       if (refusedDeltas !== undefined) expect(refusedDeltas.every((d) => Math.abs(d - refusedDeltas![0]) <= 16) && refusedDeltas[0] <= 512, "every refused conversion changes the allocator by the same amount, within 16 bytes (growth " + refusedDeltas.join(",") + ")");
     } finally {
       await w.close();
@@ -1731,11 +1732,13 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     }
     report.measurements.N28 = { deltas };
     notes.push("allocator growth per cycle (prepare, failed relay, void): " + Object.entries(deltas).map(([k, v]) => k + " " + v.join(",")).join("; "));
-    // a typed core failure leaves its exception's residue per failure (cause not established); the daemon's refusal
-    // (tools::error::tx_rejected) carries a copy of the transaction, whose size varies by a few bytes from build to build
+    // a typed core failure goes through the core's throw_wallet_ex, which the module keeps with its exception cleanups,
+    // so the refusal (tools::error::tx_rejected, carrying a copy of the transaction) leaves nothing of its own; the bound
+    // stays at what was measured on the funded copies. The transport keeps the last answer until the next request, and
+    // its size varies by a few bytes, so a cycle may end up to 32 bytes below its start (S04 measures it offline)
     for (const [k, v] of Object.entries(deltas)) {
       const bound = k === "refused by the sink" ? 4096 : 512;
-      expect(Math.max(...v) - Math.min(...v) <= 32 && Math.min(...v) >= 0 && Math.max(...v) <= bound, k + ": the same residue per cycle, at most " + bound + " bytes (" + v.join(",") + ")");
+      expect(Math.max(...v) - Math.min(...v) <= 32 && Math.min(...v) >= -32 && Math.max(...v) <= bound, k + ": the same residue per cycle, at most " + bound + " bytes (" + v.join(",") + ")");
     }
     expect(deltas["void token"].every((d) => d === 0), "a void token allocates nothing that stays");
   }, 1200000);
