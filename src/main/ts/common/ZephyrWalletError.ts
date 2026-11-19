@@ -1,3 +1,5 @@
+import { ZEPHYR_WALLET_ERROR_CODES, ZEPHYR_WALLET_ERROR_MESSAGES } from "./ZephyrWalletErrorTables";
+
 /**
  * Stable, secret-free errors of the SDK (ZephyrWalletError).
  *
@@ -11,7 +13,8 @@
  * no native text reaches JavaScript. Any other failure (an inherited TypeScript error, an embind
  * conversion error) is mapped by its context to a fixed code without reading its message. That
  * mapping, the bridge identifiers and the worker envelope are internal
- * (common/ZephyrWalletErrorMapping.ts); applications use the constructor, code, diagnostic, isCode
+ * (common/ZephyrWalletErrorMapping.ts), as are the code and message tables
+ * (common/ZephyrWalletErrorTables.ts); applications use the constructor, code, diagnostic, isCode
  * and isDiagnostic.
  */
 export type ZephyrWalletErrorCode =
@@ -29,44 +32,11 @@ export type ZephyrWalletErrorCode =
   | "TX_REJECTED"
   | "RELAY_UNKNOWN";
 
-export const ZEPHYR_WALLET_ERROR_CODES: readonly ZephyrWalletErrorCode[] = [
-  "UNSUPPORTED_CAPABILITY",
-  "INVALID_CONFIG",
-  "INVALID_RECOVERY_MATERIAL",
-  "WRONG_PASSWORD",
-  "INVALID_WALLET_DATA",
-  "INVALID_ADDRESS",
-  "WALLET_CLOSED",
-  "MALFORMED_MESSAGE",
-  "NATIVE_ERROR",
-  "DAEMON_ERROR",
-  "TX_NOT_POSSIBLE",
-  "TX_REJECTED",
-  "RELAY_UNKNOWN"
-];
-
-/** Fixed message per code; no message text is ever taken from a native or remote source. */
-export const ZEPHYR_WALLET_ERROR_MESSAGES: Readonly<Record<ZephyrWalletErrorCode, string>> = {
-  UNSUPPORTED_CAPABILITY: "Unsupported capability",
-  INVALID_CONFIG: "Invalid wallet configuration or argument",
-  INVALID_RECOVERY_MATERIAL: "Recovery material was rejected",
-  WRONG_PASSWORD: "Wrong wallet password",
-  INVALID_WALLET_DATA: "Wallet data could not be opened",
-  INVALID_ADDRESS: "Invalid address",
-  WALLET_CLOSED: "Wallet is closed",
-  MALFORMED_MESSAGE: "Malformed worker message",
-  NATIVE_ERROR: "Native wallet operation failed",
-  DAEMON_ERROR: "Daemon request failed",
-  TX_NOT_POSSIBLE: "Transaction not possible",
-  TX_REJECTED: "Transaction rejected by the daemon",
-  RELAY_UNKNOWN: "Relay outcome unknown"
-};
-
 /**
  * Approved diagnostic identifiers. Each is a fixed token chosen by SDK code; none is derived
  * from caller input or copied from native exception text (native text is only classified).
  */
-export const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
+const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // unsupported capabilities
   "FILE_PATH", "DAEMON_CONNECTION", "UNTRUSTED_DAEMON", "REGTEST", "MULTISIG", "SAVE_CURRENT", "CONFIG_FIELD",
   "KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_DATA", "KEYS_ONLY_PASSWORD", "KEYS_ONLY_NETWORK_TYPE",
