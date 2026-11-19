@@ -19,7 +19,8 @@ import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBala
 import { ZephyrAccount, ZephyrAccountOptions, ZephyrAddressIndex, ZephyrSubaddress } from "../common/ZephyrAccounts";
 import { accountOptions } from "../common/ZephyrAccountsInternal";
 import { checkLabel, checkSubaddressIndices } from "../common/ZephyrLifecycleContract";
-import { ZephyrTransferBuild, ZephyrTransferConfig, checkTransferConfig } from "../common/ZephyrTransfer";
+import { ZephyrTransferBuild, ZephyrTransferConfig } from "../common/ZephyrTransfer";
+import { checkTransferConfig } from "../common/ZephyrTransferInternal";
 import { ZephyrConversionBuild, ZephyrConversionConfig, checkConversionConfig } from "../common/ZephyrConversion";
 import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult, checkRelayToken } from "../common/ZephyrRelay";
 import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx, checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistory";

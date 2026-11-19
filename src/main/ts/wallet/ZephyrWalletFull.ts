@@ -43,7 +43,8 @@ import HttpClient from "../common/HttpClient";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
 import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBalances";
 import { fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalancesInternal";
-import { MAX_DESTINATIONS, ZephyrTransferBuild, ZephyrTransferRequest, checkTransferRequest, fromBuildDto, parseBridgeBuild } from "../common/ZephyrTransfer";
+import { ZephyrTransferBuild } from "../common/ZephyrTransfer";
+import { MAX_DESTINATIONS, ZephyrTransferRequest, checkTransferRequest, fromBuildDto, parseBridgeBuild } from "../common/ZephyrTransferInternal";
 import { ZephyrConversionBuild, ZephyrConversionRequest, checkConversionRequest, fromConversionDto, parseBridgeConversion } from "../common/ZephyrConversion";
 import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult, checkRelayToken, fromPreparedConversionDto, fromPreparedTransferDto, fromRelayDto, parseBridgeDiscard,
   parseBridgePreparedConversion, parseBridgePreparedTransfer, parseBridgeRelay } from "../common/ZephyrRelay";

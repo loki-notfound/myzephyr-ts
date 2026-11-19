@@ -1,7 +1,8 @@
 import ZephyrWalletError from "./ZephyrWalletError";
 import { checkSubaddressIndices, isAddressIndex } from "./ZephyrLifecycleContract";
 import { isAssetTypeToken } from "./ZephyrBalancesInternal";
-import { ADDRESS_TEXT, Bad, DECIMAL, PRIORITIES, TX_HASH, UINT64_MAX, V1_ASSETS, V2_ASSETS, ZephyrTxPriority, amountOf, countOf, fields, plainData } from "./ZephyrTransfer";
+import { ZephyrTxPriority } from "./ZephyrTransfer";
+import { ADDRESS_TEXT, Bad, DECIMAL, PRIORITIES, TX_HASH, UINT64_MAX, V1_ASSETS, V2_ASSETS, amountOf, countOf, fields, plainData } from "./ZephyrTransferInternal";
 
 /**
  * Building conversions of full wallets without relay: buildConversion builds the one transaction of a

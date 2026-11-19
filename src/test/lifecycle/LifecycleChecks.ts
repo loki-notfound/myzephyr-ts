@@ -16,7 +16,7 @@ import { RawWorker, channelOf, combinedGuard, installGuardLedger, newMessageId, 
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
 import * as History from "../../main/ts/common/ZephyrHistory";
-import * as Transfer from "../../main/ts/common/ZephyrTransfer";
+import * as Transfer from "../../main/ts/common/ZephyrTransferInternal";
 import * as Conversion from "../../main/ts/common/ZephyrConversion";
 import * as Relay from "../../main/ts/common/ZephyrRelay";
 

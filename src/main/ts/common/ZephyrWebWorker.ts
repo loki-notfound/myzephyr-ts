@@ -25,7 +25,7 @@ import { parseDaemonAddress } from "./ZephyrDaemonAddress";
 import { toAccountBalancesDto, toAssetBalancesDto } from "./ZephyrBalancesInternal";
 import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccountsInternal";
 import { checkSelection, toTxDto } from "./ZephyrHistory";
-import { checkTransferRequest, toBuildDto } from "./ZephyrTransfer";
+import { checkTransferRequest, toBuildDto } from "./ZephyrTransferInternal";
 import { checkConversionRequest, toConversionDto } from "./ZephyrConversion";
 import { checkRelayToken, toPreparedConversionDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelay";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
