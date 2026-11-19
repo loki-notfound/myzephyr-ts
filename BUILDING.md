@@ -73,9 +73,9 @@ Each step can take its inputs from local copies; the identities are checked in t
 packs the npm package into `build/package/` (nothing is published) and checks the tarball against
 its allowlist: the package entry and the modules it loads with their declarations, the browser
 entry, the release glue, `zephyr.wasm`, the browser worker with its license file, `README.md`,
-`LICENSE.txt` and the two documents in `docs/`. The exports map exposes only the entry (the
-CommonJS build, and the browser entry under the `browser` condition), `zephyr.wasm`,
-`zephyr.worker.js` and `package.json`.
+`LICENSE.txt` and three documents in `docs/`: `LIMITATIONS.md`, `DEPLOYMENT.md` and `CHANGES.md`.
+The exports map exposes only the entry (the CommonJS build, and the browser entry under the
+`browser` condition), `zephyr.wasm`, `zephyr.worker.js` and `package.json`.
 
 The tarball depends neither on the host's umask nor on the time: the script packs a staged copy of
 the package files with fixed modes (0644 for files, 0755 for directories; npm would mark the files

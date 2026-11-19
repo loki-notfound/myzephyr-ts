@@ -38,6 +38,7 @@
     "dist/src/main/",
     "docs/LIMITATIONS.md",
     "docs/DEPLOYMENT.md",
+    "docs/CHANGES.md",
     "README.md",
     "LICENSE.txt"
   ],

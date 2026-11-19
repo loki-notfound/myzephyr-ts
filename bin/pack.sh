@@ -50,7 +50,7 @@ tar -tvzf "$TGZ" --numeric-owner --utc | awk '{ if ($1 != "-rw-r--r--" || $2 != 
 node - "$OUT/contents.txt" "$TGZ" <<'JS'
 const fs = require("fs");
 const files = fs.readFileSync(process.argv[2], "utf8").split("\n").filter(Boolean);
-const allowed = [/^package\/(package\.json|README\.md|LICENSE\.txt)$/, /^package\/docs\/(LIMITATIONS|DEPLOYMENT)\.md$/,
+const allowed = [/^package\/(package\.json|README\.md|LICENSE\.txt)$/, /^package\/docs\/(LIMITATIONS|DEPLOYMENT|CHANGES)\.md$/,
   /^package\/dist\/zephyr\.(js|wasm|digest\.js|worker\.js|worker\.js\.LICENSE\.txt)$/, /^package\/dist\/zephyr-ts\.browser\.mjs$/,
   /^package\/dist\/src\/main\/ts\/[A-Za-z0-9_/]+\.(js|d\.ts)$/];
 const bad = files.filter((f) => !allowed.some((re) => re.test(f)));
