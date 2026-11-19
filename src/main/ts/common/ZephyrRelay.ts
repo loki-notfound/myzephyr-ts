@@ -3,7 +3,8 @@ import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { isBridgeErrorIdentifier } from "./ZephyrWalletErrorMapping";
 import { ZephyrTransferBuild } from "./ZephyrTransfer";
 import { Bad, TX_HASH, ZephyrTransferRequest, buildFromFields, fields, toBuildDto } from "./ZephyrTransferInternal";
-import { ZephyrConversionBuild, ZephyrConversionRequest, conversionFromFields, toConversionDto } from "./ZephyrConversion";
+import { ZephyrConversionBuild } from "./ZephyrConversion";
+import { ZephyrConversionRequest, conversionFromFields, toConversionDto } from "./ZephyrConversionInternal";
 
 /**
  * Relaying a built transaction, in two explicit steps. prepareTransfer and prepareConversion build and describe

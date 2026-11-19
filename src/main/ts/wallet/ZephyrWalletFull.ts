@@ -45,7 +45,8 @@ import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBala
 import { fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalancesInternal";
 import { ZephyrTransferBuild } from "../common/ZephyrTransfer";
 import { MAX_DESTINATIONS, ZephyrTransferRequest, checkTransferRequest, fromBuildDto, parseBridgeBuild } from "../common/ZephyrTransferInternal";
-import { ZephyrConversionBuild, ZephyrConversionRequest, checkConversionRequest, fromConversionDto, parseBridgeConversion } from "../common/ZephyrConversion";
+import { ZephyrConversionBuild } from "../common/ZephyrConversion";
+import { ZephyrConversionRequest, checkConversionRequest, fromConversionDto, parseBridgeConversion } from "../common/ZephyrConversionInternal";
 import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult, checkRelayToken, fromPreparedConversionDto, fromPreparedTransferDto, fromRelayDto, parseBridgeDiscard,
   parseBridgePreparedConversion, parseBridgePreparedTransfer, parseBridgeRelay } from "../common/ZephyrRelay";
 import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, ZephyrWalletTx, checkSelection, fromPoolRefreshDto, fromTxsDto, parseBridgeTxs, parsePoolRefresh } from "../common/ZephyrHistory";
