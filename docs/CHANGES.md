@@ -7,7 +7,8 @@ Changes of what the package declares and exports, compared with the release `2.3
 
 Not released yet: the package version in the repository is still `2.3.0-sec.2-ts.1`, and the release
 of that name does not contain these changes. They make the shipped declarations say what the library
-does and remove internal members from them; apart from the one diagnostic below, the library behaves as
+does, remove internal members and names from them and remove the unsupported wallet RPC client from the
+package; apart from the one diagnostic and the keys-only `server: ""` below, the library behaves as
 before.
 
 ### Getters that can resolve to `undefined`
@@ -52,6 +53,26 @@ run-time check is unchanged: anything that is not a non-empty string still rejec
 
 What to change: pass a `string` (narrow a value of unknown type first). JavaScript callers: nothing.
 
+### `setDaemonConnection` takes the address forms of the configurations
+
+`setDaemonConnection(address?: string | { uri: string })` instead of
+`address?: string | { uri: string; trusted?: boolean }`, as the construction configurations declare
+`server`. The run-time check is unchanged: `trusted: true` is still accepted without effect, and
+`trusted: false` still rejects with `UNSUPPORTED_CAPABILITY`/`UNTRUSTED_DAEMON`.
+
+What to change: in TypeScript, delete `trusted` from the object (every daemon is trusted). JavaScript
+callers: nothing.
+
+### An empty `server` for a keys-only wallet means no daemon
+
+`createKeysWallet` with `server: ""` now constructs the wallet, as the full wallets treat an empty
+`server` as no daemon; before, the validation accepted it and the construction then rejected with
+`NATIVE_ERROR`/`UNCLASSIFIED_ERROR`. A non-empty `server` still rejects with
+`UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON`. `ZephyrKeysOnlyWalletConfig` does not declare `server`
+(a value without effect, like the others listed above).
+
+What to change: nothing, unless code relied on that rejection.
+
 ### `setWorkerDistPath` without an argument
 
 `setWorkerDistPath(path?: string)`: the parameter is optional, as for `setWasmModuleUrl`. A call without
@@ -61,17 +82,50 @@ What to change: nothing.
 
 ### Internal members removed from the declarations
 
-No longer declared, and no longer properties of the classes at run time: `ZephyrWallet.wrap`, and the
+No longer declared, and no longer properties of the classes at run time: `ZephyrWallet.wrap`, the
 static members `unsupported`, `walletClosed`, `fromBridge`, `fromBridgeResult`, `checkBridgeResult`,
 `fromUnknown`, `isEnvelope` and `fromEnvelope` of `ZephyrWalletError`, with the type
-`ZephyrNativeErrorContext` that only they used. They served the library itself, were not part of the
-documented surface for applications, and now live in a module the package entry does not export.
-`ZephyrWalletError` keeps its constructor, `code`, `diagnostic`, `isCode`, `isDiagnostic` and
-`toEnvelope`. Removing `wrap` also removes the inherited wallet classes and the daemon route type from
-what the entry's declarations refer to.
+`ZephyrNativeErrorContext` that only they used, and the method `toEnvelope` of `ZephyrWalletError`,
+with the type `ZephyrWalletErrorEnvelope`. They served the library itself, were not part of the
+documented surface for applications, and now live in a module the package entry does not export. The
+object a wallet worker posts for an error is unchanged. `ZephyrWalletError` keeps its constructor,
+`code`, `diagnostic`, `isCode` and `isDiagnostic`. Removing `wrap` also removes the inherited wallet
+classes and the daemon route type from what the entry's declarations refer to.
 
 What to change: code that called one of these members creates its errors with
 `new ZephyrWalletError(code, diagnostic)` and obtains wallets from the construction functions only.
+Code that called `error.toEnvelope()` builds the object from `error.code` and `error.diagnostic`.
+
+### Names the entry does not export removed from the declarations
+
+The declaration files that the entry's declarations reach export only the names the entry exports (the
+error module's default export is `ZephyrWalletError`). No longer exported by them: the code, message
+and diagnostic tables of the error module (`ZEPHYR_WALLET_ERROR_CODES`, `ZEPHYR_WALLET_ERROR_MESSAGES`,
+`ZEPHYR_WALLET_ERROR_DIAGNOSTICS`), the bridge identifiers and their helpers (`BRIDGE_ERROR_IDENTIFIERS`,
+`ZephyrBridgeErrorIdentifier`, `ZephyrBridgePasswordState`, `isBridgeErrorIdentifier`, `bridgeErrorOf`,
+`bridgePasswordErrorOf`), the test support of the wallet module (`createWallet`,
+`getNetworkGuardReport`, `ZephyrNetworkGuardReport`), and the parsers, validators, constants and worker
+data shapes of the account, balance, conversion, history, relay and transfer modules. They live in
+internal modules of the library now; `ZephyrWalletErrorDiagnostic` is still derived from the diagnostic
+table, which is no longer exported.
+
+What to change: nothing for code that imports the package entry: the entry never exported these names,
+and the package's exports map refuses deep imports.
+
+### The wallet RPC client removed
+
+The inherited wallet RPC client of monero-ts (`ZephyrWalletRpc`, with `SslOptions`, which only it used)
+is no longer in the source or the package. The library never exported or supported it. The daemon RPC
+client and the other unported classes stay in the source.
+
+What to change: nothing for code that imports the package entry. A port that used monero-ts's wallet RPC
+client talks to its wallet RPC server directly or uses a `ZephyrWallet`.
+
+### `docs/CHANGES.md` in the package
+
+The package carries this file beside `docs/LIMITATIONS.md` and `docs/DEPLOYMENT.md`.
+
+What to change: nothing.
 
 ### Firefox's worker policy reported as `WASM_MODULE_REJECTED`
 

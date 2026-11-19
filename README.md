@@ -101,8 +101,8 @@ The package entry (`src/main/ts/index.ts`) exports:
   `ZephyrConversionDestinationInput`, `ZephyrConversionBuild`, `ZephyrPreparedTransfer`,
   `ZephyrPreparedConversion`, `ZephyrRelayResult`, `ZephyrRelayedTx` and `ZephyrRelayOutcome` (below);
 * `validateAddress`, `ZephyrWalletError` (a fixed code and an optional fixed diagnostic; no
-  native or daemon text, no secrets; the constructor, `code`, `diagnostic`, `isCode`, `isDiagnostic`
-  and `toEnvelope`), `setWorkerDistPath`, `setWasmModuleUrl` and `terminateWorker` (both setters
+  native or daemon text, no secrets; the constructor, `code`, `diagnostic`, `isCode` and
+  `isDiagnostic`), `setWorkerDistPath`, `setWasmModuleUrl` and `terminateWorker` (both setters
   restore their default when called without an argument);
 * the types `ZephyrWalletData`, `ZephyrDaemonConnection`, `ZephyrWalletSyncResult`,
   `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, the five construction configurations
@@ -478,13 +478,14 @@ plays the daemon.
 ## Not ported
 
 Everything else inherited from monero-ts stays in the source as unported classes under
-`src/main/ts/` and is not exported by the package: the daemon and wallet RPC clients, the
+`src/main/ts/` and is not exported by the package: the daemon RPC client, the
 connection manager, background synchronization, listeners, the inherited query-based history,
 the inherited transaction creation, its relay and sweeps, outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
 most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
 inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and
-`ZephyrSubaddress`). The
+`ZephyrSubaddress`). The inherited wallet RPC client is not part of the source or the package any more
+(docs/CHANGES.md). The
 inherited Monero test suite and its root entry point are not part of this repository's tree; the
 tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`.
 

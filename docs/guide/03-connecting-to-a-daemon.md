@@ -25,7 +25,7 @@ console.log(wallet.getDaemonConnection()); // { uri: "https://node.example.org",
 
 ```ts
 await wallet.setDaemonConnection("https://node.example.org");
-await wallet.setDaemonConnection({ uri: "https://node.example.org", trusted: true });
+await wallet.setDaemonConnection({ uri: "https://node.example.org" });
 await wallet.setDaemonConnection(undefined); // clear it
 ```
 

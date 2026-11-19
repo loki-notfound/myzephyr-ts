@@ -264,12 +264,13 @@ All daemon methods are for full wallets; keys-only wallets reject with
 ```ts signature
 setDaemonConnection(address?: string | {
         uri: string;
-        trusted?: boolean;
     }): Promise<void>;
 ```
 
-Sets the daemon, or clears it with `undefined`. Resolves when the core holds the address; an
-unreachable daemon is not an error here. A kept build survives it.
+Sets the daemon, or clears it with `undefined`: an address, or an object with the address in `uri`, as
+the construction configurations declare `server`. Resolves when the core holds the address; an
+unreachable daemon is not an error here. A kept build survives it. At run time the object form still
+accepts `trusted: true` without effect; the type does not declare it.
 
 Rejects with: `INVALID_CONFIG`/`DAEMON_ADDRESS`, `CONFIG_TYPE`, `FIELD_TYPE`, `UNKNOWN_FIELD`;
 `UNSUPPORTED_CAPABILITY`/`DAEMON_CREDENTIALS`, `DAEMON_PROXY`, `UNTRUSTED_DAEMON` (`trusted: false`),

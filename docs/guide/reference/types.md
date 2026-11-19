@@ -75,8 +75,9 @@ else with the same fixed errors whatever the declared type (see [Functions](func
 Value domains and rules between fields are checked at run time only: the seed's word count, the key
 format, the lookahead limit and pair, the daemon address, which keys a keys restore needs. Not declared,
 although the validation accepts them, are values that have no effect: `path: ""`, `isTrustedDaemon: true`
-(every daemon is trusted), `regtest`, `isMultisig` and `saveCurrent` `false`, and in the object form of
-`server` `trusted: true` and empty `username`, `password`, `proxyUri` or `proxy`. A field whose value is
+(every daemon is trusted), `regtest`, `isMultisig` and `saveCurrent` `false`, in the object form of
+`server` `trusted: true` and empty `username`, `password`, `proxyUri` or `proxy`, and `server: ""` for a
+keys-only wallet. A field whose value is
 `undefined` counts as absent at run time. The repository checks each type against its validation with
 one table of accepted and rejected object literals (`consumers/node/configCases.ts`).
 

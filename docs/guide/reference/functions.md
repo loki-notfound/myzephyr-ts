@@ -21,8 +21,9 @@ The five construction functions share these rules:
   `isTrustedDaemon: false` (`UNTRUSTED_DAEMON`), and `connectionManager`, `fs`, `cmd` or
   `rejectUnauthorized` (`CONFIG_FIELD`). The configuration types do not declare these fields. Nor do they
   declare the values the validation accepts without effect: `path: ""`, `isTrustedDaemon: true`,
-  `regtest`, `isMultisig` and `saveCurrent` `false`, and in the object form of `server` `trusted: true`
-  and empty `username`, `password`, `proxyUri` or `proxy`; at run time these are still accepted.
+  `regtest`, `isMultisig` and `saveCurrent` `false`, in the object form of `server` `trusted: true`
+  and empty `username`, `password`, `proxyUri` or `proxy`, and `server: ""` for a keys-only wallet; at
+  run time these are still accepted.
 - `proxyToWorker` (default `true`) runs the wallet in its own worker.
 - The second argument, `options`, is `undefined` or `{ signal }` with an `AbortSignal`
   ([`ZephyrWalletConstructionOptions`](types.md#zephyrwalletconstructionoptions)); another field rejects
@@ -105,9 +106,8 @@ Creates a keys-only wallet: random without recovery fields, from a `seed` (with 
 ([`ZephyrKeysOnlyWalletConfig`](types.md#zephyrkeysonlywalletconfig), a union of the three forms). It
 has no password, restore height, lookahead, daemon or bytes. Accepted fields: `networkType`, `seed`,
 `seedOffset`, `primaryAddress`, `privateViewKey`, `privateSpendKey`, `language`, `proxyToWorker`, and
-`password` (accepted; a keys-only wallet has no password). A `server` of `""` passes the validation, but
-the construction then rejects with `NATIVE_ERROR`/`UNCLASSIFIED_ERROR`; the type does not declare
-`server`.
+`password` (accepted; a keys-only wallet has no password). A `server` of `""` means no daemon, as for
+the full wallets, and is accepted without effect; the type does not declare `server`.
 
 Rejects with: `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON` for a non-empty `server`,
 `KEYS_ONLY_RESTORE_HEIGHT` for `restoreHeight`, `KEYS_ONLY_LOOKAHEAD` for a lookahead; the seed and key

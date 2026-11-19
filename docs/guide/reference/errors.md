@@ -55,19 +55,12 @@ static isDiagnostic(value: unknown): value is ZephyrWalletErrorDiagnostic;
 
 Whether a value is one of the diagnostics.
 
-### `toEnvelope`
-
-```ts signature
-toEnvelope(): ZephyrWalletErrorEnvelope;
-```
-
-The plain object `{ type: "ZephyrWalletError", code, diagnostic? }` that crosses the worker boundary.
-Used by the library; the envelope type is not exported.
-
 The static helpers the library uses to create and map errors (`unsupported`, `walletClosed`,
-`fromBridge`, `fromBridgeResult`, `checkBridgeResult`, `fromUnknown`, `isEnvelope`, `fromEnvelope`) were
-members of the class in version `2.3.0-sec.2-ts.1`; they are internal now and no longer on the class
-([docs/CHANGES.md](../../CHANGES.md)).
+`fromBridge`, `fromBridgeResult`, `checkBridgeResult`, `fromUnknown`, `isEnvelope`, `fromEnvelope`) and
+the method `toEnvelope`, which made the plain object `{ type: "ZephyrWalletError", code, diagnostic? }`
+that crosses the worker boundary, were members of the class in version `2.3.0-sec.2-ts.1`; they are
+internal now and no longer on the class ([docs/CHANGES.md](../../CHANGES.md)). The worker boundary
+carries the same object as before.
 
 ## Error types
 
@@ -85,8 +78,7 @@ The thirteen codes, listed below.
 type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];
 ```
 
-The union of the diagnostics listed below. The constant it is derived from is not exported by the
-package entry.
+The union of the diagnostics listed below. The constant it is derived from is not exported.
 
 ## Codes
 

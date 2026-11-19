@@ -41,7 +41,7 @@ reshaped, and what is not ported.
 | `moneroTs.openWalletFull({ keysData, cacheData })` | `openWalletData({ keysData, cacheData })`; no `path` |
 | `moneroTs.createWalletKeys(config)` | `createKeysWallet(config)` |
 | `MoneroWalletFull`, `MoneroWalletKeys` | one class, `ZephyrWallet`, with `kind` `"full"` or `"keys"` |
-| `MoneroError` | `ZephyrWalletError` with a fixed `code` and `diagnostic`, no native text; its public members are the constructor, `code`, `diagnostic`, `isCode`, `isDiagnostic` and `toEnvelope` |
+| `MoneroError` | `ZephyrWalletError` with a fixed `code` and `diagnostic`, no native text; its public members are the constructor, `code`, `diagnostic`, `isCode` and `isDiagnostic` |
 | `MoneroUtils.validateAddress(address, networkType)` | `validateAddress(address, networkType)` |
 | `LibraryUtils.setWorkerDistPath(path)` | `setWorkerDistPath(path?)` (no argument: the default), and `setWasmModuleUrl(location?)` for the separate module |
 | `moneroTs.shutdown()` | `terminateWorker()` |
@@ -82,12 +82,15 @@ Differences that are not renames:
 Everything else inherited from monero-ts stays in the repository's source as unported classes and
 is not exported by the package:
 
-- the daemon and wallet RPC clients (`connectToDaemonRpc`, `connectToWalletRpc`, `MoneroDaemonRpc`,
-  `MoneroWalletRpc`) and the connection manager;
+- the daemon RPC client (`connectToDaemonRpc`, `MoneroDaemonRpc`) and the connection manager;
 - listeners (`addListener`) and background synchronization (`startSyncing`);
 - the inherited query-based history model, transaction creation, its relay and sweeps;
 - outputs, key images, rescans, proofs and multisig;
 - file-system wallets.
+
+The wallet RPC client (`connectToWalletRpc`, `MoneroWalletRpc`) is not ported and is no longer in the
+source or the package: a port that used it talks to a wallet RPC server directly or uses a
+`ZephyrWallet`.
 
 A few inherited method names remain on `ZephyrWallet` and reject with `UNSUPPORTED_CAPABILITY`, so
 that a port finds them: `startSyncing`, `createTxs`, `addListener`, `getReserveProofWallet`,
