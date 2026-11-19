@@ -90,6 +90,10 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
 - The library computes no conversion rate. The reserve ratio decides at build time which pairs are
   possible, and the chain checks it again at inclusion; a pricing record older than 10 blocks at
   inclusion makes the chain reject a conversion.
+- `getReserveInfo` returns what the core computes from the daemon's data: `assetsMa` and `equityMa` are 0
+  on the current hard fork; a failed read of the pricing record rejects with `PRICING_RECORD_UNAVAILABLE`
+  instead of the core's zeros. The reserve and the pricing record are as true as the daemon; the oracle's
+  signature is passed on, not verified.
 - A kept build holds the transaction and its secret transaction key in the module's memory until it
   is relayed or void; anything that can call the wallet can relay its token.
 - After acceptance the record lives in the wallet's cache until the bytes are saved. A transaction

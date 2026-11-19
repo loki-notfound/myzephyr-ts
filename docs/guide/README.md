@@ -16,13 +16,13 @@ describes version `2.3.0-sec.2-ts.1`.
 | [4. Assets, accounts and balances](04-assets-and-balances.md) | the four assets, amounts in atomic units, balance maps, accounts and subaddresses, labels |
 | [5. History](05-history.md) | transactions and transfers per asset, the query, paging, the pool refresh, conversions in the history |
 | [6. Sending](06-sending.md) | building to inspect, preparing and relaying, what to show, fees and priorities, every relay outcome, saving |
-| [7. Conversions](07-conversions.md) | the six pairs, the reserve ratio, burnt and minted amounts, the pricing record and its age |
+| [7. Conversions](07-conversions.md) | the six pairs, the reserve ratio, the reserve info, the supply and the pricing record, burnt and minted amounts, the pricing record and its age |
 | [8. Errors](08-errors.md) | the error class, codes and diagnostics, the codes a wallet must handle |
 | [9. Deploying a web wallet](09-deploying-a-web-wallet.md) | the Content-Security-Policy of page and worker, `zephyr.wasm`, Vite, webpack, Electron, the daemon proxy |
 | [10. Coming from monero-ts](10-coming-from-monero-ts.md) | what is the same, what was renamed or reshaped, what is not ported |
 | [11. Known limitations](11-known-limitations.md) | a digest of the limitations, what was proven on mainnet and what was not |
 | [12. Building and verifying](12-building-and-verifying.md) | verifying a release, the signed tag, `manifest.json`, reproducing the build, the core pins |
-| [API reference](reference/README.md) | every exported function, class, method, type and error code |
+| [API reference](reference/README.md) | every exported function, class (the wallet, the daemon client, the error), method, type and error code |
 
 Statements about the core and the network in this guide come from the repository's documents
 ([docs/LIMITATIONS.md](../LIMITATIONS.md), [docs/DEPLOYMENT.md](../DEPLOYMENT.md),

@@ -7,9 +7,38 @@ Changes of what the package declares and exports, compared with the release `2.3
 
 Not released yet: the package version in the repository is still `2.3.0-sec.2-ts.1`, and the release
 of that name does not contain these changes. They make the shipped declarations say what the library
-does, remove internal members and names from them and remove the unsupported wallet RPC client from the
-package; apart from the one diagnostic and the keys-only `server: ""` below, the library behaves as
-before.
+does, remove internal members and names from them, remove the unsupported wallet RPC client from the
+package, and add the reserve, the circulating supply and a supported daemon client with the names of the
+Java port; apart from the additions, the one diagnostic and the keys-only `server: ""` below, the library
+behaves as before. `zephyr.wasm` changes (two bindings).
+
+### The reserve and the circulating supply
+
+New on `ZephyrWallet`, for full wallets with a daemon: `getReserveInfo(): Promise<ZephyrReserveInfo>` and
+`getCirculatingSupply(): Promise<Readonly<Record<string, bigint>>>`, with the names and fields of the Java port's
+`getReserveInfo` and `getCirculatingSupply`. New type `ZephyrReserveInfo`; new diagnostic
+`PRICING_RECORD_UNAVAILABLE` (`DAEMON_ERROR`): the core could not read a usable pricing record and computed
+nothing. Keys-only wallets reject with `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON`.
+
+What to change: nothing; new calls.
+
+### `ZephyrDaemonRpc` supported and exported
+
+The inherited daemon RPC client is replaced by a supported, exported class `ZephyrDaemonRpc`:
+`new ZephyrDaemonRpc(address)` (the wallet's address forms and rejections; it contacts nothing), `getInfo`,
+`getHeight`, `getLastBlockHeader`, `getBlockHeaderByHeight` and `getBlockHeaderByHash`, with the new types
+`ZephyrDaemonInfo`, `ZephyrBlockHeader` and `ZephyrPricingRecord`. It runs in the calling context on the
+library's transport. Every other inherited method is undeclared and rejects with
+`UNSUPPORTED_CAPABILITY`/`DAEMON_RPC_METHOD` (new diagnostic) before any request; `INVALID_CONFIG`/`BLOCK_HEIGHT`
+and `BLOCK_HASH` are new for the arguments. The inherited daemon base class, its models that nothing else used
+and the wallet worker's inherited daemon functions left the source and the package; none was exported.
+
+What to change: nothing for users of the package entry (the inherited class was not exported).
+
+### The unused inherited filter class removed
+
+`dist/src/main/ts/common/Filter.js`, the inherited filter base class that nothing imported, is no longer in
+the package. It was not exported. What to change: nothing.
 
 ### Getters that can resolve to `undefined`
 

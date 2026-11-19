@@ -215,7 +215,7 @@ price of ZPH in USD; `stable` and `stableMa` the rate of ZSD, `reserve` and `res
 its moving average); `reserveRatio` and `reserveRatioMa` the reserve ratio; `yieldPrice` the price of ZYS.
 `timestamp` is the oracle's timestamp in seconds, a `bigint` like Java's `BigInteger` and like every other field of
 the record (an unsigned 64-bit value of the chain, never rounded); `signature` the oracle's signature, 128
-lowercase hexadecimal characters.
+lowercase hexadecimal characters. Guide: [The pricing record](../07-conversions.md#the-pricing-record).
 
 ## Not offered
 

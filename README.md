@@ -26,8 +26,9 @@ are type-checked against the package and the offline ones are run (`bin/check_gu
 
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
 the read-only history of transactions and transfers, an explicit pool refresh, building same-asset
-transactions and conversions to inspect them, and relaying a prepared transaction or conversion in two
-explicit steps (below). Relay was proven on mainnet on 2026-11-15 for transfers in the four V2 assets
+transactions and conversions to inspect them, relaying a prepared transaction or conversion in two
+explicit steps, and the reserve, the circulating supply and the oracle's pricing record with the names of the
+Java port (below). Relay was proven on mainnet on 2026-11-15 for transfers in the four V2 assets
 and four of the six conversions; its failure paths are proven against a local sink only.
 Sweeps and listeners are not supported. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
@@ -100,6 +101,15 @@ The package entry (`src/main/ts/index.ts`) exports:
   `ZephyrTxPriority`, `ZephyrTransferBuild`, `ZephyrBuiltTx`, `ZephyrConversionConfig`,
   `ZephyrConversionDestinationInput`, `ZephyrConversionBuild`, `ZephyrPreparedTransfer`,
   `ZephyrPreparedConversion`, `ZephyrRelayResult`, `ZephyrRelayedTx` and `ZephyrRelayOutcome` (below);
+* the reserve for full wallets with a daemon: `getReserveInfo` (`ZephyrReserveInfo`: the reserve as the core
+  computes it, amounts `bigint`, the two ratios as decimal text) and `getCirculatingSupply` (the supply per label
+  as the daemon reports it); a failed read of the pricing record rejects with
+  `DAEMON_ERROR`/`PRICING_RECORD_UNAVAILABLE` instead of returning zeros;
+* `ZephyrDaemonRpc`, a read-only daemon client that runs in the calling context on the same transport:
+  `new ZephyrDaemonRpc(address)` (contacts nothing), `getInfo`, `getHeight`, `getLastBlockHeader`,
+  `getBlockHeaderByHeight` and `getBlockHeaderByHash`, with the types `ZephyrDaemonInfo`, `ZephyrBlockHeader`
+  and `ZephyrPricingRecord` (the oracle's prices, `bigint` times 10^12); every other inherited daemon call is not
+  offered and rejects with `UNSUPPORTED_CAPABILITY`/`DAEMON_RPC_METHOD` before any request;
 * `validateAddress`, `ZephyrWalletError` (a fixed code and an optional fixed diagnostic; no
   native or daemon text, no secrets; the constructor, `code`, `diagnostic`, `isCode` and
   `isDiagnostic`), `setWorkerDistPath`, `setWasmModuleUrl` and `terminateWorker` (both setters
@@ -108,7 +118,7 @@ The package entry (`src/main/ts/index.ts`) exports:
   `ZephyrWalletConstructionOptions`, `ZephyrNetworkTypeInput`, the five construction configurations
   above, `ZephyrAssetBalances` (the map by
   asset), `ZephyrAccountBalances` (the map by subaddress index), `ZephyrAccount`,
-  `ZephyrSubaddress`, `ZephyrAddressIndex`, `ZephyrAccountOptions`, `ZephyrWalletErrorCode` and
+  `ZephyrSubaddress`, `ZephyrAddressIndex`, `ZephyrAccountOptions`, `ZephyrReserveInfo`, `ZephyrWalletErrorCode` and
   `ZephyrWalletErrorDiagnostic`.
 
 By default each wallet runs in its own worker with its own WebAssembly instance
@@ -478,14 +488,14 @@ plays the daemon.
 ## Not ported
 
 Everything else inherited from monero-ts stays in the source as unported classes under
-`src/main/ts/` and is not exported by the package: the daemon RPC client, the
+`src/main/ts/` and is not exported by the package: the
 connection manager, background synchronization, listeners, the inherited query-based history,
-the inherited transaction creation, its relay and sweeps, outputs, key images, rescans, proofs, multisig and file-system wallets (`src/main/ts/daemon/`,
+the inherited transaction creation, its relay and sweeps, outputs, key images, rescans, proofs, multisig and file-system wallets (the inherited models under `src/main/ts/daemon/model/`,
 most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
 inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and
-`ZephyrSubaddress`). The inherited wallet RPC client is not part of the source or the package any more
-(docs/CHANGES.md). The
+`ZephyrSubaddress`). The inherited wallet RPC client is not part of the source or the package any more, and the
+inherited daemon RPC client was replaced by the supported `ZephyrDaemonRpc` (docs/CHANGES.md). The
 inherited Monero test suite and its root entry point are not part of this repository's tree; the
 tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`.
 

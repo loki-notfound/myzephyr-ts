@@ -105,15 +105,22 @@ must forward the wallet's requests itself; one that answers with a redirect fail
 * For `refreshPool`, also forward `/gettransactions`. For building a transfer or a conversion
   (`buildTransfer`, `buildConversion` and the two prepare calls), also forward
   `/get_output_distribution.bin` and `/get_outs.bin`. All three are read-only.
+* For `getReserveInfo` and `getCirculatingSupply`, `/json_rpc` is enough (the methods are listed below). For
+  `ZephyrDaemonRpc`, which runs in the page itself and not in a wallet worker, forward `POST /json_rpc` with the
+  methods `get_info`, `get_block_count`, `get_last_block_header`, `get_block_header_by_height` and
+  `get_block_header_by_hash`; it sends nothing else. In a page it needs the same-origin proxy (or the node's CORS
+  permission) like a wallet: a node whose `Access-Control-Allow-Origin` names another origin is unreachable from
+  the page (`DAEMON_ERROR`/`DAEMON_UNREACHABLE`).
 * For `relayPrepared`, also forward `POST /sendrawtransaction`. It is the only request of the library
   that changes anything at the daemon: it submits one signed transaction. A proxy that
   refuses it with an HTTP status makes every relay end as `RELAY_UNKNOWN`/`HTTP_STATUS` (a status other
   than 200 counts as an unknown outcome), so decide deliberately whether your deployment relays
   through it.
 * A proxy that filters the JSON-RPC methods of `/json_rpc` must allow the ones the wallet core calls.
-  Seen in the tests of synchronization, building and relaying: `get_version`, `get_info`,
+  Seen in the tests of synchronization, building, relaying and the reserve: `get_version`, `get_info`,
   `hard_fork_info`, `get_fee_estimate`, `get_txpool_backlog`, `getblockheadersrange`,
-  `getblockheaderbyheight`, `get_circulating_supply` and `get_pricing_record_history`. The allowlist
+  `getblockheaderbyheight`, `get_circulating_supply` and `get_pricing_record_history`; for `ZephyrDaemonRpc` also
+  `get_block_count`, `get_last_block_header`, `get_block_header_by_height` and `get_block_header_by_hash`. The allowlist
   the network tests use is in `src/test/network/forwarder.cjs` of the repository.
 * Send request bodies with a `Content-Length`. The daemon's HTTP server does not accept chunked
   request bodies; a proxy that re-sends the wallet's requests chunked makes every connection check

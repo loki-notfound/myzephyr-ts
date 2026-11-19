@@ -82,7 +82,10 @@ Differences that are not renames:
 Everything else inherited from monero-ts stays in the repository's source as unported classes and
 is not exported by the package:
 
-- the daemon RPC client (`connectToDaemonRpc`, `MoneroDaemonRpc`) and the connection manager;
+- most of the daemon RPC client and the connection manager: `ZephyrDaemonRpc` is exported, constructed with
+  `new ZephyrDaemonRpc(address)` (there is no `connectToDaemonRpc`), and offers the node's information, its height
+  and block headers with their pricing record ([ZephyrDaemonRpc](reference/daemon.md)); its other inherited calls
+  reject with `UNSUPPORTED_CAPABILITY`/`DAEMON_RPC_METHOD`;
 - listeners (`addListener`) and background synchronization (`startSyncing`);
 - the inherited query-based history model, transaction creation, its relay and sweeps;
 - outputs, key images, rescans, proofs and multisig;

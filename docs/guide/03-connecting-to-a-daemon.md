@@ -130,6 +130,8 @@ origin to the daemon, and the wallet uses `https://wallet.example.org/rpc`. Such
   (`/get_hashes.bin`), `/get_transaction_pool_hashes.bin` and `/get_o_indexes.bin`;
 - for the pool refresh, building and relaying, also forward what those calls request:
   `/gettransactions`, `/get_output_distribution.bin`, `/get_outs.bin` and `POST /sendrawtransaction`;
+- the reserve calls and `ZephyrDaemonRpc` need only `/json_rpc` (`ZephyrDaemonRpc` runs in the page itself, so
+  it needs this proxy or the node's CORS permission as much as a wallet does);
 - forward request bodies with a `Content-Length`: the daemon does not accept chunked request bodies,
   and a proxy that re-sends them chunked makes every connection check fail;
 - allow binary answers of tens of megabytes and requests of up to 120 s;

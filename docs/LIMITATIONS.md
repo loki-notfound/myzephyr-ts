@@ -276,6 +276,33 @@ that wallet's worker.
   copies, check `N28`) and a relay to an unreachable daemon about 136 bytes; before the commit's cleanups
   were kept, 3 to 5 KB more.
 
+## The reserve, the supply and the daemon client
+
+* `getReserveInfo` returns what the pinned core computes (zephyr-cpp `monero_wallet_full::get_reserve_info`,
+  zephyr `cryptonote::get_reserve_info`), from the daemon's circulating supply, the pricing record of the block
+  below the daemon's height (the core caches that height for 30 s, so the record can be up to 30 s behind the
+  tip) and the pricing record history. The SDK computes nothing itself. `assetsMa` and `equityMa` are 0 on every
+  hard fork after version 4 (the core's code path sets them to 0) and stay raw zero; when no ZSD circulates both
+  ratios and the yield values are 0; before hard fork 6 the yield values are 0.
+* When the core cannot read a usable pricing record of that block, its `get_reserve_info` returns without an
+  exception and without computing (every value but the hard fork version 0). The bridge tells that case apart
+  without reading the values: it starts both ratios with a NaN bit pattern that no computation of the core
+  produces and that every computing path overwrites, and a ratio that still carries it is that failed read
+  (`DAEMON_ERROR`/`PRICING_RECORD_UNAVAILABLE`). The Java port returns the zeros instead.
+* The ratios are the core's `double`, given as the shortest decimal text that reads back as exactly that value;
+  they are not more precise than the core's integer quotient divided by 10^12.
+* `getCirculatingSupply` passes the daemon's tally on: labels as the daemon names them (on mainnet `ZPH`, `ZSD`,
+  `ZRS`, `ZYS`, `DJED`, `YIELD`), amounts up to 2^128 - 1; anything else rejects with `DAEMON_RESPONSE`.
+* Both calls trust the daemon like every other daemon read of the core. A wrong supply or pricing record from a
+  node gives a wrong reserve; the core and the SDK cannot detect it.
+* `ZephyrDaemonRpc` offers the node's information (21 fields of `get_info`), its height and block headers. Its
+  other inherited calls are not offered (`UNSUPPORTED_CAPABILITY`/`DAEMON_RPC_METHOD`). It reads at most 1 MiB per
+  answer and waits at most 30 s; the size is checked after the answer arrived, not while it arrives. It checks
+  what a node sends for type and range, not for truth: the pricing record's signature is passed on, not verified.
+  A header with the core's empty pricing record (every value 0) has no `pricingRecord`.
+* Checked against the Zephyr daemon of the tests (mainnet, restricted RPC) and against constructed answers; not
+  checked against a daemon in unrestricted mode, on testnet or stagenet, or behind other proxies than the tests'.
+
 ## Text from wallets and the chain
 
 Labels, destination addresses and every other text that comes from wallet bytes or from the chain

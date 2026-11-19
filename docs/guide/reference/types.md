@@ -428,7 +428,7 @@ The result of `getReserveInfo`, with the field names of the Java port's `ZephyrR
 atomic units, exactly (the core computes them as unsigned 128-bit integers, so they can exceed 2^64); the two
 ratios as the shortest decimal text, without exponent, that reads back as exactly the core's `double` (Java:
 `BigDecimal`); `hfVersion` the daemon's hard fork version. `assetsMa` and `equityMa` are 0 on the current hard
-fork.
+fork. Units and warnings: [The reserve and the pricing record](../07-conversions.md#the-reserve-and-the-pricing-record).
 
 ## Building and relaying
 

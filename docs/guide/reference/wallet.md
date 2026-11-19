@@ -324,7 +324,8 @@ the daemon's circulating supply, the pricing record of the block below the daemo
 record history. Requests: `get_info` (cached by the core for 30 s), `hard_fork_info`, `getblockheaderbyheight`,
 `get_circulating_supply` and `get_pricing_record_history`. When the core cannot read a usable pricing record of
 that block it computes nothing, and this rejects with `DAEMON_ERROR`/`PRICING_RECORD_UNAVAILABLE` instead of
-returning zeros. Java: `ZephyrWallet.getReserveInfo()`.
+returning zeros. Java: `ZephyrWallet.getReserveInfo()`. Guide:
+[The reserve and the pricing record](../07-conversions.md#the-reserve-and-the-pricing-record).
 
 ### `getCirculatingSupply`
 

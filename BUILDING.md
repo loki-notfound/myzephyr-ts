@@ -89,13 +89,17 @@ host.
 
 runs, with no network access:
 
-* the lifecycle suite (checks `C01`-`C39`) with the release module and the instrumented suite
-  (`T00`-`T23`) with the test module, in Node.js directly and through wallet workers, under a
+* the lifecycle suite (checks `C01`-`C46`) with the release module and the instrumented suite
+  (`T00`-`T24`) with the test module, in Node.js directly and through wallet workers, under a
   preloaded monitor that blocks every connection and records unexpected file writes (among them `C38`
   and `C39`: the relay calls' rejections before dispatch and the strict decoding of their results and
   worker messages; `T22`: every failure injected as the core throws it, each typed failure of a build
   and of a conversion and the untyped ones, leaves the allocator at its level; `T23`: the life of a
-  kept build with a synthetic transaction, its void causes and the allocator);
+  kept build with a synthetic transaction, its void causes and the allocator; `C44`-`C46`: the reserve calls'
+  rejections without a daemon or on a keys-only wallet, `ZephyrDaemonRpc`'s address validation (the same as a
+  wallet's), its not offered methods and argument rejections, and the strict reading of the reserve results;
+  `T24`: the core's failed read of the pricing record and injected failures of the reserve calls, the
+  allocator unchanged);
 * the module loading cases in Node.js, directly and through workers: a missing `zephyr.wasm`,
   a file that is not WebAssembly, a module of another program or build, a changed byte and a
   runtime without Web Crypto reject with fixed diagnostics before any worker starts, and a failed
@@ -111,7 +115,13 @@ runs, with no network access:
   request and then the transactions request, skip what does not parse, keep the node's text out of
   its error and leave the history empty; `S02` (main thread): the transport passes a submit request
   only with the id of an open relay scope, as POST to exactly that scope's address, once, and refuses
-  every other form before sending;
+  every other form before sending; `V01`: the first server's constructed reserve daemons (`/rv/<case>`),
+  against which `getReserveInfo` must equal the core's formula on the constructed supply, pricing record
+  and history (amounts above 2^64, the zero cases, the hard fork rules), reject a failed read of the pricing
+  record with `PRICING_RECORD_UNAVAILABLE` and the failed supply and history reads with `DAEMON_RESPONSE`,
+  without node text; `V02` (main thread and page): `ZephyrDaemonRpc` against constructed answers, with
+  values above 2^53 read exactly, every malformed answer and failure a fixed error, no redirect followed,
+  one request per call and none for a method it does not offer;
 * `S03`: the relay checks with the test module in the main thread against the first server's
   constructed sink daemons (`/sink/<mode>`, answered by `src/test/network/relaySink.cjs`): a wallet
   without funds keeps a synthetic transaction (a test-module hook; it spends nothing and no chain
@@ -215,7 +225,10 @@ an unreachable daemon and a relay with a void token.
 `N19` (every run) counts the requests at the forwarder and in the request allowlist while the
 history calls run: there must be none. `N21` (every run) calls `refreshPool` twice through the
 forwarder: only the pool hashes and pool transactions may be requested, nothing refused, and the
-history of the disposable wallet stays empty. `N20` reads the history of a funded test wallet and runs only
+history of the disposable wallet stays empty. `N29` (every run) reads the reserve, the supply and, with
+`ZephyrDaemonRpc`, the node's information and block headers through the forwarder at one daemon height, and
+compares them with the core's formula on the daemon's own data and with the daemon's own JSON, digit for digit;
+no sync. `N20` reads the history of a funded test wallet and runs only
 in the Node.js direct run with inputs you keep outside this repository:
 
     export FUNDED_WALLET_IN=<directory with a copy of the wallet: keys.bin, cache.bin, password.txt>
