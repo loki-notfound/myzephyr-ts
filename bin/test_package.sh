@@ -124,7 +124,7 @@ for loader in cjs mjs; do
   ! grep -q '"allowed":false' "$OUT/node-$loader-monitor.jsonl" || die "Node consumer ($loader): a connection outside the configured daemon was blocked"
   node - "$OUT/node-$loader.json" <<'JS' || die "Node consumer ($loader): unexpected result"
 const r = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));
-const want = ["ZephyrWallet", "ZephyrWalletError", "createKeysWallet", "createRandomWallet", "openWalletData", "restoreWalletFromKeys", "restoreWalletFromSeed",
+const want = ["ZephyrDaemonRpc", "ZephyrWallet", "ZephyrWalletError", "createKeysWallet", "createRandomWallet", "openWalletData", "restoreWalletFromKeys", "restoreWalletFromSeed",
   "setWasmModuleUrl", "setWorkerDistPath", "terminateWorker", "validateAddress"];
 const ok = r.steps.join() === "create,save,reopen,sync of the saved wallet bytes" && r.restoreAtDaemonHeight && r.sameAddress && r.syncedToDaemon && r.onlyNewBlocks
   && r.savedBlocksBelowDaemon >= 0 && r.savedBlocksBelowDaemon <= 2000 && r.balanceKeys.length === 8 && r.rejectsUnknown && r.deepImport === "blocked"

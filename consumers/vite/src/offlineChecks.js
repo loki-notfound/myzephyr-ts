@@ -16,7 +16,7 @@ export const VECTOR = {
   seedHead: "abducts abducts abducts" // the first three words of the seed
 };
 
-export const EXPORTS = ["ZephyrWallet", "ZephyrWalletError", "createKeysWallet", "createRandomWallet", "openWalletData", "restoreWalletFromKeys",
+export const EXPORTS = ["ZephyrDaemonRpc", "ZephyrWallet", "ZephyrWalletError", "createKeysWallet", "createRandomWallet", "openWalletData", "restoreWalletFromKeys",
   "restoreWalletFromSeed", "setWasmModuleUrl", "setWorkerDistPath", "terminateWorker", "validateAddress"];
 
 export const CHECKS = [
