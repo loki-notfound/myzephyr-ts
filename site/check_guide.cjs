@@ -19,8 +19,8 @@
 // exit with status 0 within the time limit and must not attempt any network access.
 //
 // The reference check compares the names documented in docs/guide/reference/ with the package's
-// exports (index.d.ts), the public members of ZephyrWallet and ZephyrWalletError, the error codes and
-// the diagnostics, and fails on any name missing or extra.
+// exports (index.d.ts), the public members of ZephyrWallet, ZephyrWalletError and ZephyrDaemonRpc, the error
+// codes and the diagnostics, and fails on any name missing or extra.
 //
 // The configuration cases (consumers/node/configCases.ts) are type-checked with the blocks and then run
 // against the validation through the installed package (consumers/node/runConfigCases.cjs, under the same
@@ -270,15 +270,20 @@ function checkReference(ts, indexDts, docs) {
   const ref = (f) => docs[path.join("reference", f)];
   const errorTypes = ["ZephyrWalletErrorCode", "ZephyrWalletErrorDiagnostic"];
   const errDoc = documented(ref("errors.md"));
+  // the daemon client's page documents the class's members and the types of its results
+  const daemonTypes = ["ZephyrDaemonInfo", "ZephyrBlockHeader", "ZephyrPricingRecord"];
+  const daemonDoc = classes.ZephyrDaemonRpc !== undefined && ref("daemon.md") !== undefined ? documented(ref("daemon.md")) : [];
   const out = [];
   out.push(...compareSets("exports (reference/README.md)", names, tableNames(ref("README.md"), "API reference")));
   out.push(...compareSets("functions (functions.md)", functions, documented(ref("functions.md"))));
-  out.push(...compareSets("types (types.md, errors.md)", types, documented(ref("types.md")).concat(errDoc.filter((n) => errorTypes.includes(n)))));
+  out.push(...compareSets("types (types.md, errors.md, daemon.md)", types, documented(ref("types.md")).concat(errDoc.filter((n) => errorTypes.includes(n)), daemonDoc.filter((n) => daemonTypes.includes(n)))));
   out.push(...compareSets("ZephyrWallet members (wallet.md)", members(classes.ZephyrWallet), documented(ref("wallet.md"))));
   out.push(...compareSets("ZephyrWalletError members (errors.md)", members(classes.ZephyrWalletError), errDoc.filter((n) => !errorTypes.includes(n))));
+  if (classes.ZephyrDaemonRpc !== undefined) out.push(...compareSets("ZephyrDaemonRpc members (daemon.md)", members(classes.ZephyrDaemonRpc), daemonDoc.filter((n) => !daemonTypes.includes(n))));
   out.push(...compareSets("error codes (errors.md)", unionLiterals("ZephyrWalletErrorCode"), tableNames(ref("errors.md"), "Codes")));
   out.push(...compareSets("diagnostics (errors.md)", unionLiterals("ZephyrWalletErrorDiagnostic"), tableNames(ref("errors.md"), "Diagnostics")));
-  if (Object.keys(classes).sort().join() !== "ZephyrWallet,ZephyrWalletError") out.push("reference: unexpected classes " + Object.keys(classes).join(", "));
+  const expectedClasses = classes.ZephyrDaemonRpc !== undefined ? "ZephyrDaemonRpc,ZephyrWallet,ZephyrWalletError" : "ZephyrWallet,ZephyrWalletError";
+  if (Object.keys(classes).sort().join() !== expectedClasses) out.push("reference: unexpected classes " + Object.keys(classes).join(", "));
   return out;
 }
 

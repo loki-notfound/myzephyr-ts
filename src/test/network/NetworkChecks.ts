@@ -17,6 +17,7 @@ import http from "http";
 import { parseDaemonAddress } from "../../main/ts/common/ZephyrDaemonAddress";
 import { CheckFailure, CheckResult, codeOf, diagnosticOf, expect, expectCode, present, randomPassword, withDeadline } from "../lifecycle/LifecycleChecks";
 import { GUARD_LEDGER, channelOf, combinedGuard, installGuardLedger, readGuardInto } from "../lifecycle/testSupport";
+import { plainDecimal } from "../../main/ts/common/ZephyrReserveInternal";
 
 /** Thrown by a check whose optional configuration is absent: the check is reported as not run. */
 export class CheckNotRun extends Error {}
@@ -905,6 +906,101 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       expect(JSON.stringify(diff(r2.routes, r3.routes)) === "{}", "no request during the history calls after the refresh");
       report.measurements.N21 = { first, second, poolTxs: [n1, n2] };
       notes.push("refresh 1: " + JSON.stringify(first) + "; refresh 2: " + JSON.stringify(second) + "; incoming pool transactions " + n1 + ", " + n2);
+    } finally {
+      await w.close();
+    }
+  });
+
+  // ------------------------------------------------------------------ N29: the reserve, the supply and the daemon client
+  /** One JSON-RPC answer of the daemon as raw text, through the forwarder (the check's own request, not the library's). */
+  async function rawJsonRpc(base: string, method: string, params?: Record<string, number>): Promise<string> {
+    const body = JSON.stringify(params === undefined ? { jsonrpc: "2.0", id: "0", method } : { jsonrpc: "2.0", id: "0", method, params });
+    if (typeof window !== "undefined" || typeof (globalThis as { importScripts?: unknown }).importScripts === "function") {
+      return (await fetch(base + "/json_rpc", { method: "POST", headers: { "content-type": "application/json" }, body, cache: "no-store" })).text();
+    }
+    return new Promise<string>((resolve, reject) => {
+      const req = http.request(base + "/json_rpc", { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) } }, (res) => {
+        const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c)); res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      });
+      req.on("error", reject); req.end(body);
+    });
+  }
+  /** The literal digits (or string) of a member in raw JSON text, read without a JSON parser. */
+  function literal(text: string, name: string): string {
+    const m = new RegExp("\"" + name + "\"\\s*:\\s*(\"[^\"]*\"|[0-9]+|true|false)").exec(text);
+    if (m === null) throw new CheckFailure("no member " + name + " in the daemon's answer");
+    return m[1].startsWith("\"") ? m[1].slice(1, -1) : m[1];
+  }
+
+  await check("N29", "The reserve, the supply and ZephyrDaemonRpc through the forwarder at one daemon height: getReserveInfo equals the core's formula on the daemon's own supply and pricing record, agrees with getCirculatingSupply, keeps assetsMa and equityMa raw zero; the daemon client's info and headers equal the daemon's own JSON digit for digit (values above 2^53 included); only the allowed reads, nothing refused, a bounded number of requests", async (notes) => {
+    if (t.base === undefined || t.root === undefined) throw new CheckFailure("no target");
+    const base = t.base;
+    const w = await openSeed(base);
+    try {
+      const d = new F.ZephyrDaemonRpc(base);
+      const r0 = await forwarderRoutes();
+      let attempt = 0, done = false;
+      while (!done && attempt < 3) {
+        attempt++;
+        const h0 = await d.getHeight();
+        const info = await w.getReserveInfo();
+        const supply = await w.getCirculatingSupply();
+        const header = await d.getBlockHeaderByHeight(h0 - 1);
+        const rawHeader = await rawJsonRpc(base, "get_block_header_by_height", { height: h0 - 1 });
+        const daemonInfo = await d.getInfo();
+        const rawInfo = await rawJsonRpc(base, "get_info");
+        const byHash = await d.getBlockHeaderByHash(header.hash);
+        const last = await d.getLastBlockHeader();
+        const h1 = await d.getHeight();
+        if (h1 !== h0) { notes.push("attempt " + attempt + ": the daemon height moved from " + h0 + " to " + h1 + "; read again"); continue; }
+        done = true;
+        // the wallet's reserve against the daemon's own data at this height
+        expect(Object.keys(supply).sort().join() === "DJED,YIELD,ZPH,ZRS,ZSD,ZYS", "the six supply labels of mainnet: " + Object.keys(supply).join(","));
+        expect(info.zephReserve === supply.DJED && info.numStables === supply.ZSD && info.liabilities === supply.ZSD && info.numReserves === supply.ZRS, "zephReserve, numStables, liabilities and numReserves equal the supply's DJED, ZSD and ZRS");
+        expect(info.hfVersion >= 6 && info.zyieldCirc === supply.ZYS && info.zyieldRsv === supply.YIELD, "zyieldCirc and zyieldRsv equal the supply's ZYS and YIELD (hard fork " + info.hfVersion + ")");
+        expect(info.assetsMa === BigInt(0) && info.equityMa === BigInt(0), "assetsMa and equityMa raw zero");
+        const record = header.pricingRecord;
+        if (record === undefined) throw new CheckFailure("the header below the daemon height has no pricing record");
+        const full = info.zephReserve * record.spot;
+        const assets = full / BigInt("1000000000000");
+        expect(info.assets === assets && info.equity === (assets > info.numStables ? assets - info.numStables : BigInt(0)), "assets and equity equal the core's formula with the header's spot price");
+        expect(info.reserveRatio === plainDecimal(Number(full / info.numStables) / 1e12), "reserveRatio equals the core's quotient: " + info.reserveRatio);
+        expect(Number(info.reserveRatioMa) > 0, "reserveRatioMa populated: " + info.reserveRatioMa);
+        // the daemon client against the daemon's own JSON
+        for (const [field, name] of [["spot", "spot"], ["movingAverage", "moving_average"], ["stable", "stable"], ["stableMa", "stable_ma"], ["reserve", "reserve"], ["reserveMa", "reserve_ma"],
+          ["reserveRatio", "reserve_ratio"], ["reserveRatioMa", "reserve_ratio_ma"], ["yieldPrice", "yield_price"], ["signature", "signature"]] as const) {
+          expect(String(record[field]) === literal(rawHeader, name), "pricing record " + field + " equals the daemon's " + name);
+        }
+        const recordText = rawHeader.substring(rawHeader.indexOf("\"pricing_record\""));
+        expect(String(record.timestamp) === literal(recordText, "timestamp"), "pricing record timestamp equals the daemon's");
+        for (const [field, name] of [["hash", "hash"], ["height", "height"], ["reward", "reward"], ["prevHash", "prev_hash"], ["minerTxHash", "miner_tx_hash"], ["majorVersion", "major_version"],
+          ["minorVersion", "minor_version"], ["nonce", "nonce"], ["numTxs", "num_txes"], ["size", "block_size"], ["weight", "block_weight"], ["longTermWeight", "long_term_weight"]] as const) {
+          expect(String(header[field]) === literal(rawHeader, name), "header " + field + " equals the daemon's " + name);
+        }
+        expect(header.cumulativeDifficulty === BigInt(literal(rawHeader, "wide_cumulative_difficulty")) && header.cumulativeDifficulty > BigInt(Number.MAX_SAFE_INTEGER), "the cumulative difficulty (above 2^53) equals the daemon's");
+        expect(header.timestamp === Number(literal(rawHeader.substring(0, rawHeader.indexOf("\"pricing_record\"")) + rawHeader.substring(rawHeader.indexOf("\"reward\"")), "timestamp")), "header timestamp equals the daemon's");
+        expect(JSON.stringify(byHash, (k, v) => typeof v === "bigint" ? v.toString() : v) === JSON.stringify(header, (k, v) => typeof v === "bigint" ? v.toString() : v), "getBlockHeaderByHash equals getBlockHeaderByHeight");
+        expect(last.height === h0 - 1 && last.pricingRecord !== undefined, "getLastBlockHeader is the header below the daemon height, with a pricing record");
+        for (const [field, name] of [["height", "height"], ["targetHeight", "target_height"], ["numTxs", "tx_count"], ["target", "target"], ["blockWeightLimit", "block_weight_limit"], ["numAltBlocks", "alt_blocks_count"]] as const) {
+          expect(String(daemonInfo[field]) === literal(rawInfo, name), "getInfo " + field + " equals the daemon's " + name);
+        }
+        expect(daemonInfo.cumulativeDifficulty === BigInt(literal(rawInfo, "wide_cumulative_difficulty")) && daemonInfo.networkType === 0 && daemonInfo.isRestricted === true, "getInfo cumulative difficulty, network type and restricted mode equal the daemon's");
+        expect(Object.keys(daemonInfo).length === 21, "getInfo carries the 21 fields the daemon returns: " + Object.keys(daemonInfo).length);
+        notes.push("height " + h0 + ": hard fork " + info.hfVersion + ", reserve ratio " + info.reserveRatio + ", moving average " + info.reserveRatioMa + "; supply labels " + Object.keys(supply).join(","));
+        report.measurements.N29 = { height: h0, attempts: attempt, hfVersion: info.hfVersion, reserveRatio: info.reserveRatio, reserveRatioMa: info.reserveRatioMa, supplyLabels: Object.keys(supply) };
+      }
+      expect(done, "three attempts without a stable daemon height");
+      const r1 = await forwarderRoutes();
+      const diff: Record<string, number> = {};
+      for (const k of Object.keys(r1.routes)) if (r1.routes[k] !== (r0.routes[k] ?? 0)) diff[k] = r1.routes[k] - (r0.routes[k] ?? 0);
+      const allowed = ["/json_rpc get_info", "/json_rpc hard_fork_info", "/json_rpc getblockheaderbyheight", "/json_rpc get_circulating_supply", "/json_rpc get_pricing_record_history",
+        "/json_rpc get_block_count", "/json_rpc get_block_header_by_height", "/json_rpc get_block_header_by_hash", "/json_rpc get_last_block_header"];
+      const total = Object.values(diff).reduce((n, c) => n + c, 0);
+      expect(Object.keys(diff).every((k) => allowed.includes(k)), "only the reserve's and the daemon client's reads: " + JSON.stringify(diff));
+      expect(r1.denied === r0.denied, "no request refused by the forwarder");
+      expect(total <= 15 * attempt, "at most 15 requests per attempt: " + total);
+      notes.push("requests through the forwarder: " + JSON.stringify(diff));
+      (report.measurements.N29 as Record<string, unknown>).requests = diff;
     } finally {
       await w.close();
     }

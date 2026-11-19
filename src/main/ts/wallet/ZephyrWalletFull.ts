@@ -9,7 +9,6 @@ import ZephyrAddressBookEntry from "./model/ZephyrAddressBookEntry";
 import ZephyrBlock from "../daemon/model/ZephyrBlock";
 import ZephyrCheckTx from "./model/ZephyrCheckTx";
 import ZephyrCheckReserve from "./model/ZephyrCheckReserve";
-import ZephyrDaemonRpc from "../daemon/ZephyrDaemonRpc";
 import ZephyrError from "../common/ZephyrError";
 import ZephyrIncomingTransfer from "./model/ZephyrIncomingTransfer";
 import ZephyrIntegratedAddress from "./model/ZephyrIntegratedAddress";
@@ -1704,15 +1703,13 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   async startMining(numThreads: number, backgroundMining?: boolean, ignoreBattery?: boolean): Promise<void> {
     if (this.getWalletProxy()) return this.getWalletProxy().startMining(numThreads, backgroundMining, ignoreBattery);
     this.assertNotClosed();
-    let daemon = await ZephyrDaemonRpc.connectToDaemonRpc(await this.getDaemonConnection());
-    await daemon.startMining(await this.getPrimaryAddress(), numThreads, backgroundMining, ignoreBattery);
+    throw WalletErrors.unsupported("DAEMON_RPC_METHOD"); // the daemon client does not offer mining
   }
   
   async stopMining(): Promise<void> {
     if (this.getWalletProxy()) return this.getWalletProxy().stopMining();
     this.assertNotClosed();
-    let daemon = await ZephyrDaemonRpc.connectToDaemonRpc(await this.getDaemonConnection());
-    await daemon.stopMining();
+    throw WalletErrors.unsupported("DAEMON_RPC_METHOD"); // the daemon client does not offer mining
   }
   
   async isMultisigImportNeeded(): Promise<boolean> {

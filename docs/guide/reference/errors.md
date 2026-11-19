@@ -143,6 +143,7 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `TERMINATE` | `UNSUPPORTED_CAPABILITY` | `terminate` of a direct-mode wallet |
 | `DAEMON_CREDENTIALS` | `UNSUPPORTED_CAPABILITY` | a user name or password for the daemon |
 | `DAEMON_PROXY` | `UNSUPPORTED_CAPABILITY` | a proxy for the daemon |
+| `DAEMON_RPC_METHOD` | `UNSUPPORTED_CAPABILITY` | an inherited method `ZephyrDaemonRpc` does not offer (undeclared; rejected before any request) |
 | `RELAY_REQUEST` | `UNSUPPORTED_CAPABILITY`, `NATIVE_ERROR` | a submit or relay request refused by the transport: outside a relay call `UNSUPPORTED_CAPABILITY`; during `relayPrepared` `NATIVE_ERROR`, nothing sent |
 
 ### Configuration and arguments
@@ -152,6 +153,8 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `CONFIG_TYPE` | `INVALID_CONFIG` | a configuration, query or options value that is not a plain object of own data properties |
 | `UNKNOWN_FIELD` | `INVALID_CONFIG` | an unknown field |
 | `FIELD_TYPE` | `INVALID_CONFIG` | a field or argument of the wrong type, or too many arguments |
+| `BLOCK_HEIGHT` | `INVALID_CONFIG` | a block height that is not a safe integer from 0 (`ZephyrDaemonRpc.getBlockHeaderByHeight`) |
+| `BLOCK_HASH` | `INVALID_CONFIG` | a block hash that is not 64 lowercase hexadecimal characters (`ZephyrDaemonRpc.getBlockHeaderByHash`) |
 | `NETWORK_TYPE` | `INVALID_CONFIG` | a missing or unknown network type |
 | `CREATE_MODE` | `INVALID_CONFIG` | recovery fields that do not fit the construction function |
 | `SEED_AND_KEYS` | `INVALID_CONFIG` | a seed together with keys |
@@ -221,7 +224,7 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `DAEMON_NOT_CONNECTED` | `DAEMON_ERROR` | no daemon configured or connected; also a browser request blocked by CORS or a policy |
 | `DAEMON_UNREACHABLE` | `DAEMON_ERROR` | no answer: unreachable, refused or timed out; at relay, nothing was sent |
 | `DAEMON_RESPONSE` | `DAEMON_ERROR` | an answer the core could not use: an error, an HTTP status, a body, a redirect |
-| `DAEMON_BUSY` | `DAEMON_ERROR` | at relay, the daemon did not process the transaction |
+| `DAEMON_BUSY` | `DAEMON_ERROR` | at relay, the daemon did not process the transaction; for `ZephyrDaemonRpc`, the daemon answered with the status BUSY |
 | `PRICING_RECORD_UNAVAILABLE` | `DAEMON_ERROR` | `getReserveInfo`: the core could not read a usable pricing record of the daemon's top block and computed nothing |
 | `SYNC_FAILED` | `NATIVE_ERROR` | another failure of a sync |
 

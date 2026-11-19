@@ -20,6 +20,7 @@ import * as Transfer from "../../main/ts/common/ZephyrTransferInternal";
 import * as Conversion from "../../main/ts/common/ZephyrConversionInternal";
 import * as Relay from "../../main/ts/common/ZephyrRelayInternal";
 import * as Reserve from "../../main/ts/common/ZephyrReserveInternal";
+import { parseDaemonAddress } from "../../main/ts/common/ZephyrDaemonAddress";
 
 /**
  * The construction functions and validateAddress with untyped arguments: these checks pass configurations
@@ -2212,6 +2213,48 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     await w.close();
     await expectCode(w.getReserveInfo(), "WALLET_CLOSED", "getReserveInfo after close", notes);
     await expectCode(w.getCirculatingSupply(), "WALLET_CLOSED", "getCirculatingSupply after close", notes);
+  });
+
+  await check("C45", "ZephyrDaemonRpc offline: the constructor takes the wallet's address forms and rejects exactly as the wallet's address validation and setDaemonConnection do, contacts nothing; every inherited method it does not offer rejects UNSUPPORTED_CAPABILITY/DAEMON_RPC_METHOD and is not enumerable; invalid arguments reject before any request", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    try {
+      const inputs: Array<[string, unknown]> = [["text", "http://127.0.0.1:18081"], ["object", { uri: "https://node.example.org:443/rpc" }], ["trusted true", { uri: "http://127.0.0.1:1", trusted: true }],
+        ["empty", ""], ["no scheme", "127.0.0.1:1"], ["query", "http://127.0.0.1:1/?a=1"], ["credentials in the address", "http://u:p@127.0.0.1:1"], ["username", { uri: "http://127.0.0.1:1", username: "u" }],
+        ["password", { uri: "http://127.0.0.1:1", password: "p" }], ["proxy", { uri: "http://127.0.0.1:1", proxyUri: "http://127.0.0.1:2" }], ["untrusted", { uri: "http://127.0.0.1:1", trusted: false }],
+        ["certificate setting", { uri: "http://127.0.0.1:1", rejectUnauthorized: false }], ["unknown field", { uri: "http://127.0.0.1:1", other: 1 }], ["number", 5], ["array", ["http://127.0.0.1:1"]]];
+      let same = 0;
+      for (const [what, input] of inputs) {
+        const outcome = async (fn: () => unknown): Promise<string> => { try { await fn(); return "ok"; } catch (err) { return codeOf(err) + diagnosticOf(err) + (err instanceof F.ZephyrWalletError ? "" : " (untyped)"); } };
+        const daemon = await outcome(() => new F.ZephyrDaemonRpc(input as string));
+        // the wallet's own validation: a valid address is only parsed (setting it would make the core check the connection);
+        // an invalid one is also passed to setDaemonConnection, which rejects before any native call
+        const parsed = await outcome(() => parseDaemonAddress(input));
+        const wallet = parsed === "ok" ? parsed : await outcome(() => w.setDaemonConnection(input as string));
+        notes.push(what + ": " + daemon);
+        expect(daemon === parsed && daemon === wallet, what + ": ZephyrDaemonRpc " + daemon + " but the wallet's validation " + parsed + " and setDaemonConnection " + wallet);
+        same++;
+      }
+      notes.push(same + " address inputs: the same outcome as setDaemonConnection");
+    } finally {
+      await w.close();
+    }
+    const d = new F.ZephyrDaemonRpc("http://127.0.0.1:1");
+    const untyped = d as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    const names = Object.getOwnPropertyNames(Object.getPrototypeOf(d)).filter((n) => n !== "constructor").sort();
+    const offered = ["getBlockHeaderByHash", "getBlockHeaderByHeight", "getHeight", "getInfo", "getLastBlockHeader"];
+    const unsupported = names.filter((n) => !offered.includes(n));
+    expect(offered.every((n) => names.includes(n)), "the five supported methods");
+    expect(unsupported.length === 65, "65 inherited methods on the prototype, found " + unsupported.length);
+    for (const name of unsupported) {
+      expect(!Object.prototype.propertyIsEnumerable.call(Object.getPrototypeOf(d), name), name + " is not enumerable");
+      await expectCode(untyped[name]("x"), "UNSUPPORTED_CAPABILITY", name, [], "DAEMON_RPC_METHOD");
+    }
+    await expectCode((F.ZephyrDaemonRpc as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>).connectToDaemonRpc("http://127.0.0.1:1"), "UNSUPPORTED_CAPABILITY", "connectToDaemonRpc", notes, "DAEMON_RPC_METHOD");
+    notes.push(unsupported.length + " instance methods and connectToDaemonRpc rejected with UNSUPPORTED_CAPABILITY/DAEMON_RPC_METHOD");
+    await expectCode(d.getBlockHeaderByHeight(-1), "INVALID_CONFIG", "getBlockHeaderByHeight(-1)", notes, "BLOCK_HEIGHT");
+    await expectCode(untyped.getBlockHeaderByHeight(1, 2), "INVALID_CONFIG", "getBlockHeaderByHeight(1, 2)", notes, "BLOCK_HEIGHT");
+    await expectCode(d.getBlockHeaderByHash("0".repeat(63)), "INVALID_CONFIG", "getBlockHeaderByHash(63 digits)", notes, "BLOCK_HASH");
+    await expectCode(untyped.getInfo(undefined), "INVALID_CONFIG", "getInfo(undefined)", notes, "FIELD_TYPE");
   });
 
   await check("C46", "Reserve and supply results: the bridge's text read exactly (uint128 values above 2^64 as bigint, the ratio as the shortest decimal text of the same double, no exponent), malformed bridge results NATIVE_ERROR/UNEXPECTED_RESULT, the worker data round trip exact and malformed worker data MALFORMED_MESSAGE", async (notes) => {

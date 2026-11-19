@@ -5,7 +5,8 @@
  * check of HistoryRequestCheck.ts (no request during getTxs, getTransfers and getTx) and the pool refresh
  * check of PoolRefreshCheck.ts (P01, the constructed pool daemons); in the main thread also the relay
  * refusal check of RelayRefusalCheck.ts (S01) and its scoped pass check (S02); the reserve check of ReserveChecks.ts
- * (V01, the constructed reserve daemons) in both modes.
+ * (V01, the constructed reserve daemons) in both modes and the daemon client check of DaemonRpcChecks.ts (V02) in the
+ * main thread.
  *
  *   node --require nodeMonitor.cjs runRedirectNode.js --mode direct|worker --out report.json
  *
@@ -20,6 +21,7 @@ import { runHistoryRequestCheck } from "./HistoryRequestCheck";
 import { runPoolRefreshCheck } from "./PoolRefreshCheck";
 import { runRelayRefusalCheck, runScopedPassCheck } from "./RelayRefusalCheck";
 import { ReserveConstants, runReserveWalletCheck } from "./ReserveChecks";
+import { DaemonRpcConstants, runDaemonRpcCheck } from "./DaemonRpcChecks";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf("--" + name);
@@ -37,7 +39,10 @@ async function main(): Promise<number> {
   const { startRedirectServers, POOL_MARKER } = require(path.resolve(__dirname, "../../../../src/test/transport/redirectServers.cjs"));
   process.env.LIFECYCLE_MONITOR_LOOPBACK_LISTEN = "1";
   const servers = await startRedirectServers();
-  process.env.LIFECYCLE_MONITOR_ALLOW_CONNECT = "127.0.0.1:" + servers.ports.first + ",127.0.0.1:" + servers.ports.second;
+  // a loopback port that was bound and closed again: connections to it are refused (the daemon client's unreachable case)
+  const net = require("net");
+  const closedPort = await new Promise<number>((resolve) => { const srv = net.createServer(); srv.listen(0, "127.0.0.1", () => { const port = srv.address().port; srv.close(() => resolve(port)); }); });
+  process.env.LIFECYCLE_MONITOR_ALLOW_CONNECT = "127.0.0.1:" + servers.ports.first + ",127.0.0.1:" + servers.ports.second + ",127.0.0.1:" + closedPort;
   let report;
   let history;
   let pool;
@@ -50,8 +55,11 @@ async function main(): Promise<number> {
     const scoped = mode === "direct" ? await runScopedPassCheck(targets) : undefined;
     const constants = require(path.resolve(__dirname, "../../../../src/test/transport/reserveDaemon.cjs")).constants() as ReserveConstants;
     const reserve = await runReserveWalletCheck(mode, targets, constants);
-    report = Object.assign({}, report, { checks: report.checks.concat([history.check, pool.check], relay === undefined ? [] : [relay.check], scoped === undefined ? [] : [scoped.check], [reserve.check]),
-      reserve: { steps: reserve.steps },
+    const rpcConstants = require(path.resolve(__dirname, "../../../../src/test/transport/daemonRpcDaemon.cjs")).constants() as DaemonRpcConstants;
+    const daemonRpc = mode === "direct" ? await runDaemonRpcCheck(targets, rpcConstants, "http://127.0.0.1:" + closedPort) : undefined;
+    report = Object.assign({}, report, { checks: report.checks.concat([history.check, pool.check], relay === undefined ? [] : [relay.check], scoped === undefined ? [] : [scoped.check], [reserve.check],
+      daemonRpc === undefined ? [] : [daemonRpc.check]),
+      reserve: { steps: reserve.steps }, daemonRpc: daemonRpc === undefined ? undefined : { steps: daemonRpc.steps },
       scopedPass: scoped === undefined ? undefined : { outcomes: scoped.outcomes, daemonSubmits: scoped.daemonSubmits },
       relay: relay === undefined ? undefined : { refused: relay.refused, attempts: relay.attempts, daemonRequestsDuringAttempts: relay.daemonRequestsDuringAttempts, controlRequests: relay.controlRequests }, history: { requestsBeforeHistory: history.requestsBeforeHistory, requestsDuringHistory: history.requestsDuringHistory, historyCalls: history.historyCalls },
       pool: { steps: pool.steps, poolTxRequests: pool.poolTxRequests } });

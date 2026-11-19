@@ -3,7 +3,8 @@
  * release worker bundle. Runs RedirectChecks.ts with a wallet in the page itself (direct) and with a
  * wallet in its own worker, against the loopback servers whose origins the runner allows in
  * connect-src, then the history check of HistoryRequestCheck.ts and the pool refresh check of
- * PoolRefreshCheck.ts in both, the reserve check of ReserveChecks.ts (V01) in both, and posts the reports and
+ * PoolRefreshCheck.ts in both, the reserve check of ReserveChecks.ts (V01) in both and the daemon client check of
+ * DaemonRpcChecks.ts (V02) in the page, and posts the reports and
  * every policy violation to /result.
  */
 import { setWorkerDistPath, terminateWorker } from "../../../main/ts/index";
@@ -12,6 +13,7 @@ import { runHistoryRequestCheck } from "../HistoryRequestCheck";
 import { runPoolRefreshCheck } from "../PoolRefreshCheck";
 import { runRelayRefusalCheck, runScopedPassCheck } from "../RelayRefusalCheck";
 import { ReserveConstants, runReserveWalletCheck } from "../ReserveChecks";
+import { DaemonRpcConstants, runDaemonRpcCheck } from "../DaemonRpcChecks";
 
 async function run(): Promise<void> {
   const violations: string[] = [];
@@ -22,6 +24,7 @@ async function run(): Promise<void> {
     const targets = await (await fetch("/redirect-targets.json", { cache: "no-store" })).json() as { first: string; marker: string };
     const stats = async (): Promise<RedirectServerStats> => (await fetch(targets.first + "/__stats", { cache: "no-store" })).json() as Promise<RedirectServerStats>;
     const constants = await (await fetch(targets.first + "/__reserve", { cache: "no-store" })).json() as ReserveConstants;
+    const rpcConstants = await (await fetch(targets.first + "/__daemonrpc", { cache: "no-store" })).json() as DaemonRpcConstants;
     const reports: RedirectReport[] = [];
     for (const [env, mode] of [["chromium-page", "direct"], ["chromium-worker", "worker"]] as const) {
       const r = await runRedirectChecks(env, mode, { first: targets.first, stats });
@@ -30,8 +33,9 @@ async function run(): Promise<void> {
       const s = mode === "direct" ? await runRelayRefusalCheck({ first: targets.first, stats }) : undefined;
       const sp = mode === "direct" ? await runScopedPassCheck({ first: targets.first, stats }) : undefined;
       const rv = await runReserveWalletCheck(mode, { first: targets.first, stats }, constants);
-      reports.push(Object.assign({}, r, { checks: r.checks.concat([h.check, p.check], s === undefined ? [] : [s.check], sp === undefined ? [] : [sp.check], [rv.check]),
-        reserve: { steps: rv.steps },
+      const rpc = mode === "direct" ? await runDaemonRpcCheck({ first: targets.first, stats }, rpcConstants) : undefined;
+      reports.push(Object.assign({}, r, { checks: r.checks.concat([h.check, p.check], s === undefined ? [] : [s.check], sp === undefined ? [] : [sp.check], [rv.check], rpc === undefined ? [] : [rpc.check]),
+        reserve: { steps: rv.steps }, daemonRpc: rpc === undefined ? undefined : { steps: rpc.steps },
         scopedPass: sp === undefined ? undefined : { outcomes: sp.outcomes, daemonSubmits: sp.daemonSubmits },
         relay: s === undefined ? undefined : { refused: s.refused, attempts: s.attempts, daemonRequestsDuringAttempts: s.daemonRequestsDuringAttempts, controlRequests: s.controlRequests }, history: { requestsBeforeHistory: h.requestsBeforeHistory, requestsDuringHistory: h.requestsDuringHistory, historyCalls: h.historyCalls },
         pool: { steps: p.steps, poolTxRequests: p.poolTxRequests } }));

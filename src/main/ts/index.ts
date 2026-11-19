@@ -54,7 +54,8 @@
  * calls do, but keep the built transactions inside the module under an opaque token (one slot per wallet);
  * relayPrepared(token) relays exactly what was described, and discardPrepared(token) voids it.
  * The reserve and the oracle's prices: getReserveInfo and getCirculatingSupply on full wallets with a daemon,
- * with the names and fields of the Java port.
+ * and ZephyrDaemonRpc (the node's information, its height and block headers with their pricing record), with
+ * the names and fields of the Java port; ZephyrDaemonRpc runs in the calling context on the same transport.
  * Not supported: listeners, background sync, outputs, sweeps, key images, rescans.
  */
 export {
@@ -88,5 +89,7 @@ export type { ZephyrConversionConfig, ZephyrConversionDestinationInput, ZephyrCo
 export type { ZephyrPreparedTransfer, ZephyrPreparedConversion, ZephyrRelayResult, ZephyrRelayedTx, ZephyrRelayOutcome } from "./common/ZephyrRelay";
 export type { ZephyrReserveInfo } from "./common/ZephyrReserve";
 export type { ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination, ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "./common/ZephyrHistory";
+export { ZephyrDaemonRpc } from "./daemon/ZephyrDaemonRpc";
+export type { ZephyrDaemonInfo, ZephyrBlockHeader, ZephyrPricingRecord } from "./daemon/ZephyrDaemonRpc";
 export { default as ZephyrWalletError } from "./common/ZephyrWalletError";
 export type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./common/ZephyrWalletError";

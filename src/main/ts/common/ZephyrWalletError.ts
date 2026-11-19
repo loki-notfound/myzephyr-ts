@@ -134,8 +134,10 @@ const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   "TX_EXTRA_TOO_BIG", "SANITY_CHECK_FAILED", "NOT_RELAYED", "REJECTED", "DAEMON_BUSY", "NO_ANSWER", "HTTP_STATUS", "ANSWER_UNREADABLE",
   // the reserve and the circulating supply of full wallets (keys-only wallets: UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON):
   // DAEMON_ERROR/PRICING_RECORD_UNAVAILABLE when the core could not read a usable pricing record of the daemon's top
-  // block (it then computes nothing)
-  "PRICING_RECORD_UNAVAILABLE"
+  // block (it then computes nothing); ZephyrDaemonRpc: UNSUPPORTED_CAPABILITY/DAEMON_RPC_METHOD for every inherited
+  // method that is not supported (before any request), INVALID_CONFIG/BLOCK_HEIGHT and BLOCK_HASH for the arguments
+  // of the block header calls
+  "PRICING_RECORD_UNAVAILABLE", "DAEMON_RPC_METHOD", "BLOCK_HEIGHT", "BLOCK_HASH"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];

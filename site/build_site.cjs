@@ -20,7 +20,7 @@ const ASSETS = ["content.css", "print.css", "site.css", "favicon.svg", "favicon-
 
 // the page order: the guide's index, the chapters, then the reference
 const ORDER = ["README.md", ...fs.readdirSync(GUIDE).filter((f) => /^\d\d-.*\.md$/.test(f)).sort(),
-  "reference/README.md", "reference/functions.md", "reference/wallet.md", "reference/types.md", "reference/errors.md"];
+  "reference/README.md", "reference/functions.md", "reference/wallet.md", "reference/daemon.md", "reference/types.md", "reference/errors.md"];
 
 const esc = md.escapeHtml;
 const outName = (rel) => rel.replace(/(^|\/)README\.md$/, "$1index.html").replace(/\.md$/, ".html");

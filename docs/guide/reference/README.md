@@ -7,6 +7,7 @@ the files it re-exports). The signatures are copied from those declarations, and
 
 - [Functions](functions.md): the construction functions and the utilities.
 - [ZephyrWallet](wallet.md): the wallet class, every property and method.
+- [ZephyrDaemonRpc](daemon.md): the daemon client, its methods and the types of its results.
 - [Types](types.md): configurations, results and their parts.
 - [Errors](errors.md): `ZephyrWalletError`, its codes and its diagnostics.
 
@@ -17,6 +18,7 @@ only.
 |---|---|---|
 | `ZephyrWallet` | class | [ZephyrWallet](wallet.md) |
 | `ZephyrWalletError` | class | [ZephyrWalletError](errors.md#zephyrwalleterror) |
+| `ZephyrDaemonRpc` | class | [ZephyrDaemonRpc](daemon.md) |
 | `createRandomWallet` | function | [createRandomWallet](functions.md#createrandomwallet) |
 | `restoreWalletFromSeed` | function | [restoreWalletFromSeed](functions.md#restorewalletfromseed) |
 | `restoreWalletFromKeys` | function | [restoreWalletFromKeys](functions.md#restorewalletfromkeys) |
@@ -63,6 +65,9 @@ only.
 | `ZephyrRelayedTx` | type | [ZephyrRelayedTx](types.md#zephyrrelayedtx) |
 | `ZephyrRelayResult` | type | [ZephyrRelayResult](types.md#zephyrrelayresult) |
 | `ZephyrReserveInfo` | type | [ZephyrReserveInfo](types.md#zephyrreserveinfo) |
+| `ZephyrDaemonInfo` | type | [ZephyrDaemonInfo](daemon.md#zephyrdaemoninfo) |
+| `ZephyrBlockHeader` | type | [ZephyrBlockHeader](daemon.md#zephyrblockheader) |
+| `ZephyrPricingRecord` | type | [ZephyrPricingRecord](daemon.md#zephyrpricingrecord) |
 | `ZephyrWalletErrorCode` | type | [ZephyrWalletErrorCode](errors.md#zephyrwalleterrorcode) |
 | `ZephyrWalletErrorDiagnostic` | type | [ZephyrWalletErrorDiagnostic](errors.md#zephyrwalleterrordiagnostic) |
 
