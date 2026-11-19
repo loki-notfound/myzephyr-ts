@@ -23,7 +23,8 @@ import { ZephyrTransferBuild, ZephyrTransferConfig } from "../common/ZephyrTrans
 import { checkTransferConfig } from "../common/ZephyrTransferInternal";
 import { ZephyrConversionBuild, ZephyrConversionConfig } from "../common/ZephyrConversion";
 import { checkConversionConfig } from "../common/ZephyrConversionInternal";
-import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult, checkRelayToken } from "../common/ZephyrRelay";
+import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult } from "../common/ZephyrRelay";
+import { checkRelayToken } from "../common/ZephyrRelayInternal";
 import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx, checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistory";
 
 

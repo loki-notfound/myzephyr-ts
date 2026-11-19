@@ -18,7 +18,7 @@ import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
 import * as History from "../../main/ts/common/ZephyrHistory";
 import * as Transfer from "../../main/ts/common/ZephyrTransferInternal";
 import * as Conversion from "../../main/ts/common/ZephyrConversionInternal";
-import * as Relay from "../../main/ts/common/ZephyrRelay";
+import * as Relay from "../../main/ts/common/ZephyrRelayInternal";
 
 /**
  * The construction functions and validateAddress with untyped arguments: these checks pass configurations

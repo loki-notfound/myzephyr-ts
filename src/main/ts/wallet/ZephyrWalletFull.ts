@@ -47,8 +47,8 @@ import { ZephyrTransferBuild } from "../common/ZephyrTransfer";
 import { MAX_DESTINATIONS, ZephyrTransferRequest, checkTransferRequest, fromBuildDto, parseBridgeBuild } from "../common/ZephyrTransferInternal";
 import { ZephyrConversionBuild } from "../common/ZephyrConversion";
 import { ZephyrConversionRequest, checkConversionRequest, fromConversionDto, parseBridgeConversion } from "../common/ZephyrConversionInternal";
-import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult, checkRelayToken, fromPreparedConversionDto, fromPreparedTransferDto, fromRelayDto, parseBridgeDiscard,
-  parseBridgePreparedConversion, parseBridgePreparedTransfer, parseBridgeRelay } from "../common/ZephyrRelay";
+import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult } from "../common/ZephyrRelay";
+import { checkRelayToken, fromPreparedConversionDto, fromPreparedTransferDto, fromRelayDto, parseBridgeDiscard, parseBridgePreparedConversion, parseBridgePreparedTransfer, parseBridgeRelay } from "../common/ZephyrRelayInternal";
 import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, ZephyrWalletTx, checkSelection, fromPoolRefreshDto, fromTxsDto, parseBridgeTxs, parsePoolRefresh } from "../common/ZephyrHistory";
 import { ZephyrAccount, ZephyrAddressIndex, ZephyrSubaddress } from "../common/ZephyrAccounts";
 import { fromAccountDto, fromAccountsDto, fromAddressIndexDto, fromSubaddressDto, fromSubaddressesDto, parseBridgeAccount, parseBridgeAccounts, parseBridgeAddressIndex, parseBridgeSubaddress, parseBridgeSubaddresses } from "../common/ZephyrAccountsInternal";

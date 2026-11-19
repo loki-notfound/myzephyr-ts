@@ -27,7 +27,7 @@ import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccoun
 import { checkSelection, toTxDto } from "./ZephyrHistory";
 import { checkTransferRequest, toBuildDto } from "./ZephyrTransferInternal";
 import { checkConversionRequest, toConversionDto } from "./ZephyrConversionInternal";
-import { checkRelayToken, toPreparedConversionDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelay";
+import { checkRelayToken, toPreparedConversionDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelayInternal";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
