@@ -208,6 +208,8 @@ rejected.keysOnly({ networkType: 0, path: "wallet" }, "UNSUPPORTED_CAPABILITY/FI
 undeclared.keysOnly({ networkType: 0, path: "" });
 // @ts-expect-error saveCurrent false has no effect
 undeclared.keysOnly({ networkType: 0, seed: SEED, saveCurrent: false });
+// @ts-expect-error server "" has no effect: a keys-only wallet takes no daemon
+undeclared.keysOnly({ networkType: 0, seed: SEED, server: "" });
 runtimeOnly.keysOnly({ networkType: 0, privateViewKey: KEY }, "INVALID_RECOVERY_MATERIAL/VIEW_KEY_WITHOUT_ADDRESS");
 runtimeOnly.keysOnly({ networkType: 0, seed: "abbey" }, "INVALID_RECOVERY_MATERIAL/SEED_WORD_COUNT");
 

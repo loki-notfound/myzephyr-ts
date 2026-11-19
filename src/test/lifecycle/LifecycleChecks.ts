@@ -2166,6 +2166,35 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     expect(saved.value !== undefined || !proxy, "the module of this context was compiled before");
   });
 
+  await check("C43", "A keys-only wallet with server \"\" or undefined has no daemon: each of the three forms constructs as without the field; a non-empty server, as text or object, still rejects with UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON", async (notes) => {
+    const forms: Array<[string, Record<string, unknown>]> = [
+      ["random", { networkType: 0 }],
+      ["seed", { networkType: 0, seed }],
+      ["keys", { networkType: 0, primaryAddress: address, privateViewKey: privView, privateSpendKey: privSpend }]
+    ];
+    let constructed = 0;
+    for (const [form, fields] of forms) {
+      for (const [label, server] of [["\"\"", ""], ["undefined", undefined]] as const) {
+        const what = form + ", server " + label;
+        const w = await U.createKeysWallet({ ...fields, server, proxyToWorker: proxy });
+        try {
+          expect(w.kind === "keys" && w.proxied === proxy, what + ": a keys-only wallet in the requested mode");
+          const primary = await w.getPrimaryAddress();
+          expect(form === "random" ? primary.length === 101 && primary.startsWith("ZEPH") : primary === address, what + ": the address of its form");
+          if (form !== "random") expect((await w.getPrivateViewKey()) === privView && (await w.getPrivateSpendKey()) === privSpend, what + ": the keys of its form");
+          expect(w.getDaemonConnection() === undefined, what + ": no daemon connection");
+          await expectCode(w.isConnectedToDaemon(), "UNSUPPORTED_CAPABILITY", what + ": isConnectedToDaemon", notes, "KEYS_ONLY_DAEMON");
+        } finally {
+          await w.close();
+        }
+        constructed++;
+      }
+      await expectCode(U.createKeysWallet({ ...fields, server: "http://127.0.0.1:1", proxyToWorker: proxy }), "UNSUPPORTED_CAPABILITY", form + ", a server address", notes, "KEYS_ONLY_DAEMON");
+      await expectCode(U.createKeysWallet({ ...fields, server: { uri: "http://127.0.0.1:1" }, proxyToWorker: proxy }), "UNSUPPORTED_CAPABILITY", form + ", a server object", notes, "KEYS_ONLY_DAEMON");
+    }
+    notes.push(constructed + " keys-only wallets constructed with server \"\" or undefined (" + (proxy ? "each in its worker" : "direct") + "); the non-empty servers rejected before any construction");
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   if (proxy) {
     const proof = await postRawWorkerMessage([newMessageId(), "getNetworkGuardReport", newMessageId()], 10000);

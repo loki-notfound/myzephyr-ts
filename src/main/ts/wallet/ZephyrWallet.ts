@@ -71,8 +71,9 @@ export interface ZephyrWalletConstructionOptions {
  * with the same fixed errors whatever the declared type (so a JavaScript caller gets them too). Not
  * declared, although the validation accepts them, are fields that it accepts with one value only and that
  * then have no effect: path "", isTrustedDaemon true (every daemon is trusted by the fixed core), regtest,
- * isMultisig and saveCurrent false, and in the object form of server the fields trusted true and an empty
- * username, password, proxyUri or proxy. A field whose value is undefined counts as absent at run time.
+ * isMultisig and saveCurrent false, in the object form of server the fields trusted true and an empty
+ * username, password, proxyUri or proxy, and server "" for a keys-only wallet (no daemon, as for the full
+ * wallets). A field whose value is undefined counts as absent at run time.
  * Value domains and rules between fields are checked at run time only (for example the seed's word count,
  * the key format, the lookahead limit, which keys a keys restore needs).
  */
@@ -813,12 +814,11 @@ setCreateWallet((raw, options) => createFull(raw, undefined, options));
 
 /** Create a keys-only wallet (random, seed or keys by the fields present). */
 export async function createKeysWallet(config: ZephyrKeysOnlyWalletConfig, options?: ZephyrWalletConstructionOptions): Promise<ZephyrWallet> {
-  const raw: unknown = config;
-  splitServer(raw, true); // a non-empty server rejects with KEYS_ONLY_DAEMON
-  const validated = validateCreateConfig(raw, true);
+  const { rest } = splitServer(config, true); // a non-empty server rejects with KEYS_ONLY_DAEMON; "" (none) is dropped here
+  const validated = validateCreateConfig(rest, true);
   const signal = constructionSignal(options);
-  const proxied = proxyFlag(raw);
-  const walletConfig = new ZephyrWalletConfig(Object.assign({}, raw as object, { proxyToWorker: proxied }) as Partial<ZephyrWalletConfig>);
+  const proxied = proxyFlag(rest);
+  const walletConfig = new ZephyrWalletConfig(Object.assign({}, rest as object, { proxyToWorker: proxied }) as Partial<ZephyrWalletConfig>);
   try {
     const wallet = await ZephyrWalletKeys.createWallet(walletConfig, signal);
     return wrapWallet(wallet, "keys", proxied);
