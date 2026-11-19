@@ -1,7 +1,7 @@
 import ZephyrWalletError from "./ZephyrWalletError";
 import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { checkSubaddressIndices, isAddressIndex } from "./ZephyrLifecycleContract";
-import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalances";
+import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalancesInternal";
 
 /**
  * Building transactions of full wallets without relay: buildTransfer builds the transactions of a

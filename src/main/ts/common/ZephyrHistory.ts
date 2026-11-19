@@ -1,6 +1,6 @@
 import ZephyrWalletError from "./ZephyrWalletError";
 import { isAddressIndex } from "./ZephyrLifecycleContract";
-import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalances";
+import { isAssetTypeToken, parseUint64Text } from "./ZephyrBalancesInternal";
 
 /**
  * Read-only history of full wallets: the wallet's transactions and transfers per asset, as the wallet

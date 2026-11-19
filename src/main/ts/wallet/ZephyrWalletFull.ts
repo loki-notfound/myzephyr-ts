@@ -41,7 +41,8 @@ import { ZephyrBridgeErrorIdentifier, ZephyrBridgePasswordState, bridgePasswordE
 import { MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL, checkLabel, checkSubaddressIndices, isAddressIndex, isRestoreHeight, parseRestoreHeightText } from "../common/ZephyrLifecycleContract";
 import HttpClient from "../common/HttpClient";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
-import { ZephyrAccountBalances, ZephyrAssetBalances, fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalances";
+import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBalances";
+import { fromAccountBalancesDto, fromAssetBalancesDto, isAssetTypeToken, parseBridgeAccountBalances, parseBridgeAssetBalances, parseSafeUintText, parseUint64Text } from "../common/ZephyrBalancesInternal";
 import { MAX_DESTINATIONS, ZephyrTransferBuild, ZephyrTransferRequest, checkTransferRequest, fromBuildDto, parseBridgeBuild } from "../common/ZephyrTransfer";
 import { ZephyrConversionBuild, ZephyrConversionRequest, checkConversionRequest, fromConversionDto, parseBridgeConversion } from "../common/ZephyrConversion";
 import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult, checkRelayToken, fromPreparedConversionDto, fromPreparedTransferDto, fromRelayDto, parseBridgeDiscard,

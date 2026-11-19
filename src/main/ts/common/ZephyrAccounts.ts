@@ -1,6 +1,7 @@
 import ZephyrWalletError from "./ZephyrWalletError";
 import { MAX_SUBADDRESSES_PER_CALL, UINT32_MAX, isAddressIndex } from "./ZephyrLifecycleContract";
-import { ZephyrAssetBalances, ZephyrAssetBalancesDto, fromAssetBalancesDto, parseAssetMapObject, parseSafeUintText, toAssetBalancesDto } from "./ZephyrBalances";
+import { ZephyrAssetBalances } from "./ZephyrBalances";
+import { ZephyrAssetBalancesDto, fromAssetBalancesDto, parseAssetMapObject, parseSafeUintText, toAssetBalancesDto } from "./ZephyrBalancesInternal";
 
 /**
  * Accounts and subaddresses of full wallets: the public result types, the strict parsers of the
