@@ -412,7 +412,7 @@ export class ZephyrWallet {
    * before any native call (see the module documentation). Resolves when the core holds the address;
    * an unreachable daemon is not an error here (isConnectedToDaemon reports false).
    */
-  async setDaemonConnection(address?: string | { uri: string; trusted?: boolean }): Promise<void> {
+  async setDaemonConnection(address?: string | { uri: string }): Promise<void> {
     const wallet = this.full("KEYS_ONLY_DAEMON");
     if (this.closed) throw this.closedError();
     const route = address === undefined ? undefined : parseDaemonAddress(address);

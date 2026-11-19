@@ -748,14 +748,16 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     await expectCode(w.getDaemonHeight(), "DAEMON_ERROR", "height without a daemon", notes, "DAEMON_NOT_CONNECTED");
     await w.setDaemonConnection(t.closed);
     expect((await w.isConnectedToDaemon()) === false, "closed port: not connected");
-    await w.setDaemonConnection({ uri: target, trusted: true });
+    // the run-time check still accepts trusted: true and rejects trusted: false, which the declared type leaves out
+    const untyped = w as unknown as { setDaemonConnection(address: unknown): Promise<void> };
+    await untyped.setDaemonConnection({ uri: target, trusted: true });
     const reported = w.getDaemonConnection();
     expect(reported !== undefined && reported.trusted === true && reported.uri === parseDaemonAddress(target).uri, "the new connection is reported (normalized, trusted true)");
     expect((await w.isConnectedToDaemon()) === true && (await w.getDaemonHeight()) > 0, "connected after the change");
     await w.setDaemonConnection(undefined);
     expect(w.getDaemonConnection() === undefined && (await w.isConnectedToDaemon()) === false, "cleared: not connected");
     await expectCode(w.setDaemonConnection("ftp://x"), "INVALID_CONFIG", "invalid address on a live wallet", notes, "DAEMON_ADDRESS");
-    await expectCode(w.setDaemonConnection({ uri: target, trusted: false }), "UNSUPPORTED_CAPABILITY", "untrusted on a live wallet", notes, "UNTRUSTED_DAEMON");
+    await expectCode(untyped.setDaemonConnection({ uri: target, trusted: false }), "UNSUPPORTED_CAPABILITY", "untrusted on a live wallet", notes, "UNTRUSTED_DAEMON");
     await w.close();
     if (!proxy) expect(HttpClient.daemonRouteCount() === 0, "no route left after close");
     notes.push("closed port -> base path or same origin -> cleared; invalid and untrusted rejected");
