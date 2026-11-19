@@ -15,7 +15,7 @@ import { bridgeErrorOf, bridgePasswordErrorOf } from "../../main/ts/common/Zephy
 import { RawWorker, channelOf, combinedGuard, installGuardLedger, newMessageId, postRawWorkerMessage, sanitize, skipGuardRead, walletIdOf } from "./testSupport";
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
-import * as History from "../../main/ts/common/ZephyrHistory";
+import * as History from "../../main/ts/common/ZephyrHistoryInternal";
 import * as Transfer from "../../main/ts/common/ZephyrTransferInternal";
 import * as Conversion from "../../main/ts/common/ZephyrConversionInternal";
 import * as Relay from "../../main/ts/common/ZephyrRelayInternal";

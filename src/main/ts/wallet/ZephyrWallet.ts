@@ -25,7 +25,8 @@ import { ZephyrConversionBuild, ZephyrConversionConfig } from "../common/ZephyrC
 import { checkConversionConfig } from "../common/ZephyrConversionInternal";
 import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult } from "../common/ZephyrRelay";
 import { checkRelayToken } from "../common/ZephyrRelayInternal";
-import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx, checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistory";
+import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx } from "../common/ZephyrHistory";
+import { checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistoryInternal";
 
 
 /** Network types; numeric values match the core. */

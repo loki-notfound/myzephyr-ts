@@ -1,6 +1,6 @@
 import ZephyrWalletError, { ZephyrWalletErrorDiagnostic, ZephyrWalletErrorCode } from "./ZephyrWalletError";
 import type { ZephyrNativeErrorContext } from "./ZephyrWalletErrorMapping";
-import { checkTxHashes } from "./ZephyrHistory";
+import { checkTxHashes } from "./ZephyrHistoryInternal";
 
 /**
  * Central capability and argument specification of the supported wallet surface.
