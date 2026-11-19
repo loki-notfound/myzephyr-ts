@@ -91,8 +91,12 @@ EM_JS(char*, zephyr_ts_test_pool_records, (), {
 static bool test_inject(const char* point) { return zephyr_ts_test_inject(point) != 0; }
 
 // test-only failure of the armed kind; kind 1 deliberately carries the call's inputs (passwords,
-// recovery material, addresses) in the exception text so the tests can prove it never reaches JS
-static void test_throw(const char* point, const std::string& inputs) {
+// recovery material, addresses) in the exception text so the tests can prove it never reaches JS. Inlined into every
+// caller (each a binding on the exception whitelist): a test-only function cannot be on the whitelist, so its own frame
+// would skip the cleanups of the exception's temporaries (the text of kind 1, the location string of kinds 4 and 5).
+// Kinds 4 and 5 throw through instantiations of the core's throw_wallet_ex that the release module defines (and the
+// whitelist names), as the core throws them.
+__attribute__((always_inline)) static inline void test_throw(const char* point, const std::string& inputs) {
   int kind = zephyr_ts_test_inject(point);
   if (kind == 0) return;
   if (kind == 2) throw 7;
@@ -1916,36 +1920,41 @@ namespace {
   // history; 21 to 35 the conversion messages of the core (the reserve ratio ones with
   // computed ratios in their text); any other kind an untyped failure whose text carries the destinations. Inlined
   // into the binding: a test-only function cannot be on the exception whitelist, so its own frame would skip the
-  // cleanups of the exception's temporaries; inlined, the throw happens in the binding's whitelisted frame
+  // cleanups of the exception's temporaries; inlined, the throw happens in the binding's whitelisted frame. The
+  // arguments have the types the core passes (std::string messages, uint64_t amounts, const char* request names), so
+  // that every typed failure goes through an instantiation of the core's throw_wallet_ex that the release module
+  // defines and the exception whitelist names (an instantiation of the test module only would not be on it).
   __attribute__((always_inline)) inline void test_throw_build(const char* point, const std::string& inputs) {
+    using std::string;
+    const uint64_t one = 1, two = 2, three = 3;
     int kind = zephyr_ts_test_inject(point);
     switch (kind) {
       case 0: return;
-      case 11: THROW_WALLET_EXCEPTION(tools::error::not_enough_unlocked_money, 1, 2, 3);
-      case 12: THROW_WALLET_EXCEPTION(tools::error::not_enough_money, 1, 2, 3);
-      case 13: THROW_WALLET_EXCEPTION(tools::error::tx_not_possible, 1, 2, 3);
-      case 14: THROW_WALLET_EXCEPTION(tools::error::not_enough_outs_to_mix, tools::error::not_enough_outs_to_mix::scanty_outs_t(), 15);
-      case 15: THROW_WALLET_EXCEPTION(tools::error::tx_too_big, 200000, 100000);
-      case 16: THROW_WALLET_EXCEPTION(tools::error::no_connection_to_daemon, "get_outs.bin");
-      case 17: THROW_WALLET_EXCEPTION(tools::error::daemon_busy, "get_outs.bin");
-      case 18: THROW_WALLET_EXCEPTION(tools::error::get_outs_error, std::string("injected node status ") + inputs);
-      case 21: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Spot reserve ratio not satisfied. New reserve ratio would be 1.612345678901 which is less than minimum 4.0");
-      case 22: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "MA reserve ratio not satisfied. New reserve ratio would be 1.598765432109 which is less than minimum 4.0");
-      case 23: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Reserve ratio not satisfied. New reserve ratio would be 1.587654321098 which is less than the minimum 4.0");
-      case 24: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Reserve ratios not satisfied. Spot: 1.612345678901 | MA: 1.598765432109");
-      case 25: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Reserve ratio not satisfied. No ZEPH in the reserve.");
-      case 26: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Reserve ratio cannot be calculated. Pricing record is missing rates.");
-      case 27: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to get pricing record");
-      case 28: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Cannot split conversion transaction - use a smaller amount or consolidate your inputs");
-      case 29: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to convert needed_money to ZSD");
-      case 30: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "cant specify more than 1 destination with conversions.");
-      case 31: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Mint/redeem TX amounts permit at most 4 decimal places");
-      case 32: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "invalid tx type");
+      case 11: THROW_WALLET_EXCEPTION(tools::error::not_enough_unlocked_money, one, two, three);
+      case 12: THROW_WALLET_EXCEPTION(tools::error::not_enough_money, one, two, 3);
+      case 13: THROW_WALLET_EXCEPTION(tools::error::tx_not_possible, one, two, three);
+      case 14: THROW_WALLET_EXCEPTION(tools::error::not_enough_outs_to_mix, tools::error::not_enough_outs_to_mix::scanty_outs_t(), (size_t) 15);
+      case 15: THROW_WALLET_EXCEPTION(tools::error::tx_too_big, (size_t) 200000, (uint64_t) 100000);
+      case 16: THROW_WALLET_EXCEPTION(tools::error::no_connection_to_daemon, (const char*) "get_outs.bin");
+      case 17: THROW_WALLET_EXCEPTION(tools::error::daemon_busy, (const char*) "get_outs.bin");
+      case 18: THROW_WALLET_EXCEPTION(tools::error::get_outs_error, string("injected node status ") + inputs);
+      case 21: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Spot reserve ratio not satisfied. New reserve ratio would be 1.612345678901 which is less than minimum 4.0"));
+      case 22: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("MA reserve ratio not satisfied. New reserve ratio would be 1.598765432109 which is less than minimum 4.0"));
+      case 23: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Reserve ratio not satisfied. New reserve ratio would be 1.587654321098 which is less than the minimum 4.0"));
+      case 24: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Reserve ratios not satisfied. Spot: 1.612345678901 | MA: 1.598765432109"));
+      case 25: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Reserve ratio not satisfied. No ZEPH in the reserve."));
+      case 26: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Reserve ratio cannot be calculated. Pricing record is missing rates."));
+      case 27: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Failed to get pricing record"));
+      case 28: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Cannot split conversion transaction - use a smaller amount or consolidate your inputs"));
+      case 29: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Failed to convert needed_money to ZSD"));
+      case 30: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("cant specify more than 1 destination with conversions."));
+      case 31: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Mint/redeem TX amounts permit at most 4 decimal places"));
+      case 32: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("invalid tx type"));
       case 33: throw std::runtime_error("not a valid tx type");
-      case 34: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to convert needed_money to ZSD (from ZYS)");
+      case 34: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Failed to convert needed_money to ZSD (from ZYS)"));
       case 35: throw std::runtime_error("Transaction would be too large.  Try create_txs()");
-      case 36: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to get circulating supply");
-      case 37: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, "Failed to get pricing record history");
+      case 36: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Failed to get circulating supply"));
+      case 37: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Failed to get pricing record history"));
       default: throw std::runtime_error(std::string("injected build failure: ") + inputs);
     }
   }
