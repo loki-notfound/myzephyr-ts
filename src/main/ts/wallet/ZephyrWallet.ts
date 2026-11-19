@@ -16,7 +16,8 @@ import { ZephyrWalletCreateIntent, validateCreateConfig, validateOpenConfig } fr
 import { setCreateWallet } from "./ZephyrWalletTestSupport";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
 import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBalances";
-import { ZephyrAccount, ZephyrAccountOptions, ZephyrAddressIndex, ZephyrSubaddress, accountOptions } from "../common/ZephyrAccounts";
+import { ZephyrAccount, ZephyrAccountOptions, ZephyrAddressIndex, ZephyrSubaddress } from "../common/ZephyrAccounts";
+import { accountOptions } from "../common/ZephyrAccountsInternal";
 import { checkLabel, checkSubaddressIndices } from "../common/ZephyrLifecycleContract";
 import { ZephyrTransferBuild, ZephyrTransferConfig, checkTransferConfig } from "../common/ZephyrTransfer";
 import { ZephyrConversionBuild, ZephyrConversionConfig, checkConversionConfig } from "../common/ZephyrConversion";

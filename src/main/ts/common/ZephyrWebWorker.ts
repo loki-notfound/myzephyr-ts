@@ -23,7 +23,7 @@ import ZephyrWalletListener from "../wallet/model/ZephyrWalletListener"
 import {ZephyrWalletKeys} from "../wallet/ZephyrWalletKeys";
 import { parseDaemonAddress } from "./ZephyrDaemonAddress";
 import { toAccountBalancesDto, toAssetBalancesDto } from "./ZephyrBalancesInternal";
-import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccounts";
+import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccountsInternal";
 import { checkSelection, toTxDto } from "./ZephyrHistory";
 import { checkTransferRequest, toBuildDto } from "./ZephyrTransfer";
 import { checkConversionRequest, toConversionDto } from "./ZephyrConversion";
