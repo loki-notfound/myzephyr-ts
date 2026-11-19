@@ -52,6 +52,8 @@ import { checkRelayToken, fromPreparedConversionDto, fromPreparedTransferDto, fr
 import { ZephyrWalletTx } from "../common/ZephyrHistory";
 import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, checkSelection, fromPoolRefreshDto, fromTxsDto, parseBridgeTxs, parsePoolRefresh } from "../common/ZephyrHistoryInternal";
 import { ZephyrAccount, ZephyrAddressIndex, ZephyrSubaddress } from "../common/ZephyrAccounts";
+import { ZephyrReserveInfo } from "../common/ZephyrReserve";
+import { fromReserveInfoDto, fromSupplyDto, parseBridgeReserveInfo, parseBridgeSupply } from "../common/ZephyrReserveInternal";
 import { fromAccountDto, fromAccountsDto, fromAddressIndexDto, fromSubaddressDto, fromSubaddressesDto, parseBridgeAccount, parseBridgeAccounts, parseBridgeAddressIndex, parseBridgeSubaddress, parseBridgeSubaddresses } from "../common/ZephyrAccountsInternal";
 import { configFields, toCoreConfigJson, validateCreateConfig, validateOpenConfig } from "./model/ZephyrWalletCoreConfig";
 import { ZephyrWalletKeys, ZephyrWalletKeysProxy } from "./ZephyrWalletKeys";
@@ -426,6 +428,35 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
           if (result === "true") resolve(true);
           else if (result === "false") resolve(false);
           else reject(WalletErrors.fromBridgeResult("daemon", result));
+        });
+      });
+    });
+  }
+
+  /**
+   * The state of the reserve as the core computes it from the daemon's circulating supply, the pricing record of
+   * the block below the daemon's height and the pricing record history (bridge get_reserve_info; daemon requests).
+   */
+  async getReserveInfoChecked(): Promise<ZephyrReserveInfo> {
+    if (this.getWalletProxy()) return this.getWalletProxy().getReserveInfoChecked();
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<ZephyrReserveInfo>((resolve, reject) => {
+        this.module.get_reserve_info(this.cppAddress, (result: unknown) => {
+          try { resolve(parseBridgeReserveInfo(WalletErrors.checkBridgeResult("daemon", result))); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /** The circulating supply per label as the daemon reports it (bridge get_circulating_supply; a daemon request). */
+  async getCirculatingSupplyChecked(): Promise<Readonly<Record<string, bigint>>> {
+    if (this.getWalletProxy()) return this.getWalletProxy().getCirculatingSupplyChecked();
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<Readonly<Record<string, bigint>>>((resolve, reject) => {
+        this.module.get_circulating_supply(this.cppAddress, (result: unknown) => {
+          try { resolve(parseBridgeSupply(WalletErrors.checkBridgeResult("daemon", result))); } catch (err) { reject(err); }
         });
       });
     });
@@ -2331,6 +2362,14 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     const synced = await this.invokeWorker("isDaemonSynced");
     if (typeof synced !== "boolean") throw new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE");
     return synced;
+  }
+
+  async getReserveInfoChecked(): Promise<ZephyrReserveInfo> {
+    return fromReserveInfoDto(await this.invokeWorker("getReserveInfo"));
+  }
+
+  async getCirculatingSupplyChecked(): Promise<Readonly<Record<string, bigint>>> {
+    return fromSupplyDto(await this.invokeWorker("getCirculatingSupply"));
   }
   
   async getHeight(): Promise<number> {

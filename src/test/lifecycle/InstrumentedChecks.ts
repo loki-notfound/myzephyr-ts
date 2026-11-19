@@ -1230,6 +1230,36 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await expectCode(w.relayPrepared(p6.token), "WALLET_CLOSED", "relay after close", notes);
   });
 
+  await check("T24", "The reserve and the supply in the test module (no request): the core's failed read of the pricing record (injected) rejects with DAEMON_ERROR/PRICING_RECORD_UNAVAILABLE; injected failures of both calls map to DAEMON_ERROR/DAEMON_RESPONSE without their text; failures and the failed read leave the allocator unchanged", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    const heap = async () => (await hooks.state()).heapInUse;
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "reserve.unread": 1 } });
+    await expectCode(w.getReserveInfo(), "DAEMON_ERROR", "getReserveInfo, the pricing record not read (injected)", notes, "PRICING_RECORD_UNAVAILABLE");
+    for (const kind of [1, 2, 3]) {
+      await hooks.arm({ fail: { "error.reserve": 1 }, kind: { "error.reserve": kind } });
+      const e1 = await expectCode(w.getReserveInfo(), "DAEMON_ERROR", "getReserveInfo, injected kind " + kind, notes, "DAEMON_RESPONSE");
+      expect(!scanText(e1).includes("injected"), "the injected text is not in the error");
+      await hooks.arm({ fail: { "error.supply": 1 }, kind: { "error.supply": kind } });
+      const e2 = await expectCode(w.getCirculatingSupply(), "DAEMON_ERROR", "getCirculatingSupply, injected kind " + kind, notes, "DAEMON_RESPONSE");
+      expect(!scanText(e2).includes("injected"), "the injected text is not in the error");
+    }
+    // allocation: three of each after a warm-up
+    const once = async (point: string, call: () => Promise<unknown>) => { await hooks.arm({ fail: { [point]: 1 }, kind: { [point]: 1 } }); try { await call(); } catch (err) { /* the armed failure */ } };
+    for (const [point, call] of [["reserve.unread", () => w.getReserveInfo()], ["error.reserve", () => w.getReserveInfo()], ["error.supply", () => w.getCirculatingSupply()]] as const) {
+      await once(point, call);
+      const deltas: number[] = [];
+      for (let i = 0; i < 3; i++) { const h0 = await heap(); await once(point, call); deltas.push((await heap()) - h0); }
+      notes.push("allocator growth of 3 failures at " + point + ": " + deltas.join(","));
+      expect(deltas.every((d) => d === 0), point + ": nothing left in the module");
+    }
+    const st = await hooks.state();
+    expect(st.events.includes("injected:reserve.unread") && st.events.includes("injected:error.reserve") && st.events.includes("injected:error.supply"), "the hooks fired");
+    await hooks.resetCounters();
+    await w.close();
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

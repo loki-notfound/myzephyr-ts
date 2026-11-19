@@ -402,6 +402,34 @@ The `status` filter of a query: confirmed transactions; own outgoing transaction
 incoming ones the last `refreshPool` saw; failed transactions. Guide:
 [Own pending and failed transactions](../05-history.md#own-pending-and-failed-transactions).
 
+## The reserve
+
+### `ZephyrReserveInfo`
+
+```ts signature
+interface ZephyrReserveInfo {
+    readonly zephReserve: bigint;
+    readonly numStables: bigint;
+    readonly numReserves: bigint;
+    readonly assets: bigint;
+    readonly assetsMa: bigint;
+    readonly liabilities: bigint;
+    readonly equity: bigint;
+    readonly equityMa: bigint;
+    readonly reserveRatio: string;
+    readonly reserveRatioMa: string;
+    readonly hfVersion: number;
+    readonly zyieldCirc: bigint;
+    readonly zyieldRsv: bigint;
+}
+```
+
+The result of `getReserveInfo`, with the field names of the Java port's `ZephyrReserveInfo`. Amounts in
+atomic units, exactly (the core computes them as unsigned 128-bit integers, so they can exceed 2^64); the two
+ratios as the shortest decimal text, without exponent, that reads back as exactly the core's `double` (Java:
+`BigDecimal`); `hfVersion` the daemon's hard fork version. `assetsMa` and `equityMa` are 0 on the current hard
+fork.
+
 ## Building and relaying
 
 ### `ZephyrTxPriority`

@@ -28,6 +28,7 @@ import { checkSelection, toTxDto } from "./ZephyrHistoryInternal";
 import { checkTransferRequest, toBuildDto } from "./ZephyrTransferInternal";
 import { checkConversionRequest, toConversionDto } from "./ZephyrConversionInternal";
 import { checkRelayToken, toPreparedConversionDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelayInternal";
+import { toReserveInfoDto, toSupplyDto } from "./ZephyrReserveInternal";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
@@ -186,6 +187,9 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   getDaemonHeight: async (walletId: string) => walletOf(walletId).getDaemonHeight(),
   setRestoreHeightFromDaemon: async (walletId: string) => walletOf(walletId).setRestoreHeightFromDaemon(),
   isDaemonSynced: async (walletId: string) => walletOf(walletId).isDaemonSynced(),
+  // the reserve and the circulating supply: daemon requests; the replies are strict DTOs (common/ZephyrReserve.ts)
+  getReserveInfo: async (walletId: string) => toReserveInfoDto(await walletOf(walletId).getReserveInfoChecked()),
+  getCirculatingSupply: async (walletId: string) => toSupplyDto(await walletOf(walletId).getCirculatingSupplyChecked()),
   getHeight: async (walletId: string) => walletOf(walletId).getHeight(),
   sync: async (walletId: string, startHeight: number | undefined) => ZephyrWalletFull.syncResultDto(await walletOf(walletId).sync(startHeight)),
   getBalances: async (walletId: string, unlocked: boolean) => toAssetBalancesDto(await walletOf(walletId).getBalanceMap(unlocked)),

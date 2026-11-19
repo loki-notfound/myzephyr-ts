@@ -66,6 +66,10 @@ EMSCRIPTEN_BINDINGS(module)
   emscripten::function("get_unlocked_balance_asset", &zephyr_wasm_bridge::get_unlocked_balance_asset);
   emscripten::function("is_daemon_synced", &zephyr_wasm_bridge::is_daemon_synced);
 
+  // the reserve and the circulating supply (full wallets; daemon requests)
+  emscripten::function("get_reserve_info", &zephyr_wasm_bridge::get_reserve_info);
+  emscripten::function("get_circulating_supply", &zephyr_wasm_bridge::get_circulating_supply);
+
   // accounts and subaddresses (full wallets)
   emscripten::function("get_accounts", &zephyr_wasm_bridge::get_accounts);
   emscripten::function("get_account", &zephyr_wasm_bridge::get_account);

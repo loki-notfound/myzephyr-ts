@@ -38,7 +38,7 @@ wallets of each form.
 | `getRestoreHeight` | number | number | rejects `KEYS_ONLY_RESTORE_HEIGHT` | rejects `KEYS_ONLY_RESTORE_HEIGHT` |
 | `getData` | bytes | bytes | rejects `KEYS_ONLY_DATA` | rejects `KEYS_ONLY_DATA` |
 | `getHeight`, `getBalance`, `getUnlockedBalance`, `isConnectedToDaemon` | value | value | rejects `KEYS_ONLY_DAEMON` | rejects `KEYS_ONLY_DAEMON` |
-| `getDaemonHeight`, `isDaemonSynced` without a daemon | rejects `DAEMON_NOT_CONNECTED` | rejects `DAEMON_NOT_CONNECTED` | rejects `KEYS_ONLY_DAEMON` | rejects `KEYS_ONLY_DAEMON` |
+| `getDaemonHeight`, `isDaemonSynced`, `getReserveInfo`, `getCirculatingSupply` without a daemon | rejects `DAEMON_NOT_CONNECTED` | rejects `DAEMON_NOT_CONNECTED` | rejects `KEYS_ONLY_DAEMON` | rejects `KEYS_ONLY_DAEMON` |
 | `getDaemonConnection` without a daemon | `undefined` | `undefined` | `undefined` | `undefined` |
 | `getAccounts`, `getAccount`, `getSubaddresses`, `getSubaddress` | value | value | rejects `KEYS_ONLY_ACCOUNTS` | rejects `KEYS_ONLY_ACCOUNTS` |
 | `getTxs`, `getTransfers` | value | value | rejects `KEYS_ONLY_HISTORY` | rejects `KEYS_ONLY_HISTORY` |
@@ -312,6 +312,31 @@ isDaemonSynced(): Promise<boolean>;
 Whether the daemon reports itself synchronized with the network (its height is at least the highest
 height of its peers, and above 1); a request. A daemon that is not synchronized makes a sync fetch
 nothing. Guide: [Synchronizing](../03-connecting-to-a-daemon.md#synchronizing).
+
+### `getReserveInfo`
+
+```ts signature
+getReserveInfo(): Promise<ZephyrReserveInfo>;
+```
+
+The state of the Zephyr reserve as the core computes it ([`ZephyrReserveInfo`](types.md#zephyrreserveinfo)): from
+the daemon's circulating supply, the pricing record of the block below the daemon's height and the pricing
+record history. Requests: `get_info` (cached by the core for 30 s), `hard_fork_info`, `getblockheaderbyheight`,
+`get_circulating_supply` and `get_pricing_record_history`. When the core cannot read a usable pricing record of
+that block it computes nothing, and this rejects with `DAEMON_ERROR`/`PRICING_RECORD_UNAVAILABLE` instead of
+returning zeros. Java: `ZephyrWallet.getReserveInfo()`.
+
+### `getCirculatingSupply`
+
+```ts signature
+getCirculatingSupply(): Promise<Readonly<Record<string, bigint>>>;
+```
+
+The circulating supply per label as the daemon reports it (one `get_circulating_supply` request), in atomic
+units, as a frozen object. On mainnet six keys: `ZPH`, `ZSD`, `ZRS`, `ZYS`, and `DJED` (the ZPH held in the
+reserve, equal to `zephReserve`) and `YIELD` (the yield reserve, equal to `zyieldRsv`), which are not assets a
+wallet can hold. A label that is not an upper-case token, an amount above 2^128 - 1 or a label twice rejects
+with `DAEMON_ERROR`/`DAEMON_RESPONSE`. Java: `ZephyrWallet.getCirculatingSupply()` (a `Map`).
 
 ### `getHeight`
 

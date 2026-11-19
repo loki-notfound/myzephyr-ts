@@ -131,7 +131,11 @@ const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // RELAY_FAILED (the commit failed before any request), RELAY_RECORD_FAILED (accepted, but the wallet could not record it)
   "RELAY_TOKEN", "RELAY_TOKEN_VOID", "PRICING_RECORD_AGE", "RELAY_HASH_MISMATCH", "RELAY_FAILED", "RELAY_RECORD_FAILED",
   "LOW_RING_SIZE", "DOUBLE_SPEND", "INVALID_INPUT", "INVALID_OUTPUT", "TOO_BIG", "OVERSPEND", "FEE_TOO_LOW", "TOO_FEW_OUTPUTS",
-  "TX_EXTRA_TOO_BIG", "SANITY_CHECK_FAILED", "NOT_RELAYED", "REJECTED", "DAEMON_BUSY", "NO_ANSWER", "HTTP_STATUS", "ANSWER_UNREADABLE"
+  "TX_EXTRA_TOO_BIG", "SANITY_CHECK_FAILED", "NOT_RELAYED", "REJECTED", "DAEMON_BUSY", "NO_ANSWER", "HTTP_STATUS", "ANSWER_UNREADABLE",
+  // the reserve and the circulating supply of full wallets (keys-only wallets: UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON):
+  // DAEMON_ERROR/PRICING_RECORD_UNAVAILABLE when the core could not read a usable pricing record of the daemon's top
+  // block (it then computes nothing)
+  "PRICING_RECORD_UNAVAILABLE"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];

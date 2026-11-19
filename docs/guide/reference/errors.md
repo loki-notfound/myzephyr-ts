@@ -222,6 +222,7 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `DAEMON_UNREACHABLE` | `DAEMON_ERROR` | no answer: unreachable, refused or timed out; at relay, nothing was sent |
 | `DAEMON_RESPONSE` | `DAEMON_ERROR` | an answer the core could not use: an error, an HTTP status, a body, a redirect |
 | `DAEMON_BUSY` | `DAEMON_ERROR` | at relay, the daemon did not process the transaction |
+| `PRICING_RECORD_UNAVAILABLE` | `DAEMON_ERROR` | `getReserveInfo`: the core could not read a usable pricing record of the daemon's top block and computed nothing |
 | `SYNC_FAILED` | `NATIVE_ERROR` | another failure of a sync |
 
 ### Building, conversions and relay

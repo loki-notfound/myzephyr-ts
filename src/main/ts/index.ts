@@ -53,6 +53,8 @@
  * Relaying in two explicit steps: prepareTransfer and prepareConversion build and describe as the build
  * calls do, but keep the built transactions inside the module under an opaque token (one slot per wallet);
  * relayPrepared(token) relays exactly what was described, and discardPrepared(token) voids it.
+ * The reserve and the oracle's prices: getReserveInfo and getCirculatingSupply on full wallets with a daemon,
+ * with the names and fields of the Java port.
  * Not supported: listeners, background sync, outputs, sweeps, key images, rescans.
  */
 export {
@@ -84,6 +86,7 @@ export type { ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccount
 export type { ZephyrTransferConfig, ZephyrTransferDestinationInput, ZephyrTransferBuild, ZephyrBuiltTx, ZephyrTxPriority } from "./common/ZephyrTransfer";
 export type { ZephyrConversionConfig, ZephyrConversionDestinationInput, ZephyrConversionBuild } from "./common/ZephyrConversion";
 export type { ZephyrPreparedTransfer, ZephyrPreparedConversion, ZephyrRelayResult, ZephyrRelayedTx, ZephyrRelayOutcome } from "./common/ZephyrRelay";
+export type { ZephyrReserveInfo } from "./common/ZephyrReserve";
 export type { ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination, ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "./common/ZephyrHistory";
 export { default as ZephyrWalletError } from "./common/ZephyrWalletError";
 export type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./common/ZephyrWalletError";

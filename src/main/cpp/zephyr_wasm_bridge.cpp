@@ -6,6 +6,7 @@
 #include "wallet/monero_wallet_full.h"
 #include "http_client_wasm.h"
 #include <cstdint>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -210,9 +211,14 @@ namespace {
   // BEGIN CORE MESSAGE TABLE (daemon context)
   // fixed messages of the pinned core for daemon calls. Any other text of a daemon failure,
   // including status or error text supplied by the node, is never compared beyond these entries.
+  // The circulating supply and the pricing record history (get_reserve_info, get_circulating_supply) are read
+  // failures like a missing connection, refined by the transport's last failure in daemon_failure.
   const core_message_rule DAEMON_MESSAGE_RULES[] = {
     {"Wallet is not connected to daemon", "DAEMON_NOT_CONNECTED"},
-    {"Failed to connect to daemon", "DAEMON_UNREACHABLE"}
+    {"Failed to connect to daemon", "DAEMON_UNREACHABLE"},
+    {"failed to get circulating supply. Make sure you are connected to a daemon.", "DAEMON_UNREACHABLE"},
+    {"Failed to get circulating supply", "DAEMON_UNREACHABLE"},
+    {"Failed to get pricing record history", "DAEMON_UNREACHABLE"}
   };
   // END CORE MESSAGE TABLE
 
@@ -1191,6 +1197,119 @@ void zephyr_wasm_bridge::is_daemon_synced(int handle, emscripten::val callback) 
     ZEPHYR_TS_TEST_THROW("error.daemon", "daemon synced");
     monero_wallet* wallet = (monero_wallet*) handle;
     result = wallet->is_daemon_synced() ? "true" : "false";
+  } catch (...) {
+    result = bridge_error(daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_DAEMON)));
+  }
+  callback(result);
+}
+
+// ------------------------- RESERVE AND SUPPLY -----------------------------
+
+// The state of the Zephyr reserve as the core computes it (monero_wallet_full::get_reserve_info) and the
+// circulating supply per asset as the daemon reports it (monero_wallet_full::get_circulating_supply); full
+// wallets with a daemon only (DAEMON_NOT_CONNECTED before any request otherwise). Requests of the pinned core:
+// get_reserve_info asks the daemon for its height (json_rpc get_info, which the core caches for 30 s),
+// hard_fork_info, the block header below that height (json_rpc getblockheaderbyheight, for its pricing record),
+// get_circulating_supply and get_pricing_record_history; get_circulating_supply asks get_circulating_supply only.
+namespace {
+  // When the core cannot read a usable pricing record of the block below the daemon's height (no answer, an error
+  // answer, or a record without the hard fork's essential rates: wallet2::get_pricing_record returns false), its
+  // get_reserve_info returns before computing, without an exception, and leaves every output as it was. Every
+  // computing path of cryptonote::get_reserve_info assigns both ratios. The bridge therefore starts both ratios
+  // with this NaN bit pattern, which no computation of the core produces (its ratios are quotients of integers or
+  // of non-zero quad-precision values, or 0), and reports a ratio that still carries it as that failed read.
+  const uint64_t RATIO_UNSET_BITS = 0x7ff8000052525355ULL;
+
+  void set_ratio_unset(double& ratio) { std::memcpy(&ratio, &RATIO_UNSET_BITS, sizeof(ratio)); }
+  bool is_ratio_unset(const double& ratio) { uint64_t bits; std::memcpy(&bits, &ratio, sizeof(bits)); return bits == RATIO_UNSET_BITS; }
+
+  // a ratio as decimal text with 17 significant digits (exactly the double when read back), in the C locale
+  string ratio_text(double ratio) {
+    if (!std::isfinite(ratio)) throw bridge_failure("UNEXPECTED_RESULT");
+    char buffer[40];
+    int n = snprintf(buffer, sizeof(buffer), "%.17g", ratio);
+    if (n <= 0 || (size_t) n >= sizeof(buffer)) throw bridge_failure("UNEXPECTED_RESULT");
+    return string(buffer, (size_t) n);
+  }
+
+  string uint128_text(const boost::multiprecision::uint128_t& value) { return value.convert_to<std::string>(); }
+
+  // a label of the daemon's supply tally: an upper-case token (the core's asset names, DJED, YIELD and older names)
+  bool is_supply_label(const string& label) {
+    if (label.empty() || label.size() > 16 || label[0] < 'A' || label[0] > 'Z') return false;
+    for (char c : label) if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return false;
+    return true;
+  }
+
+  // canonical decimal text of an unsigned 128-bit value (the core reads the supply amounts as uint128_t)
+  bool is_uint128_decimal(const string& text) {
+    static const string UINT128_MAX_TEXT = "340282366920938463463374607431768211455";
+    if (text.empty() || text.size() > UINT128_MAX_TEXT.size()) return false;
+    for (char c : text) if (c < '0' || c > '9') return false;
+    if (text.size() > 1 && text[0] == '0') return false;
+    return text.size() < UINT128_MAX_TEXT.size() || text <= UINT128_MAX_TEXT;
+  }
+}
+
+// {"zephReserve":"<decimal>","numStables":..,"numReserves":..,"assets":..,"assetsMa":..,"liabilities":..,"equity":..,
+// "equityMa":..,"reserveRatio":"<17 digits>","reserveRatioMa":"<17 digits>","hfVersion":<n>,"zyieldCirc":..,"zyieldRsv":..}:
+// the core's values unchanged (uint128 amounts as decimal text); a failed read of the pricing record (see above) is
+// PRICING_RECORD_UNAVAILABLE.
+void zephyr_wasm_bridge::get_reserve_info(int handle, emscripten::val callback) {
+  string result;
+  try {
+    std::shared_ptr<epee::net_utils::http::http_client_wasm_route> route = route_of(handle);
+    ZEPHYR_TS_TEST_THROW("error.reserve", "reserve info");
+    bool unread = test_inject("reserve.unread"); // test module only: the core's failed read of the pricing record, without a request
+    if (!unread && route->origin.empty()) throw bridge_failure("DAEMON_NOT_CONNECTED");
+    monero_wallet* wallet = (monero_wallet*) handle;
+    boost::multiprecision::uint128_t zeph_reserve = 0, num_stables = 0, num_reserves = 0, assets = 0, assets_ma = 0, liabilities = 0, equity = 0, equity_ma = 0, zyield_circ = 0, zyield_rsv = 0;
+    double reserve_ratio = 0, reserve_ratio_ma = 0;
+    set_ratio_unset(reserve_ratio);
+    set_ratio_unset(reserve_ratio_ma);
+    uint8_t hf_version = 0;
+    if (!unread) wallet->get_reserve_info(zeph_reserve, num_stables, num_reserves, assets, assets_ma, liabilities, equity, equity_ma, reserve_ratio, reserve_ratio_ma, hf_version, zyield_circ, zyield_rsv);
+    bool unset = is_ratio_unset(reserve_ratio), unset_ma = is_ratio_unset(reserve_ratio_ma);
+    if (unset && unset_ma) throw bridge_failure("PRICING_RECORD_UNAVAILABLE");
+    if (unset || unset_ma) throw bridge_failure("UNEXPECTED_RESULT");
+    result = string("{\"zephReserve\":\"") + uint128_text(zeph_reserve) + "\",\"numStables\":\"" + uint128_text(num_stables)
+      + "\",\"numReserves\":\"" + uint128_text(num_reserves) + "\",\"assets\":\"" + uint128_text(assets)
+      + "\",\"assetsMa\":\"" + uint128_text(assets_ma) + "\",\"liabilities\":\"" + uint128_text(liabilities)
+      + "\",\"equity\":\"" + uint128_text(equity) + "\",\"equityMa\":\"" + uint128_text(equity_ma)
+      + "\",\"reserveRatio\":\"" + ratio_text(reserve_ratio) + "\",\"reserveRatioMa\":\"" + ratio_text(reserve_ratio_ma)
+      + "\",\"hfVersion\":" + std::to_string((unsigned) hf_version) + ",\"zyieldCirc\":\"" + uint128_text(zyield_circ)
+      + "\",\"zyieldRsv\":\"" + uint128_text(zyield_rsv) + "\"}";
+  } catch (...) {
+    result = bridge_error(daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_DAEMON)));
+  }
+  callback(result);
+}
+
+// {"supply":{"<label>":"<decimal>",...}}: the daemon's tally as the core passes it on, by label in byte order; a
+// label that is not an upper-case token, an amount that is not the decimal text of an unsigned 128-bit value, a label
+// twice or more than 64 entries reject with DAEMON_RESPONSE (an answer the core could not use).
+void zephyr_wasm_bridge::get_circulating_supply(int handle, emscripten::val callback) {
+  string result;
+  try {
+    std::shared_ptr<epee::net_utils::http::http_client_wasm_route> route = route_of(handle);
+    ZEPHYR_TS_TEST_THROW("error.supply", "circulating supply");
+    if (route->origin.empty()) throw bridge_failure("DAEMON_NOT_CONNECTED");
+    monero_wallet* wallet = (monero_wallet*) handle;
+    std::vector<std::pair<std::string, std::string>> supply = wallet->get_circulating_supply();
+    if (supply.size() > 64) throw bridge_failure("DAEMON_RESPONSE");
+    std::map<std::string, std::string> by_label;
+    for (const auto& entry : supply) {
+      if (!is_supply_label(entry.first) || !is_uint128_decimal(entry.second)) throw bridge_failure("DAEMON_RESPONSE");
+      if (!by_label.emplace(entry.first, entry.second).second) throw bridge_failure("DAEMON_RESPONSE");
+    }
+    string out = "{\"supply\":{";
+    bool first = true;
+    for (const auto& entry : by_label) {
+      if (!first) out += ",";
+      first = false;
+      out += "\"" + entry.first + "\":\"" + entry.second + "\"";
+    }
+    result = out + "}}";
   } catch (...) {
     result = bridge_error(daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_DAEMON)));
   }

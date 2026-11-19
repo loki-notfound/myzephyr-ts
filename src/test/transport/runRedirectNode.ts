@@ -4,7 +4,8 @@
  * (--mode direct) or in its own worker (--mode worker), with the release module; then the history
  * check of HistoryRequestCheck.ts (no request during getTxs, getTransfers and getTx) and the pool refresh
  * check of PoolRefreshCheck.ts (P01, the constructed pool daemons); in the main thread also the relay
- * refusal check of RelayRefusalCheck.ts (S01) and its scoped pass check (S02).
+ * refusal check of RelayRefusalCheck.ts (S01) and its scoped pass check (S02); the reserve check of ReserveChecks.ts
+ * (V01, the constructed reserve daemons) in both modes.
  *
  *   node --require nodeMonitor.cjs runRedirectNode.js --mode direct|worker --out report.json
  *
@@ -18,6 +19,7 @@ import { runRedirectChecks } from "./RedirectChecks";
 import { runHistoryRequestCheck } from "./HistoryRequestCheck";
 import { runPoolRefreshCheck } from "./PoolRefreshCheck";
 import { runRelayRefusalCheck, runScopedPassCheck } from "./RelayRefusalCheck";
+import { ReserveConstants, runReserveWalletCheck } from "./ReserveChecks";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf("--" + name);
@@ -46,7 +48,10 @@ async function main(): Promise<number> {
     pool = await runPoolRefreshCheck(mode, Object.assign({ marker: POOL_MARKER as string }, targets));
     const relay = mode === "direct" ? await runRelayRefusalCheck(targets) : undefined;
     const scoped = mode === "direct" ? await runScopedPassCheck(targets) : undefined;
-    report = Object.assign({}, report, { checks: report.checks.concat([history.check, pool.check], relay === undefined ? [] : [relay.check], scoped === undefined ? [] : [scoped.check]),
+    const constants = require(path.resolve(__dirname, "../../../../src/test/transport/reserveDaemon.cjs")).constants() as ReserveConstants;
+    const reserve = await runReserveWalletCheck(mode, targets, constants);
+    report = Object.assign({}, report, { checks: report.checks.concat([history.check, pool.check], relay === undefined ? [] : [relay.check], scoped === undefined ? [] : [scoped.check], [reserve.check]),
+      reserve: { steps: reserve.steps },
       scopedPass: scoped === undefined ? undefined : { outcomes: scoped.outcomes, daemonSubmits: scoped.daemonSubmits },
       relay: relay === undefined ? undefined : { refused: relay.refused, attempts: relay.attempts, daemonRequestsDuringAttempts: relay.daemonRequestsDuringAttempts, controlRequests: relay.controlRequests }, history: { requestsBeforeHistory: history.requestsBeforeHistory, requestsDuringHistory: history.requestsDuringHistory, historyCalls: history.historyCalls },
       pool: { steps: pool.steps, poolTxRequests: pool.poolTxRequests } });

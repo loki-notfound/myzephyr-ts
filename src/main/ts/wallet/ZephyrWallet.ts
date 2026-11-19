@@ -26,6 +26,7 @@ import { checkConversionConfig } from "../common/ZephyrConversionInternal";
 import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult } from "../common/ZephyrRelay";
 import { checkRelayToken } from "../common/ZephyrRelayInternal";
 import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx } from "../common/ZephyrHistory";
+import { ZephyrReserveInfo } from "../common/ZephyrReserve";
 import { checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistoryInternal";
 
 
@@ -447,6 +448,41 @@ export class ZephyrWallet {
   async isDaemonSynced(): Promise<boolean> {
     const wallet = this.full("KEYS_ONLY_DAEMON");
     return this.call("daemon", () => wallet.isDaemonSynced());
+  }
+
+  // ------------------------- the reserve and the circulating supply -------------------------
+  //
+  // Full wallets with a daemon, direct and proxied, with the names and fields of the Java port
+  // (common/ZephyrReserve.ts). Both ask the daemon; nothing is computed from the wallet's own outputs.
+  // Keys-only wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON, a wallet without a daemon with
+  // DAEMON_ERROR/DAEMON_NOT_CONNECTED before any request; daemon failures reject with DAEMON_ERROR and a
+  // fixed diagnostic (DAEMON_UNREACHABLE, DAEMON_RESPONSE, DAEMON_BUSY), never with text of the node.
+
+  /**
+   * The state of the Zephyr reserve as the core computes it: from the daemon's circulating supply, the pricing
+   * record of the block below the daemon's height and the pricing record history. The core asks the daemon for
+   * its height (get_info, cached by the core for 30 s), hard_fork_info, that block header
+   * (getblockheaderbyheight), get_circulating_supply and get_pricing_record_history. When the core cannot read a
+   * usable pricing record of that block (no answer, an error answer, or a record without the rates the hard fork
+   * needs) it computes nothing; this rejects with DAEMON_ERROR/PRICING_RECORD_UNAVAILABLE instead of returning
+   * zeros. assetsMa and equityMa are 0 on the current hard fork: do not divide by them.
+   */
+  async getReserveInfo(): Promise<ZephyrReserveInfo> {
+    const wallet = this.full("KEYS_ONLY_DAEMON");
+    if (arguments.length > 0) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("daemon", () => wallet.getReserveInfoChecked());
+  }
+
+  /**
+   * The circulating supply per label as the daemon reports it (one get_circulating_supply request), in atomic
+   * units, as a frozen object. On mainnet it has six keys: ZPH, ZSD, ZRS and ZYS, and DJED (the ZPH held in the
+   * reserve, equal to getReserveInfo().zephReserve) and YIELD (the yield reserve, equal to zyieldRsv), which are
+   * not assets a wallet can hold. Older names may appear on other networks or heights.
+   */
+  async getCirculatingSupply(): Promise<Readonly<Record<string, bigint>>> {
+    const wallet = this.full("KEYS_ONLY_DAEMON");
+    if (arguments.length > 0) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("daemon", () => wallet.getCirculatingSupplyChecked());
   }
 
   /** Height of the wallet (no network access). */

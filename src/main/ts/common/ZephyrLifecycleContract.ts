@@ -163,6 +163,8 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   "set_daemon_connection", "is_connected_to_daemon", "get_daemon_height", "set_restore_height_from_daemon", "get_height", "sync",
   "get_balance_wallet", "get_unlocked_balance_wallet", "get_balance_account", "get_unlocked_balance_account",
   "get_balance_asset", "get_unlocked_balance_asset", "is_daemon_synced",
+  // the reserve and the circulating supply
+  "get_reserve_info", "get_circulating_supply",
   // accounts and subaddresses
   "get_accounts", "get_account", "create_account", "get_subaddresses", "create_subaddress", "set_subaddress_label",
   // read-only history and the explicit pool refresh
@@ -179,7 +181,7 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
  * inherited binding adapted to the fixed core.
  */
 export const SDK_ADDED_NATIVE_EXPORTS: readonly string[] = ["get_balance_asset", "get_unlocked_balance_asset", "set_restore_height_from_daemon", "refresh_pool", "build_txs", "build_conversion",
-  "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared"];
+  "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared", "get_reserve_info", "get_circulating_supply"];
 
 /**
  * Inherited monero-ts bridge exports at the base commit that the SDK does not build. If an
@@ -260,6 +262,9 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   getDaemonHeight: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_daemon_height"], errorContext: "daemon" },
   setRestoreHeightFromDaemon: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["set_restore_height_from_daemon"], errorContext: "daemon" },
   isDaemonSynced: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["is_daemon_synced"], errorContext: "daemon" },
+  // the reserve and the circulating supply of full wallets (daemon requests); replies are strict DTOs (common/ZephyrReserve.ts)
+  getReserveInfo: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_reserve_info"], errorContext: "daemon" },
+  getCirculatingSupply: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_circulating_supply"], errorContext: "daemon" },
   getHeight: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_height"], errorContext: "other" },
   sync: { scope: "wallet", kinds: FULL, args: [{ kind: "height", optional: true }], nativeExports: ["sync"], errorContext: "sync" },
   getBalances: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }], nativeExports: ["get_balance_wallet", "get_unlocked_balance_wallet"], errorContext: "other" },

@@ -14,6 +14,7 @@
  *             /poolstatus  the /ok daemon whose pool request answers a node status carrying a marker text
  *             /sink/<m>    the /ok daemon whose submit and relay requests are answered by the local sink of
  *                          src/test/network/relaySink.cjs in mode <m> (counts and body lengths only)
+ *             /rv/<case>   the constructed daemons of the reserve checks (reserveDaemon.cjs)
  *   second  the target of the other redirects: every request is counted and answered 404
  *
  * Both answer the CORS preflight and add CORS headers for any origin, so that the browser page (a
@@ -28,6 +29,7 @@ const http = require("http");
 const path = require("path");
 // the sink module sits in the network tests' source directory (plain CommonJS, also beside the compiled tests)
 const sink = require(path.resolve(__dirname, "../network/relaySink.cjs"));
+const reserve = require(path.resolve(__dirname, "reserveDaemon.cjs"));
 const RELAY_MARKER = "MARKERrelaynodetext";
 
 const STATUSES = [301, 302, 303, 307, 308];
@@ -80,6 +82,9 @@ function startRedirectServers() {
       const url = new URL(req.url, "http://127.0.0.1");
       if (req.method === "OPTIONS") { stats.preflights++; return send(res, 204, {}, ""); }
       if (req.method === "GET" && url.pathname === "/__stats") return send(res, 200, { "content-type": "application/json" }, JSON.stringify(stats));
+      if (req.method === "GET" && url.pathname === "/__reserve") return send(res, 200, { "content-type": "application/json" }, JSON.stringify(reserve.constants()));
+      const mr = reserve.CASE_PATTERN.exec(url.pathname);
+      if (mr !== null) { count(stats.first, keyOf(req, "/rv/" + mr[1], mr[2], body), body.length); return reserve.answer(mr[1], mr[2], body, res, send); }
       const ms = /^\/sink\/([a-z_-]{1,40})(\/.*)$/.exec(url.pathname);
       if (ms !== null) {
         count(stats.first, keyOf(req, "/sink/" + ms[1], ms[2], body), body.length);
@@ -130,4 +135,4 @@ function startRedirectServers() {
   })();
 }
 
-module.exports = { startRedirectServers, STATUSES, POOL_HASHES, POOL_MARKER, RELAY_MARKER };
+module.exports = { startRedirectServers, STATUSES, POOL_HASHES, POOL_MARKER, RELAY_MARKER, RESERVE_MARKER: reserve.MARKER };

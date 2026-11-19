@@ -72,6 +72,10 @@ namespace zephyr_wasm_bridge
   string get_balance_asset(int handle, const string& asset_type, const uint32_t account_idx, bool has_subaddress, const uint32_t subaddress_idx);
   string get_unlocked_balance_asset(int handle, const string& asset_type, const uint32_t account_idx, bool has_subaddress, const uint32_t subaddress_idx);
   void is_daemon_synced(int handle, emscripten::val callback);
+  // the reserve state the core computes and the circulating supply per asset the daemon reports (full wallets with a
+  // daemon; fixed-format JSON with decimal text; a failed read of the tip's pricing record is PRICING_RECORD_UNAVAILABLE)
+  void get_reserve_info(int handle, emscripten::val callback);
+  void get_circulating_supply(int handle, emscripten::val callback);
   // accounts and subaddresses of full wallets: fixed-format JSON results, indices checked against the
   // wallet's own accounts and subaddresses, listings bounded by the given limits
   string get_accounts(int handle, bool include_subaddresses, uint32_t max_accounts, uint32_t max_subaddresses);

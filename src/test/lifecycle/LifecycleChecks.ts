@@ -19,6 +19,7 @@ import * as History from "../../main/ts/common/ZephyrHistoryInternal";
 import * as Transfer from "../../main/ts/common/ZephyrTransferInternal";
 import * as Conversion from "../../main/ts/common/ZephyrConversionInternal";
 import * as Relay from "../../main/ts/common/ZephyrRelayInternal";
+import * as Reserve from "../../main/ts/common/ZephyrReserveInternal";
 
 /**
  * The construction functions and validateAddress with untyped arguments: these checks pass configurations
@@ -2193,6 +2194,58 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       await expectCode(U.createKeysWallet({ ...fields, server: { uri: "http://127.0.0.1:1" }, proxyToWorker: proxy }), "UNSUPPORTED_CAPABILITY", form + ", a server object", notes, "KEYS_ONLY_DAEMON");
     }
     notes.push(constructed + " keys-only wallets constructed with server \"\" or undefined (" + (proxy ? "each in its worker" : "direct") + "); the non-empty servers rejected before any construction");
+  });
+
+  await check("C44", "The reserve and the circulating supply offline: a keys-only wallet rejects UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON, a full wallet without a daemon DAEMON_ERROR/DAEMON_NOT_CONNECTED, an argument INVALID_CONFIG/FIELD_TYPE, a closed wallet WALLET_CLOSED (no request)", async (notes) => {
+    const k = await F.createKeysWallet({ networkType: 0, proxyToWorker: proxy });
+    try {
+      await expectCode(k.getReserveInfo(), "UNSUPPORTED_CAPABILITY", "keys-only getReserveInfo", notes, "KEYS_ONLY_DAEMON");
+      await expectCode(k.getCirculatingSupply(), "UNSUPPORTED_CAPABILITY", "keys-only getCirculatingSupply", notes, "KEYS_ONLY_DAEMON");
+    } finally {
+      await k.close();
+    }
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    await expectCode(w.getReserveInfo(), "DAEMON_ERROR", "getReserveInfo without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await expectCode(w.getCirculatingSupply(), "DAEMON_ERROR", "getCirculatingSupply without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await expectCode((w.getReserveInfo as (...a: unknown[]) => Promise<unknown>)(0), "INVALID_CONFIG", "getReserveInfo(0)", notes, "FIELD_TYPE");
+    await expectCode((w.getCirculatingSupply as (...a: unknown[]) => Promise<unknown>)("ZPH"), "INVALID_CONFIG", "getCirculatingSupply(\"ZPH\")", notes, "FIELD_TYPE");
+    await w.close();
+    await expectCode(w.getReserveInfo(), "WALLET_CLOSED", "getReserveInfo after close", notes);
+    await expectCode(w.getCirculatingSupply(), "WALLET_CLOSED", "getCirculatingSupply after close", notes);
+  });
+
+  await check("C46", "Reserve and supply results: the bridge's text read exactly (uint128 values above 2^64 as bigint, the ratio as the shortest decimal text of the same double, no exponent), malformed bridge results NATIVE_ERROR/UNEXPECTED_RESULT, the worker data round trip exact and malformed worker data MALFORMED_MESSAGE", async (notes) => {
+    const u128 = "340282366920938463463374607431768211455";
+    const bridge = (o: Record<string, unknown>) => JSON.stringify(Object.assign({ zephReserve: u128, numStables: "18446744073709551616", numReserves: "0", assets: "1", assetsMa: "0", liabilities: "18446744073709551616",
+      equity: "0", equityMa: "0", reserveRatio: "2.1677777100000001", reserveRatioMa: "1.0000000000000001e-07", hfVersion: 11, zyieldCirc: "9007199254740993", zyieldRsv: "0" }, o));
+    const info = Reserve.parseBridgeReserveInfo(bridge({}));
+    expect(info.zephReserve === BigInt(u128) && info.numStables === BigInt("18446744073709551616") && info.zyieldCirc === BigInt("9007199254740993"), "uint128 values exact");
+    expect(info.reserveRatio === "2.16777771" && info.reserveRatioMa === "0.00000010000000000000001", "ratios as the shortest plain decimal text: " + info.reserveRatio + ", " + info.reserveRatioMa);
+    expect(Number(info.reserveRatio) === 2.1677777100000001 && Number(info.reserveRatioMa) === 1.0000000000000001e-07, "the same doubles");
+    expect(Object.isFrozen(info) && Object.keys(info).length === 13, "a frozen object with the 13 fields");
+    for (const [v, t] of [[0, "0"], [-0, "0"], [1e21, "1000000000000000000000"], [1.5e-7, "0.00000015"], [123.456, "123.456"], [5e-324, "0." + "0".repeat(323) + "5"]] as const) expect(Reserve.plainDecimal(v) === t, "plainDecimal(" + v + ") = " + Reserve.plainDecimal(v));
+    let rejected = 0;
+    for (const [what, text] of [["an extra field", bridge({ extra: "1" })], ["a missing field", bridge({}).replace(",\"equityMa\":\"0\"", "")], ["a negative amount", bridge({ assets: "-1" })],
+      ["an amount above 2^128 - 1", bridge({ assets: "340282366920938463463374607431768211456" })], ["a leading zero", bridge({ assets: "01" })], ["an amount as a number", bridge({ assets: 1 })],
+      ["a ratio NaN", bridge({ reserveRatio: "nan" })], ["a ratio infinite", bridge({ reserveRatio: "inf" })], ["a negative ratio", bridge({ reserveRatio: "-1" })], ["hfVersion 256", bridge({ hfVersion: 256 })],
+      ["hfVersion as text", bridge({ hfVersion: "11" })], ["not JSON", "{zephReserve"], ["an array", "[]"]] as const) {
+      try { Reserve.parseBridgeReserveInfo(text); notes.push(what + ": accepted"); } catch (err) { expect(codeOf(err) === "NATIVE_ERROR" && diagnosticOf(err) === "/UNEXPECTED_RESULT", what + ": " + codeOf(err) + diagnosticOf(err)); rejected++; }
+    }
+    const dto = Reserve.toReserveInfoDto(info);
+    const back = Reserve.fromReserveInfoDto(JSON.parse(JSON.stringify(dto)));
+    expect(JSON.stringify(Reserve.toReserveInfoDto(back)) === JSON.stringify(dto) && back.zephReserve === info.zephReserve && back.reserveRatioMa === info.reserveRatioMa, "worker data round trip");
+    for (const [what, bad] of [["a ratio in exponent form", Object.assign({}, dto, { reserveRatio: "1e-7" })], ["a ratio with a trailing zero", Object.assign({}, dto, { reserveRatio: "2.10" })], ["an amount as a number", Object.assign({}, dto, { assets: 1 })], ["an extra field", Object.assign({}, dto, { x: "1" })]] as const) {
+      try { Reserve.fromReserveInfoDto(bad); notes.push(what + ": accepted"); } catch (err) { expect(codeOf(err) === "MALFORMED_MESSAGE", what + ": " + codeOf(err)); rejected++; }
+    }
+    const supply = Reserve.parseBridgeSupply(JSON.stringify({ supply: { DJED: u128, YIELD: "0", ZPH: "12409544258629256786" } }));
+    expect(Object.keys(supply).join() === "DJED,YIELD,ZPH" && supply.DJED === BigInt(u128) && supply.ZPH === BigInt("12409544258629256786") && Object.isFrozen(supply), "supply by label, exact");
+    expect(JSON.stringify(Reserve.toSupplyDto(Reserve.fromSupplyDto(Reserve.toSupplyDto(supply)))) === JSON.stringify(Reserve.toSupplyDto(supply)), "supply worker data round trip");
+    for (const [what, text] of [["a lower-case label", JSON.stringify({ supply: { zph: "1" } })], ["an amount above 2^128 - 1", JSON.stringify({ supply: { ZPH: "340282366920938463463374607431768211456" } })], ["an extra member", JSON.stringify({ supply: {}, x: 1 })]] as const) {
+      try { Reserve.parseBridgeSupply(text); notes.push(what + ": accepted"); } catch (err) { expect(codeOf(err) === "NATIVE_ERROR", what + ": " + codeOf(err)); rejected++; }
+    }
+    try { Reserve.fromSupplyDto([["ZPH", "1"], ["ZPH", "2"]]); notes.push("a duplicate label: accepted"); } catch (err) { expect(codeOf(err) === "MALFORMED_MESSAGE", "duplicate label"); rejected++; }
+    notes.push(rejected + " malformed results rejected");
+    expect(rejected === 21, "21 malformed results rejected, " + rejected);
   });
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
