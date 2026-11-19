@@ -216,8 +216,10 @@ that wallet's worker.
   record of the wallet's top block (`getblockheaderbyheight`) and one more circulating supply and
   pricing record history read. The node learns the wallet's height and that it builds a conversion; a
   refused conversion sends the reads up to the refusal and no ring member request.
-* A refused conversion is a typed failure of the core; each refusal leaves about 136 bytes in the
-  module (measured in the test module). A built conversion releases everything.
+* A refused conversion releases everything, as a built conversion does (measured in the test module with
+  the core's refusals injected as the core throws them, check `T22`). Every typed failure of the core goes
+  through one function of the core (`tools::error::throw_wallet_ex`), whose exception cleanups the module
+  keeps; without them each refusal left its message behind, 40 to 136 bytes.
 * Relayed on mainnet on 2026-11-15: ZSD to ZPH, ZPH to ZRS, ZSD to ZYS and ZYS to ZSD, each mined one or
   two blocks after the block of its pricing record, with the fee charged and the minted amount received as
   described. Not proven: ZPH to ZSD and ZRS to ZPH (refused by the ratio), and a conversion whose pricing
@@ -263,12 +265,16 @@ that wallet's worker.
 * A transfer that the core splits into several transactions is relayed in order and stops at the first
   that is not accepted; this path is proven by code reading and with single transactions only (the
   funded test wallet cannot produce a split within its limits).
-* Allocation, measured on the test module with transactions built on the funded copies (check `N28`, a
-  whole cycle of prepare, failed relay and void token): a relay the daemon refuses leaves about 2.1 KB per
-  refusal, a relay to an unreachable daemon about 136 bytes, a void token nothing. The residue is the one
-  every typed core failure leaves (see "Building conversions without relay"); the core's refusal error
-  carries a copy of the transaction. The build keeps the exception cleanups of the core's commit
-  (`wallet2::commit_tx`), without which a failed relay left 3 to 5 KB more.
+* Allocation, measured in the test module (check `S04`, whole cycles of prepare, failed relay and void
+  token with a synthetic kept transaction, in the main thread and in a wallet worker): a relay the daemon
+  refuses, a relay to an unreachable daemon and a relay with a void token leave nothing (the transport's
+  record of the daemon's last answer, which the next request replaces, aside). The module keeps the
+  exception cleanups of the core's commit (`wallet2::commit_tx`), of its check of the daemon's answer
+  (`wallet2::throw_on_rpc_response_error`) and of the function every typed failure of the core goes
+  through (`tools::error::throw_wallet_ex`). Before the last two were kept, a relay the daemon refused left
+  about 2.1 KB (the refusal's copy of the transaction; measured with transactions built on the funded
+  copies, check `N28`) and a relay to an unreachable daemon about 136 bytes; before the commit's cleanups
+  were kept, 3 to 5 KB more.
 
 ## Text from wallets and the chain
 

@@ -93,8 +93,9 @@ runs, with no network access:
   (`T00`-`T23`) with the test module, in Node.js directly and through wallet workers, under a
   preloaded monitor that blocks every connection and records unexpected file writes (among them `C38`
   and `C39`: the relay calls' rejections before dispatch and the strict decoding of their results and
-  worker messages; `T23`: the life of a kept build with a synthetic transaction, its void causes and
-  the allocator);
+  worker messages; `T22`: every failure injected as the core throws it, each typed failure of a build
+  and of a conversion and the untyped ones, leaves the allocator at its level; `T23`: the life of a
+  kept build with a synthetic transaction, its void causes and the allocator);
 * the module loading cases in Node.js, directly and through workers: a missing `zephyr.wasm`,
   a file that is not WebAssembly, a module of another program or build, a changed byte and a
   runtime without Web Crypto reject with fixed diagnostics before any worker starts, and a failed
@@ -119,7 +120,10 @@ runs, with no network access:
   answer, and to a closed port; every outcome must have its fixed pair, every relay call exactly one
   submit request (none for a void token), a retry the same bytes, and no error the sink's node text; a
   kept build prepared while the closed port was configured must reach the accepting sink configured with
-  `setDaemonConnection` before the relay call;
+  `setDaemonConnection` before the relay call; `S04`, in the main thread and in a wallet worker: after
+  two warm-ups, five whole cycles (prepare, relay, the token void) to the refusing sink and to the closed
+  port, and five relays with a void token, return the allocator to its level (a refusal within 32 bytes:
+  the transport keeps the last answer until the next request, and its size varies);
 * the same two suites and the module loading cases in headless Chromium, in a wallet worker,
   with every non-loopback request sent to a closed proxy port and under the page policy of
   `docs/DEPLOYMENT.md`, and the redirect checks in the page and in a wallet worker (the policy then

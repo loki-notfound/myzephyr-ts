@@ -77,8 +77,8 @@ current reserve ratio."
 
 Other failures of a conversion build: `TX_NOT_POSSIBLE`/`PRICING_RECORD` (no usable pricing record,
 also when it could not be read) and `TX_NOT_POSSIBLE`/`CONVERSION_AMOUNT` (the converted amount would
-be zero); the build's own failures as for a transfer; any other `NATIVE_ERROR`/`TX_BUILD_FAILED`. Each
-refusal leaves about 136 bytes in the module.
+be zero); the build's own failures as for a transfer; any other `NATIVE_ERROR`/`TX_BUILD_FAILED`. A
+refusal leaves nothing in the module.
 
 ## What a conversion build describes
 

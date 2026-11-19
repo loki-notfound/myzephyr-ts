@@ -95,8 +95,7 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
 - After acceptance the record lives in the wallet's cache until the bytes are saved. A transaction
   that never reaches the pool stays pending until the core marks it failed, after 500 seconds and a
   refresh that reads the pool.
-- A refused build or relay leaves a small residue in the module (about 136 bytes per refused
-  conversion, about 2.1 KB per relay the daemon refuses).
+- A refused build or relay leaves nothing in the module (measured in the test module).
 
 ## Text from wallets and the chain
 
