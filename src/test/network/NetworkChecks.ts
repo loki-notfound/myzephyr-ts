@@ -1034,7 +1034,9 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       const [, height, start, end, percent, message] = progress[i];
       expect(Number(height) === h0 + i && newBlocks[i] === h0 + i, what + ": heights consecutive from the wallet's height (" + height + " at " + i + ")");
       expect(Number(start) === h0 && Number(end) >= dh && Number(end) > Number(height), what + ": start at the wallet's height, end at the daemon's height or above");
-      expect(Number(percent) > lastPercent && Number(percent) <= 1 && message === "Synchronizing", what + ": percentDone grows (" + percent + ")");
+      // a block that reaches the daemon during the sync raises endHeight to its height + 1, so percentDone stays at 1 from the
+      // daemon's former top block on
+      expect((Number(percent) > lastPercent || Number(percent) === 1) && Number(percent) >= lastPercent && Number(percent) <= 1 && message === "Synchronizing", what + ": percentDone grows, or stays at 1 (" + percent + ")");
       lastPercent = Number(percent);
     }
     expect(blocks === 0 || lastPercent === 1, what + ": percentDone reaches 1");
