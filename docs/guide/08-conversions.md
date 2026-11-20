@@ -1,11 +1,11 @@
-# 7. Conversions
+# 8. Conversions
 
 A conversion turns an amount of one V2 asset into another at the rate the chain's pricing record
 sets. This chapter covers the six pairs, the configuration, the reserve ratio, the reserve and the pricing
 record a wallet can show before it offers a conversion, what a conversion build describes, the age of its
 pricing record, fees, relaying and pending balances.
 
-Conversions use the same steps as transfers ([chapter 6](06-sending.md)): `buildConversion` to
+Conversions use the same steps as transfers ([chapter 7](07-sending.md)): `buildConversion` to
 inspect, `prepareConversion` and `relayPrepared` to send. Everything there about kept builds, relay
 outcomes and saving applies here too.
 
@@ -221,7 +221,7 @@ Its prices are `bigint`, each times 10^12 as the chain stores them: `spot` and `
 `yieldPrice` (ZYS); `timestamp` (seconds) and `signature`. A conversion is built with the pricing record of the
 wallet's top block, so the rate it gets can differ from the record read here; the build's `amountMinted` is the
 figure to show ([What a conversion build describes](#what-a-conversion-build-describes)). In a browser the class
-needs the same-origin proxy of [chapter 9](09-deploying-a-web-wallet.md) like a wallet.
+needs the same-origin proxy of [chapter 10](10-deploying-a-web-wallet.md) like a wallet.
 
 ## What a conversion build describes
 
@@ -316,4 +316,4 @@ The mainnet test of 2026-11-15 confirmed these final balances.
 Relayed on mainnet on 2026-11-15: ZSD to ZPH, ZPH to ZRS, ZSD to ZYS and ZYS to ZSD, each mined one or
 two blocks after the block of its pricing record, with the fee charged and the minted amount received
 as described. Not proven: ZPH to ZSD and ZRS to ZPH (refused by the ratio), and a conversion whose
-pricing record aged before inclusion. See [chapter 11](11-known-limitations.md).
+pricing record aged before inclusion. See [chapter 12](12-known-limitations.md).

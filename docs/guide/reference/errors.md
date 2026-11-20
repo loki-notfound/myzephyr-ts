@@ -1,6 +1,6 @@
 # Errors
 
-The error class, its codes and its diagnostics. [Chapter 8](../08-errors.md) explains how a wallet
+The error class, its codes and its diagnostics. [Chapter 9](../09-errors.md) explains how a wallet
 handles them.
 
 ## ZephyrWalletError

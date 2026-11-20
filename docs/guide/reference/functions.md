@@ -183,7 +183,7 @@ A missing or unusable file rejects the first construction with `NATIVE_ERROR` an
 (also when a wallet worker cannot receive the compiled module: Firefox, a worker policy without
 `'wasm-unsafe-eval'`).
 
-Guide: [Serving zephyr.wasm](../09-deploying-a-web-wallet.md#serving-zephyrwasm).
+Guide: [Serving zephyr.wasm](../10-deploying-a-web-wallet.md#serving-zephyrwasm).
 
 ### `terminateWorker`
 

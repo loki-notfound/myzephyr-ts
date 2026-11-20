@@ -1,8 +1,8 @@
-# 6. Sending
+# 7. Sending
 
 This chapter covers same-asset transfers: building one to inspect it, preparing and relaying it in
 two explicit steps, what to show the user, fees and priorities, the life of a kept build, every
-outcome of a relay, and saving afterwards. Conversions follow in [chapter 7](07-conversions.md).
+outcome of a relay, and saving afterwards. Conversions follow in [chapter 8](08-conversions.md).
 
 Building and relaying need a full wallet with spend keys and a daemon. Keys-only wallets reject with
 `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_TX`, view-only wallets with `VIEW_ONLY_TX`.
@@ -146,7 +146,7 @@ The description is what will be relayed and charged. Before calling `relayPrepar
 - each destination address and amount, with the asset;
 - the fee with its asset (the source asset), with all twelve decimals;
 - the total debited (`totalDebited`: amount and fee);
-- for a conversion, the burnt and minted amounts ([chapter 7](07-conversions.md)).
+- for a conversion, the burnt and minted amounts ([chapter 8](08-conversions.md)).
 
 Then relay only after the user confirmed exactly that, for example with a button that names the
 action and the amount, such as `Send 0.100000000000 ZPH`. If the user changes anything, prepare
@@ -189,7 +189,7 @@ A wallet holds one kept build at a time. It is voided (wiped and released inside
 - after `discardPrepared`, `close`, a password change, or a newer prepare (also one that fails);
 - after a sync after which the wallet's height differs from the height at the build by more than
   10 blocks;
-- for a conversion, when its pricing record has aged ([chapter 7](07-conversions.md#the-pricing-record-and-its-age));
+- for a conversion, when its pricing record has aged ([chapter 8](08-conversions.md#the-pricing-record-and-its-age));
 - after three relay calls.
 
 A forced stop ends the worker that holds it, and it is never part of the wallet bytes. It survives
@@ -294,4 +294,4 @@ balances and unlocked balances per asset).
 Not proven: a refusal by a daemon on real data, a transfer the core splits, relay from a browser or
 from a wallet in a worker (`proxyToWorker`), and platforms other than Node.js on Linux x86_64. The
 refusal and failure paths are proven against a local sink that answers as the daemon does. See
-[chapter 11](11-known-limitations.md).
+[chapter 12](12-known-limitations.md).

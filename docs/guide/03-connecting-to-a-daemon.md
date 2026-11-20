@@ -2,7 +2,7 @@
 
 A full wallet reads the chain from a Zephyr daemon (`zephyrd`) over its RPC interface. This chapter
 covers the daemon address, what the transport does and refuses, what it means that every daemon is
-trusted, the proxy a browser wallet needs, synchronization and heights.
+trusted, the proxy a browser wallet needs, synchronization as far as it concerns the daemon, and heights.
 
 The examples in this chapter need a daemon and are type-checked only. `https://node.example.org` is
 a placeholder; the library contains no default daemon.
@@ -78,7 +78,7 @@ into the error.
   ([chapter 2](02-wallets.md#stopping-a-wallet-at-once)).
 - **No submit outside a relay.** The transport refuses every request that would submit or relay a
   transaction or a block, except the one submit request of a relay call
-  ([chapter 6](06-sending.md#preparing-and-relaying)).
+  ([chapter 7](07-sending.md#preparing-and-relaying)).
 
 In a browser the transport uses `fetch` with redirect mode `manual`; `XMLHttpRequest` is not used.
 
@@ -117,7 +117,7 @@ daemon you run yourself or one you trust.
 A browser wallet calls the daemon from its worker. Two things decide whether that works:
 
 - **The worker's Content-Security-Policy:** the response that serves `zephyr.worker.js` must allow
-  the daemon origin in `connect-src` ([chapter 9](09-deploying-a-web-wallet.md#content-security-policy)).
+  the daemon origin in `connect-src` ([chapter 10](10-deploying-a-web-wallet.md#content-security-policy)).
 - **CORS:** a daemon on another origin must allow the wallet's origin. The library cannot work around
   a missing CORS header. A browser does not tell a request blocked by CORS from an unreachable host,
   so both report `DAEMON_ERROR`/`DAEMON_NOT_CONNECTED`.
@@ -142,10 +142,10 @@ proxy requirements in full.
 
 ## Synchronizing
 
-`sync(startHeight?, listener?)` is one synchronization. It resolves with `{ numBlocksFetched,
-receivedMoney }` when the wallet has caught up with the daemon; a listener receives its progress, and
-`startSyncing` keeps the wallet in sync in the background ([ZephyrWallet](reference/wallet.md#listeners-and-background-synchronization)).
-Other calls of the wallet, `close` included, wait until a sync is done.
+`sync()` fetches the blocks since the wallet's height and resolves with `{ numBlocksFetched,
+receivedMoney }` when the wallet has caught up with the daemon. Its four forms, its progress, listeners
+and background synchronization are in [chapter 4](04-syncing-and-listeners.md); the facts that concern
+the daemon are here.
 
 ```ts
 const result = await wallet.sync();
@@ -154,23 +154,20 @@ console.log("wallet height:", await wallet.getHeight(), "daemon height:", await 
 const { keys, cache } = await wallet.getData(); // save after a sync
 ```
 
-What to know before the first sync:
-
-- **It downloads every block hash** from the genesis block up to the wallet's restore height, 10,000
-  hashes per request: near height 900,000 about 91 requests and 29 MB, growing by 32 bytes per
+- **The first sync downloads every block hash** from the genesis block up to the wallet's restore height,
+  10,000 hashes per request: near height 900,000 about 91 requests and 29 MB, growing by 32 bytes per
   block. This applies to every new or restored wallet, also to a new wallet that starts at the
   daemon height. The hashes become part of the cache: save `getData()` after the first sync, and
   later openings from those bytes do not download them again.
-- **A height below the restore height** passed as `startHeight` lowers the stored restore height.
 - **A daemon that reports itself not synchronized** makes a sync return zero blocks without an error.
   `isDaemonSynced()` tells you which case you are in.
 - **After a failed connection check** the core caches the state: later calls report
   `DAEMON_ERROR`/`DAEMON_NOT_CONNECTED` until the connection is set again with
-  `setDaemonConnection`.
+  `setDaemonConnection` or `isConnectedToDaemon()` succeeds (it checks again).
 
-A sync can take minutes. In a user interface, show that the wallet is synchronizing, and offer to
-stop it with `terminate()` for a worker-mode wallet; synchronized blocks since the last `getData()`
-are then lost.
+A sync can take minutes. In a user interface, show its progress (a listener), and offer to stop it
+with `terminate()` for a worker-mode wallet; synchronized blocks since the last `getData()` are then
+lost.
 
 ## Heights
 
@@ -195,4 +192,4 @@ Every daemon failure rejects with `DAEMON_ERROR` and a fixed diagnostic:
 | `DAEMON_BUSY` | at relay: the daemon did not process the transaction |
 
 Another failure of a sync rejects with `NATIVE_ERROR`/`SYNC_FAILED`. Text supplied by a node never
-reaches an error ([chapter 8](08-errors.md#no-node-text-in-errors)).
+reaches an error ([chapter 9](09-errors.md#no-node-text-in-errors)).

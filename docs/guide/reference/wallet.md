@@ -152,7 +152,7 @@ getAddress(accountIdx: number, subaddressIdx: number): Promise<string>;
 The address of a subaddress. Full and keys-only wallets.
 
 Rejects with: `INVALID_CONFIG`/`ADDRESS_INDEX_RANGE`. Guide:
-[Accounts and subaddresses](../04-assets-and-balances.md#accounts-and-subaddresses).
+[Accounts and subaddresses](../05-assets-and-balances.md#accounts-and-subaddresses).
 
 ### `getAddressIndex`
 
@@ -166,7 +166,7 @@ window that were not created yet.
 Rejects with: `INVALID_ADDRESS`/`ADDRESS_TYPE` (not a string, empty or longer than 256),
 `INVALID_ADDRESS`/`CORE_INVALID_ADDRESS` (malformed or another network),
 `INVALID_ADDRESS`/`ADDRESS_NOT_IN_WALLET`, `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_ACCOUNTS`. Guide:
-[Accounts and subaddresses](../04-assets-and-balances.md#accounts-and-subaddresses).
+[Accounts and subaddresses](../05-assets-and-balances.md#accounts-and-subaddresses).
 
 ### `getNetworkType`
 
@@ -311,7 +311,7 @@ isDaemonSynced(): Promise<boolean>;
 
 Whether the daemon reports itself synchronized with the network (its height is at least the highest
 height of its peers, and above 1); a request. A daemon that is not synchronized makes a sync fetch
-nothing. Guide: [Synchronizing](../03-connecting-to-a-daemon.md#synchronizing).
+nothing. Guide: [Syncing](../04-syncing-and-listeners.md#syncing).
 
 ### `getReserveInfo`
 
@@ -325,7 +325,7 @@ record history. Requests: `get_info` (cached by the core for 30 s), `hard_fork_i
 `get_circulating_supply` and `get_pricing_record_history`. When the core cannot read a usable pricing record of
 that block it computes nothing, and this rejects with `DAEMON_ERROR`/`PRICING_RECORD_UNAVAILABLE` instead of
 returning zeros. Java: `ZephyrWallet.getReserveInfo()`. Guide:
-[The reserve and the pricing record](../07-conversions.md#the-reserve-and-the-pricing-record).
+[The reserve and the pricing record](../08-conversions.md#the-reserve-and-the-pricing-record).
 
 ### `getCirculatingSupply`
 
@@ -365,7 +365,7 @@ afterwards differs from the height at the build by more than 10 blocks.
 
 Rejects with: `INVALID_CONFIG`/`SYNC_START_HEIGHT` (not a safe integer from 0), `INVALID_CONFIG`/`LISTENER`
 (a second argument that is not a listener), `UNSUPPORTED_CAPABILITY`/`SYNC` (more than two arguments),
-`DAEMON_ERROR`, `NATIVE_ERROR`/`SYNC_FAILED`. Guide: [Synchronizing](../03-connecting-to-a-daemon.md#synchronizing).
+`DAEMON_ERROR`, `NATIVE_ERROR`/`SYNC_FAILED`. Guide: [Syncing](../04-syncing-and-listeners.md#syncing).
 
 ### `refreshPool`
 
@@ -379,7 +379,7 @@ resolves with the number of incoming pool transactions the wallet holds (at most
 
 Rejects with: `INVALID_CONFIG`/`FIELD_TYPE` (an argument), `INVALID_CONFIG`/`LISTING_LIMIT`,
 `DAEMON_ERROR`, `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON`. Guide:
-[Incoming transfers in the pool](../05-history.md#incoming-transfers-in-the-pool).
+[Incoming transfers in the pool](../06-history.md#incoming-transfers-in-the-pool).
 
 ## Balances
 
@@ -397,7 +397,7 @@ index (only what the core reports); or one asset's balance in an account or suba
 Rejects with: `INVALID_CONFIG`/`ASSET_TYPE`, `ADDRESS_INDEX_RANGE`, `ACCOUNT_NOT_FOUND`,
 `SUBADDRESS_NOT_FOUND`, `FIELD_TYPE` (other argument shapes); `UNSUPPORTED_CAPABILITY`/`BALANCE` for the
 asset-less `(accountIdx, subaddressIdx)` form; `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON`. Guide:
-[Balances](../04-assets-and-balances.md#balances).
+[Balances](../05-assets-and-balances.md#balances).
 
 ### `getUnlockedBalance`
 
@@ -408,14 +408,14 @@ getUnlockedBalance(assetType: string, accountIdx: number, subaddressIdx?: number
 ```
 
 The spendable balance, in the same three shapes and with the same rejections as `getBalance`. Guide:
-[Unlocked balance](../04-assets-and-balances.md#unlocked-balance).
+[Unlocked balance](../05-assets-and-balances.md#unlocked-balance).
 
 ## Accounts and subaddresses
 
 Full wallets only; keys-only wallets reject with `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_ACCOUNTS`. Labels
 are strings of at most 255 UTF-8 bytes without control characters or unpaired surrogates
 (`INVALID_CONFIG`: `LABEL_TYPE`, `LABEL_LENGTH`, `LABEL_CHARACTERS`). Guide:
-[Accounts and subaddresses](../04-assets-and-balances.md#accounts-and-subaddresses).
+[Accounts and subaddresses](../05-assets-and-balances.md#accounts-and-subaddresses).
 
 ### `getAccounts`
 
@@ -494,7 +494,7 @@ label rejections.
 ## History
 
 Full wallets only; keys-only wallets reject with `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_HISTORY`. No
-request is sent. Guide: [History](../05-history.md).
+request is sent. Guide: [History](../06-history.md).
 
 ### `getTxs`
 
@@ -508,7 +508,7 @@ filters, the transactions with at least one matching transfer, each with all of 
 Rejects with: `INVALID_CONFIG` and `CONFIG_TYPE`, `UNKNOWN_FIELD`, `FIELD_TYPE`, `ASSET_TYPE`,
 `ADDRESS_INDEX_RANGE`, `QUERY_ACCOUNT_REQUIRED`, `HEIGHT_RANGE`, `TX_HASHES`, `TX_HASH`, `TX_NOT_FOUND`,
 `LISTING_LIMIT` (more than 1,000 transactions or 2,000 transfers). Guide:
-[The query](../05-history.md#the-query).
+[The query](../06-history.md#the-query).
 
 ### `getTransfers`
 
@@ -517,7 +517,7 @@ getTransfers(query?: ZephyrHistoryQuery): Promise<ReadonlyArray<ZephyrWalletTran
 ```
 
 The transfers that match the query; per transaction the outgoing transfer first, then the incoming
-ones. Same rejections as `getTxs`. Guide: [Transfers](../05-history.md#transfers).
+ones. Same rejections as `getTxs`. Guide: [Transfers](../06-history.md#transfers).
 
 ### `getTx`
 
@@ -529,7 +529,7 @@ One transaction by its hash.
 
 Rejects with: `INVALID_CONFIG`/`TX_HASH` (not 64 lowercase hexadecimal characters),
 `INVALID_CONFIG`/`TX_NOT_FOUND` (also for an incoming pool transaction the last `refreshPool` did not
-see). Guide: [The query](../05-history.md#the-query).
+see). Guide: [The query](../06-history.md#the-query).
 
 ## Building and relaying
 
@@ -552,7 +552,7 @@ Rejects with: `INVALID_CONFIG` (`CONFIG_TYPE`, `UNKNOWN_FIELD`, `FIELD_TYPE`, `A
 (`ADDRESS_TYPE`, `CORE_INVALID_ADDRESS`, `ADDRESS_NETWORK`); `UNSUPPORTED_CAPABILITY` (`CONVERSION`,
 `INTEGRATED_ADDRESS`); `TX_NOT_POSSIBLE` (`NOT_ENOUGH_UNLOCKED`, `NOT_ENOUGH_MONEY`,
 `NOT_ENOUGH_FOR_FEE`, `NOT_ENOUGH_OUTS_TO_MIX`, `TX_TOO_LARGE`); `DAEMON_ERROR`;
-`NATIVE_ERROR`/`TX_BUILD_FAILED`. Guide: [Building to inspect](../06-sending.md#building-to-inspect).
+`NATIVE_ERROR`/`TX_BUILD_FAILED`. Guide: [Building to inspect](../07-sending.md#building-to-inspect).
 
 ### `buildConversion`
 
@@ -566,7 +566,7 @@ Rejects with: the configuration rejections of `buildTransfer` as they apply, `IN
 `CONVERSION_PAIR`, `CONVERSION_DESTINATIONS`, `AMOUNT_PRECISION`; `TX_NOT_POSSIBLE` (`RESERVE_RATIO`,
 `PRICING_RECORD`, `CONVERSION_SPLIT`, `CONVERSION_AMOUNT`, and the build failures of `buildTransfer`);
 `DAEMON_ERROR`; `NATIVE_ERROR`/`TX_BUILD_FAILED`. Guide:
-[What a conversion build describes](../07-conversions.md#what-a-conversion-build-describes).
+[What a conversion build describes](../08-conversions.md#what-a-conversion-build-describes).
 
 ### `prepareTransfer`
 
@@ -576,7 +576,7 @@ prepareTransfer(config: ZephyrTransferConfig): Promise<ZephyrPreparedTransfer>;
 
 As `buildTransfer`, but keeps the built transactions in the wallet's one slot under a new token; the
 previous kept build is voided, also when this prepare fails. Nothing is relayed. Same rejections as
-`buildTransfer`. Guide: [Preparing and relaying](../06-sending.md#preparing-and-relaying).
+`buildTransfer`. Guide: [Preparing and relaying](../07-sending.md#preparing-and-relaying).
 
 ### `prepareConversion`
 
@@ -585,7 +585,7 @@ prepareConversion(config: ZephyrConversionConfig): Promise<ZephyrPreparedConvers
 ```
 
 As `buildConversion`, but keeps the built transaction under a new token. Same rejections as
-`buildConversion`. Guide: [Relaying a conversion](../07-conversions.md#relaying-a-conversion).
+`buildConversion`. Guide: [Relaying a conversion](../08-conversions.md#relaying-a-conversion).
 
 ### `relayPrepared`
 
@@ -600,7 +600,7 @@ Rejects with: `INVALID_CONFIG`/`RELAY_TOKEN` (not a token), `RELAY_TOKEN_VOID`;
 `TX_NOT_POSSIBLE`/`PRICING_RECORD_AGE`; `TX_REJECTED` with the daemon's first reason;
 `DAEMON_ERROR`/`DAEMON_BUSY`, `DAEMON_UNREACHABLE`; `RELAY_UNKNOWN`/`NO_ANSWER`, `HTTP_STATUS`,
 `ANSWER_UNREADABLE`; `NATIVE_ERROR`/`RELAY_HASH_MISMATCH`, `RELAY_REQUEST`, `RELAY_FAILED`. Guide:
-[Outcomes of a relay](../06-sending.md#outcomes-of-a-relay).
+[Outcomes of a relay](../07-sending.md#outcomes-of-a-relay).
 
 ### `discardPrepared`
 
@@ -612,14 +612,14 @@ Voids the kept build the token names (wiped and released inside the module); `fa
 none.
 
 Rejects with: `INVALID_CONFIG`/`RELAY_TOKEN`. Guide:
-[The life of a kept build](../06-sending.md#the-life-of-a-kept-build).
+[The life of a kept build](../07-sending.md#the-life-of-a-kept-build).
 
 ## Listeners and background synchronization
 
 Full wallets, direct and proxied, with the names of the Java port. Keys-only wallets reject with
 `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON`, closed ones with `WALLET_CLOSED`. Callbacks never run inside the
 core; whatever a callback throws or rejects is dropped unread. The callbacks: `ZephyrWalletListener` in
-[Types](types.md#zephyrwalletlistener).
+[Types](types.md#zephyrwalletlistener). Guide: [Syncing and listeners](../04-syncing-and-listeners.md).
 
 ### `addListener`
 
@@ -681,7 +681,7 @@ Rejects with: `INVALID_CONFIG`/`FIELD_TYPE` (an argument).
 
 These names remain from monero-ts so that a port finds them. Each rejects with
 `UNSUPPORTED_CAPABILITY` before any native code runs. Guide:
-[What is not ported](../10-coming-from-monero-ts.md#what-is-not-ported).
+[What is not ported](../11-coming-from-monero-ts.md#what-is-not-ported).
 
 ### `createTxs`
 

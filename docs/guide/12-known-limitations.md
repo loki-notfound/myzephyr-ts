@@ -1,4 +1,4 @@
-# 11. Known limitations
+# 12. Known limitations
 
 The limitations below follow from the pinned core and from the current scope of the library. They are
 deliberate or not yet addressed; none of them is hidden behind a default. This chapter is a digest of
@@ -53,10 +53,16 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
   chain tip.
 - **Synchronization semantics** pass through from the core: a start height below the restore height
   lowers it; a daemon that is not synchronized makes a sync return zero blocks without an error; after
-  a failed connection check the core reports `DAEMON_NOT_CONNECTED` until the connection is set again;
+  a failed connection check the core reports `DAEMON_NOT_CONNECTED` until the connection is set again or
+  `isConnectedToDaemon()` succeeds;
   a browser cannot tell a request blocked by CORS from an unreachable host.
 - **No cancellation** of a running request. Requests are bounded (30 s JSON, 120 s binary). A
-  worker-mode wallet can be stopped with `terminate()`, losing unsaved state.
+  worker-mode wallet can be stopped with `terminate()`, losing unsaved state. `stopSyncing` and `close`
+  wait for a running background iteration.
+- **Listener notifications are the core's**: the output notifications repeat (count each transaction
+  once), outputs in the pool and at unlock carry no asset, and the notifications at unlock come only
+  for transactions within 70 blocks of the wallet's height. A direct-mode callback runs on the scanning
+  thread, so a slow one delays the scan ([chapter 4](04-syncing-and-listeners.md)).
 - **The transport** has no authentication and no proxy support and follows no redirect.
 
 ## Wallets and workers
@@ -106,7 +112,7 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
 Labels, destination addresses and other text from wallet bytes or the chain are untrusted display
 text and may contain bidirectional controls, zero-width characters and look-alike characters. Render
 them as text, isolate their direction, and keep them apart from your own strings
-([chapter 4](04-assets-and-balances.md#labels-are-untrusted-display-text)).
+([chapter 5](05-assets-and-balances.md#labels-are-untrusted-display-text)).
 
 ## Platforms
 
@@ -120,4 +126,4 @@ them as text, isolate their direction, and keep them apart from your own strings
   renderer from `file://` or a loopback server or with Node.js integration.
 - The browser entry is tested with Vite 8 and webpack 5 only.
 - Firefox needs `script-src 'wasm-unsafe-eval'` in the policy of the worker script
-  ([chapter 9](09-deploying-a-web-wallet.md#content-security-policy)).
+  ([chapter 10](10-deploying-a-web-wallet.md#content-security-policy)).

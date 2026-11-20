@@ -1,4 +1,4 @@
-# 10. Coming from monero-ts
+# 11. Coming from monero-ts
 
 zephyr-ts is a port of [monero-ts](https://github.com/woodser/monero-ts) v0.11.22 (commit
 `f6569ca616c4723645a7bfae3a843a0358f5fca9`), and the git history of monero-ts is kept in its
@@ -61,7 +61,7 @@ is no `moneroTs`-style default object with model classes.
 Differences that are not renames:
 
 - **Balances are per asset.** Every balance is a map or names an asset; the asset-less two-number form
-  rejects with `UNSUPPORTED_CAPABILITY`/`BALANCE` ([chapter 4](04-assets-and-balances.md#balances)).
+  rejects with `UNSUPPORTED_CAPABILITY`/`BALANCE` ([chapter 5](05-assets-and-balances.md#balances)).
 - **No file system.** There is no `path` and no `fs`; a file path rejects with
   `UNSUPPORTED_CAPABILITY`/`FILE_PATH`. `close()` takes no argument and never saves.
 - **Strict configurations.** The core's configuration parser ignores keys it does not know, and an
@@ -72,7 +72,7 @@ Differences that are not renames:
   setting; redirects are not followed; every daemon is trusted by the core
   ([chapter 3](03-connecting-to-a-daemon.md)).
 - **Errors carry no text.** Code that matched on `err.message` must match on `err.code` and
-  `err.diagnostic` instead ([chapter 8](08-errors.md)).
+  `err.diagnostic` instead ([chapter 9](09-errors.md)).
 - **Sending is two steps.** There is no `relay: true` and no build-and-send call. A transaction is
   relayed only by `relayPrepared` with the token of a prepared build.
 - **Assets and conversions.** Transfers name an `asset`; conversions are their own calls

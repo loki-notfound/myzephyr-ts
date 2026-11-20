@@ -1,4 +1,4 @@
-# 8. Errors
+# 9. Errors
 
 Every failure of the library is a `ZephyrWalletError` with a fixed code and, usually, a fixed
 diagnostic. This chapter explains the class, the codes and diagnostics, which of them a wallet must
@@ -66,9 +66,9 @@ diagnostic as the detail for the message and for a support log.
 | `TX_NOT_POSSIBLE`/`RESERVE_RATIO` | conversions | the reserve ratio does not allow this pair now |
 | `TX_NOT_POSSIBLE`/`PRICING_RECORD_AGE` | relay of a conversion | the rate has expired; prepare again and show the new amounts |
 | `TX_REJECTED` | relay | the daemon refused the transaction; sync and prepare again |
-| `RELAY_UNKNOWN` | relay | the transaction may have been sent; never show it as not sent ([chapter 6](06-sending.md#outcomes-of-a-relay)) |
+| `RELAY_UNKNOWN` | relay | the transaction may have been sent; never show it as not sent ([chapter 7](07-sending.md#outcomes-of-a-relay)) |
 | `WALLET_CLOSED` | all | the wallet was closed or stopped (`WALLET_TERMINATED`); open it again |
-| `NATIVE_ERROR`/`WASM_MODULE_*`, `WORKER_FAILED` | first construction | the deployment is wrong: the module file, the secure context or the policy ([chapter 9](09-deploying-a-web-wallet.md)) |
+| `NATIVE_ERROR`/`WASM_MODULE_*`, `WORKER_FAILED` | first construction | the deployment is wrong: the module file, the secure context or the policy ([chapter 10](10-deploying-a-web-wallet.md)) |
 | `NATIVE_ERROR`/`PASSWORD_STATE_UNKNOWN` | after a failed `changePassword` | close the wallet and open the bytes saved before |
 | `UNSUPPORTED_CAPABILITY` | all | a bug or a missing feature, not a user error |
 

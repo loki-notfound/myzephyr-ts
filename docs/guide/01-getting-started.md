@@ -17,16 +17,17 @@ zephyr-ts is an independent project. It is not affiliated with or endorsed by Ze
 What it does:
 
 - creates, restores and opens wallets, keeps their bytes in memory and gives them to you to store;
-- reads from a Zephyr daemon: heights, one blocking synchronization, balances per asset;
+- reads from a Zephyr daemon: heights, synchronization with its progress, listeners and background
+  synchronization, balances per asset;
 - lists accounts and subaddresses, and reads the history of transactions and transfers per asset;
 - builds same-asset transfers in the four V2 assets and the six conversions between them, to
   inspect them, and relays a prepared build in two explicit steps.
 
-What it does not do: sweeps, listeners and background synchronization, outputs, key images,
+What it does not do: sweeps, outputs, key images,
 rescans, proofs, multisig, wallet files on disk, the daemon and wallet RPC clients, and
 transactions in the V1 assets. A call outside the supported surface rejects with
 `UNSUPPORTED_CAPABILITY` before any native code runs. Read
-[chapter 11](11-known-limitations.md) before you use the library with real funds or public nodes.
+[chapter 12](12-known-limitations.md) before you use the library with real funds or public nodes.
 
 ## Requirements
 
@@ -39,10 +40,10 @@ transactions in the V1 assets. A call outside the supported surface rejects with
   not tested.
 - **A secure context in the browser:** the page must be served over `https://`, from `localhost`
   or from `127.0.0.1`, because the module check needs the Web Crypto API
-  ([chapter 9](09-deploying-a-web-wallet.md#secure-context)).
+  ([chapter 10](10-deploying-a-web-wallet.md#secure-context)).
 - **Electron 43 or 45:** the main process through the Node.js entry, and a sandboxed renderer that
   loads the page from a privileged `app://` scheme. `file://` pages are not tested
-  ([chapter 9](09-deploying-a-web-wallet.md#electron)).
+  ([chapter 10](10-deploying-a-web-wallet.md#electron)).
 - **Bundlers:** Vite 8 and webpack 5 are tested, without configuration.
 
 Everything that needs a daemon (synchronization, history after a sync, building and relaying) is
@@ -70,7 +71,7 @@ sha256sum -c SHA256SUMS
 
 `KEYS.asc` must be the maintainer key `31DA 39AB 43E0 CA67 F1F3  A661 BA2A FF22 DF8A 4A13`; compare
 the primary key fingerprint that `gpg --verify` prints. The same key signs the release tag and every commit of
-the library. [Chapter 12](12-building-and-verifying.md) explains the other checks.
+the library. [Chapter 13](13-building-and-verifying.md) explains the other checks.
 
 Then copy the tarball into your project and install it by path:
 
@@ -151,7 +152,7 @@ void showNewAddress();
 
 Serve it with `npx vite` (development) or build it with `npx vite build`. The page must be in a
 secure context, and its Content-Security-Policy must allow WebAssembly compilation and the worker:
-[chapter 9](09-deploying-a-web-wallet.md) has the policy for the page and for the worker script.
+[chapter 10](10-deploying-a-web-wallet.md) has the policy for the page and for the worker script.
 
 ## Where the WebAssembly module and the worker come from
 
@@ -188,7 +189,7 @@ In Node.js these are file paths; in a browser, URLs. The worker script must have
 ## Amounts
 
 Every amount is a `bigint` in atomic units: 10^12 atomic units are one coin, for every asset.
-[Chapter 4](04-assets-and-balances.md#formatting-and-parsing-amounts) has a small helper to format
+[Chapter 5](05-assets-and-balances.md#formatting-and-parsing-amounts) has a small helper to format
 and parse amounts exactly.
 
 ## Conventions in this guide

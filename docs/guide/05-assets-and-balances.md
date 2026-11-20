@@ -1,4 +1,4 @@
-# 4. Assets, accounts and balances
+# 5. Assets, accounts and balances
 
 A Zephyr wallet holds several assets at once, so every balance is a balance per asset. This chapter
 names the assets, shows how amounts are represented, explains the balance shapes and covers
@@ -27,7 +27,7 @@ unchanged, and an asset the core does not report stays absent; it never becomes 
 
 Every amount is a `bigint` in atomic units: 10^12 atomic units are one coin, for every asset. Amounts
 you pass in, such as transfer amounts, must be `bigint` too; a `number` is rejected. Conversions take
-amounts with at most four decimals ([chapter 7](07-conversions.md#the-configuration)).
+amounts with at most four decimals ([chapter 8](08-conversions.md#the-configuration)).
 
 ## Formatting and parsing amounts
 
@@ -109,15 +109,15 @@ await wallet.close();
 The **balance** counts everything the wallet owns, including funds that are not yet spendable. The
 **unlocked balance** counts what can be spent now: received outputs and change unlock after the
 confirmations the core requires. A transaction can spend only unlocked funds, and a build checks the
-unlocked balance of the asset first ([chapter 6](06-sending.md#what-a-build-checks-and-asks)).
+unlocked balance of the asset first ([chapter 7](07-sending.md#what-a-build-checks-and-asks)).
 
 While a sent transaction is pending, the source account's balance falls by the debited total and
 its unlocked balance by the spent inputs; the change counts in the balance and unlocks later.
-[Chapter 6](06-sending.md#after-acceptance-save-the-wallet) describes the balances after a relay.
+[Chapter 7](07-sending.md#after-acceptance-save-the-wallet) describes the balances after a relay.
 
 Balances other than zero were verified with a funded test wallet on mainnet, at ten confirmations.
 How a locked balance appears in the maps is not verified on real data
-([chapter 11](11-known-limitations.md)).
+([chapter 12](12-known-limitations.md)).
 
 ## Accounts and subaddresses
 

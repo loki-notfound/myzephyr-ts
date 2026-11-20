@@ -8,9 +8,28 @@ Changes of what the package declares and exports, compared with the release `2.3
 Not released yet: the package version in the repository is still `2.3.0-sec.2-ts.1`, and the release
 of that name does not contain these changes. They make the shipped declarations say what the library
 does, remove internal members and names from them, remove the unsupported wallet RPC client from the
-package, and add the reserve, the circulating supply and a supported daemon client with the names of the
-Java port; apart from the additions, the one diagnostic and the keys-only `server: ""` below, the library
-behaves as before. `zephyr.wasm` changes (two bindings).
+package, and add the reserve, the circulating supply, a supported daemon client, the progress of a sync,
+listeners and background synchronization with the names of the Java port; apart from the additions, the
+diagnostics and the keys-only `server: ""` below, the library behaves as before. `zephyr.wasm` changes (two
+bindings for the reserve, one for the core's wallet notifications).
+
+### Progress of a sync, listeners and background synchronization
+
+New on `ZephyrWallet`, for full wallets, with the names and semantics of the Java port: the four forms of `sync`
+(`sync()`, `sync(listener)`, `sync(startHeight)`, `sync(startHeight, listener)`), `addListener`, `removeListener`,
+`getListeners`, `startSyncing(periodInMs?)` and `stopSyncing()`. New types `ZephyrWalletListener` (the five callbacks
+of the Java port's listener and `onSyncError`, each optional) and `ZephyrWalletOutput` (the output of an output
+notification). New diagnostics `LISTENER_NOT_REGISTERED` and `SYNC_PERIOD` (both `INVALID_CONFIG`); the existing
+`LISTENER` now also comes with `INVALID_CONFIG` for a value that is not a listener. Keys-only wallets reject with
+`UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON`. Callbacks never run inside the core, and whatever they throw or reject
+is dropped. Background failures reach `onSyncError` instead of being printed. Guide chapter 4.
+
+Changed rejections: `startSyncing()` and `addListener()` rejected with `UNSUPPORTED_CAPABILITY` (`SYNC`,
+`LISTENERS`); they now work. `sync` with two arguments rejected with `UNSUPPORTED_CAPABILITY`/`SYNC`; the second
+argument is now a listener (`INVALID_CONFIG`/`LISTENER` when it is not one), and three or more arguments reject with
+`SYNC`. `LISTENERS` is no longer reported.
+
+What to change: code that expected `startSyncing` or `addListener` to reject. Otherwise nothing; new calls.
 
 ### The reserve and the circulating supply
 

@@ -1,4 +1,4 @@
-# 5. History
+# 6. History
 
 A full wallet lists its transactions and transfers per asset. This chapter explains what a listing
 returns, the query and its filters, paging, incoming transfers in the pool and what a conversion
@@ -60,7 +60,7 @@ outgoing one `subaddressIndices` (the subaddresses whose outputs were spent) and
 A destination (`ZephyrTransferDestination`) is what the sending wallet stored: `amount` in the
 destination asset, `asset` when the core reports one, and `address` only if the stored text has the
 form of an address. That text is untrusted display text
-([chapter 4](04-assets-and-balances.md#labels-are-untrusted-display-text)).
+([chapter 5](05-assets-and-balances.md#labels-are-untrusted-display-text)).
 
 An amount sent to an address of the sending account in the source asset is not listed as an
 incoming transfer: the core counts it with the account's change, and it stays in the account's
@@ -168,7 +168,7 @@ The request asks for the hashes in the pool (`/get_transaction_pool_hashes.bin`)
 pool transactions the wallet has not scanned before (`/gettransactions`). It sends no key image and
 no address, but the node can see which pool transactions the wallet does not ask for: those it sent
 itself or already recorded. Failures reject with `DAEMON_ERROR`. An incoming transfer in the pool on
-real data is not proven yet ([chapter 11](11-known-limitations.md)).
+real data is not proven yet ([chapter 12](12-known-limitations.md)).
 
 ## Own pending and failed transactions
 

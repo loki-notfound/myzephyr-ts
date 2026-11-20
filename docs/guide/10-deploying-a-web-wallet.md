@@ -1,4 +1,4 @@
-# 9. Deploying a web wallet
+# 10. Deploying a web wallet
 
 This chapter covers what a browser or Electron wallet must serve and allow: the files the page loads,
 the Content-Security-Policy of the page and of the worker script, `zephyr.wasm`, the secure context,

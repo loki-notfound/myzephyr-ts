@@ -1,4 +1,4 @@
-# 12. Building and verifying
+# 13. Building and verifying
 
 Every release of zephyr-ts is built from pinned sources with the scripts in its repository, and can be
 rebuilt and compared. This chapter explains how to verify a release, what `manifest.json` records, how

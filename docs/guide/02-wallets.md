@@ -215,11 +215,11 @@ Nothing is saved for you, and `close()` does not save. Call `getData()` and stor
 - after creating or restoring a wallet;
 - after the first synchronization, which downloads the hash of every block up to the restore height
   (about 29 MB near height 900,000) and keeps it in the cache: bytes saved afterwards open without
-  that download ([chapter 3](03-connecting-to-a-daemon.md#synchronizing));
+  that download ([chapter 4](04-syncing-and-listeners.md#syncing));
 - after later synchronizations, so that a reopened wallet does not scan the same blocks again;
 - after `createAccount`, `createSubaddress`, `setSubaddressLabel` and `changePassword`;
 - after `relayPrepared` resolves: the wallet's record of the sent transaction lives only in its
-  cache until the bytes are saved ([chapter 6](06-sending.md#after-acceptance-save-the-wallet)).
+  cache until the bytes are saved ([chapter 7](07-sending.md#after-acceptance-save-the-wallet)).
 
 ## The password
 

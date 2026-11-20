@@ -47,11 +47,36 @@ not the wallet's creation height. Restores from a seed or keys use the `restoreH
 * When the daemon reports that it is itself not synchronized, a sync returns zero blocks without
   an error.
 * The core caches its connection state: after a failed connection check, later calls report
-  `DAEMON_ERROR`/`DAEMON_NOT_CONNECTED` until the connection is set again.
+  `DAEMON_ERROR`/`DAEMON_NOT_CONNECTED` until the connection is set again or `isConnectedToDaemon` succeeds
+  (it checks again; background synchronization does so after such a failure).
 * An unreachable daemon fails neither the construction nor `setDaemonConnection`;
   `isConnectedToDaemon` then reports `false` and network calls reject.
 * A browser cannot tell a request blocked by CORS from an unreachable host; both report a fixed
   connection diagnostic.
+
+## Listeners and background synchronization
+
+* Notifications are the core's (zephyr-cpp's wallet listener): one progress call and one new block per scanned
+  block, a balance change per asset, outputs received and spent. The output notifications repeat (in the pool, at
+  confirmation, at unlock; spent at confirmation and at unlock, the second a summary of the outgoing amount plus the
+  fee); count each transaction once. The asset of a pool output and of the outputs notified at unlock is absent: the
+  core's pool callback has no asset, and at unlock it reads outputs from its own history, which has none.
+* Read in the core's code: the notifications at unlock come only for transactions confirmed within the 70 blocks
+  below the wallet's height when the core checks, and during a sync only after the wallet's first completed sync in
+  that process; a wallet that syncs from far behind gets none for older transactions.
+* The core sends notifications only while the wallet asks for them, i.e. while listeners are added (or for a sync with
+  a listener). A listener added while a sync runs gets that sync's notifications only if another listener was added
+  before the sync started.
+* Callbacks run in the context that owns the wallet, never inside the core. In direct mode they run between the
+  core's steps on the same thread, so a slow callback delays the scan; in a wallet's own worker it does not. A
+  context whose event loop is blocked receives the queued notifications in order afterwards.
+* Background synchronization has no cancellation either: `stopSyncing` and `close` wait for the running iteration.
+  Its timer keeps a Node.js process alive until `stopSyncing` or `close`. Browsers throttle the timers of hidden pages,
+  which can stretch the period of a direct-mode loop there (not measured).
+* Proven on real data: the progress of incremental syncs and background synchronization against the permitted daemon,
+  in Node.js direct and in a worker. The output and balance notifications of real transactions are compared with the
+  funded test wallet's history by a private runner outside the public checks; offline, a synthetic sync of the test
+  module covers every notification kind.
 
 ## No cancellation of a running request
 

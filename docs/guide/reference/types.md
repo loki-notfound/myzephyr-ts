@@ -65,7 +65,7 @@ interface ZephyrWalletSyncResult {
 ```
 
 The result of `sync()`: the number of blocks fetched and whether the wallet received money in them.
-Guide: [Synchronizing](../03-connecting-to-a-daemon.md#synchronizing).
+Guide: [Syncing](../04-syncing-and-listeners.md#syncing).
 
 ## Construction configurations
 
@@ -215,7 +215,7 @@ type ZephyrAssetBalances = ReadonlyMap<string, bigint>;
 
 A balance by asset name. `getBalance()` gives the core's keys with zeros included (eight assets for a
 new wallet); the maps of accounts and subaddresses hold only assets with outputs there. Guide:
-[Balances](../04-assets-and-balances.md#balances).
+[Balances](../05-assets-and-balances.md#balances).
 
 ### `ZephyrAccountBalances`
 
@@ -224,7 +224,7 @@ type ZephyrAccountBalances = ReadonlyMap<number, ZephyrAssetBalances>;
 ```
 
 An account's balances by subaddress index, as `getBalance(accountIdx)` returns them; only subaddresses
-the core reports are present. Guide: [Balances](../04-assets-and-balances.md#balances).
+the core reports are present. Guide: [Balances](../05-assets-and-balances.md#balances).
 
 ### `ZephyrAccount`
 
@@ -244,7 +244,7 @@ One account of a full wallet. `primaryAddress` is the address of its subaddress 
 subaddress's label (`"Primary account"` for account 0 of a new wallet, `""` when none was set).
 `subaddressCount` is at least 1. `balance` and `unlockedBalance` sum over its subaddresses by asset.
 `subaddresses` is present only when requested with `includeSubaddresses`. Guide:
-[Accounts and subaddresses](../04-assets-and-balances.md#accounts-and-subaddresses).
+[Accounts and subaddresses](../05-assets-and-balances.md#accounts-and-subaddresses).
 
 ### `ZephyrSubaddress`
 
@@ -264,7 +264,7 @@ interface ZephyrSubaddress {
 One subaddress. `label` is `""` when none was set; `isUsed` tells whether the wallet has received any
 output there; `numUnspentOutputs` counts its unspent outputs as the core counts them. Labels are
 untrusted display text. Guide:
-[Labels are untrusted display text](../04-assets-and-balances.md#labels-are-untrusted-display-text).
+[Labels are untrusted display text](../05-assets-and-balances.md#labels-are-untrusted-display-text).
 
 ### `ZephyrAddressIndex`
 
@@ -314,7 +314,7 @@ interface ZephyrWalletTx {
 One transaction of the wallet with all of its transfers. `height` and `timestamp` (seconds) are absent
 while unconfirmed; `fee` is absent when the core reports none; `feeAsset` is the outgoing transfer's
 asset and absent without one; `conversion` is present when the outgoing asset differs from its
-destinations' asset. Guide: [Transactions](../05-history.md#transactions).
+destinations' asset. Guide: [Transactions](../06-history.md#transactions).
 
 ### `ZephyrWalletTransfer`
 
@@ -335,7 +335,7 @@ interface ZephyrWalletTransfer {
 
 An incoming transfer to one subaddress (`subaddressIndex`) or the outgoing transfer of a transaction
 (`subaddressIndices` spent from, `destinations` as stored). `asset` is absent when the core reports
-none. Guide: [Transfers](../05-history.md#transfers).
+none. Guide: [Transfers](../06-history.md#transfers).
 
 ### `ZephyrTransferDestination`
 
@@ -349,7 +349,7 @@ interface ZephyrTransferDestination {
 
 One destination of an outgoing transfer as the sending wallet stored it. `address` is absent when the
 stored text does not have the form of an address, and is untrusted text otherwise; `amount` is in the
-destination asset. Guide: [Transfers](../05-history.md#transfers).
+destination asset. Guide: [Transfers](../06-history.md#transfers).
 
 ### `ZephyrTxConversion`
 
@@ -364,7 +364,7 @@ interface ZephyrTxConversion {
 
 The conversion of a transaction: `sourceAmount` is the outgoing transfer's amount as the core computes
 it, `destinationAmount` the sum of the destinations' amounts in the destination asset. Guide:
-[Conversions in the history](../05-history.md#conversions-in-the-history).
+[Conversions in the history](../06-history.md#conversions-in-the-history).
 
 ### `ZephyrHistoryQuery`
 
@@ -382,7 +382,7 @@ interface ZephyrHistoryQuery {
 ```
 
 The query of `getTxs` and `getTransfers`; every field is optional and unknown fields reject. Guide:
-[The query](../05-history.md#the-query).
+[The query](../06-history.md#the-query).
 
 ### `ZephyrTransferDirection`
 
@@ -400,7 +400,7 @@ type ZephyrHistoryStatus = "confirmed" | "pool" | "failed";
 
 The `status` filter of a query: confirmed transactions; own outgoing transactions in the pool and the
 incoming ones the last `refreshPool` saw; failed transactions. Guide:
-[Own pending and failed transactions](../05-history.md#own-pending-and-failed-transactions).
+[Own pending and failed transactions](../06-history.md#own-pending-and-failed-transactions).
 
 ## The reserve
 
@@ -428,7 +428,7 @@ The result of `getReserveInfo`, with the field names of the Java port's `ZephyrR
 atomic units, exactly (the core computes them as unsigned 128-bit integers, so they can exceed 2^64); the two
 ratios as the shortest decimal text, without exponent, that reads back as exactly the core's `double` (Java:
 `BigDecimal`); `hfVersion` the daemon's hard fork version. `assetsMa` and `equityMa` are 0 on the current hard
-fork. Units and warnings: [The reserve and the pricing record](../07-conversions.md#the-reserve-and-the-pricing-record).
+fork. Units and warnings: [The reserve and the pricing record](../08-conversions.md#the-reserve-and-the-pricing-record).
 
 ## Listeners
 
@@ -450,7 +450,7 @@ The listener of `addListener` and `sync(listener)`, with the callbacks of the Ja
 always `"Synchronizing"`), `onBalancesChanged` once per asset whose balance changed (the wallet's totals), the output callbacks
 for an output in the pool, at confirmation and at unlock (repeated: count each transaction once), `onSyncError` for a failed
 background iteration or a notification the library could not read. Callbacks never run inside the core; whatever they throw or
-reject is dropped unread. Guide: [Syncing and listeners](../03-connecting-to-a-daemon.md#synchronizing).
+reject is dropped unread. Guide: [The callbacks](../04-syncing-and-listeners.md#the-callbacks).
 
 ### `ZephyrWalletOutput`
 
@@ -478,7 +478,7 @@ type ZephyrTxPriority = "default" | "unimportant" | "normal" | "elevated";
 ```
 
 The fee priority: the core's own choice, then the first, second and third tier of the daemon's fee
-estimate. Guide: [Fees and priorities](../06-sending.md#fees-and-priorities).
+estimate. Guide: [Fees and priorities](../07-sending.md#fees-and-priorities).
 
 ### `ZephyrTransferDestinationInput`
 
@@ -506,7 +506,7 @@ interface ZephyrTransferConfig {
 
 The configuration of `buildTransfer` and `prepareTransfer`: a V2 `asset`, 1 to 15 `destinations`, the
 account to spend from, optionally the subaddresses to spend from and the priority. Guide:
-[The configuration](../06-sending.md#the-configuration).
+[The configuration](../07-sending.md#the-configuration).
 
 ### `ZephyrBuiltTx`
 
@@ -534,7 +534,7 @@ interface ZephyrBuiltTx {
 
 One built transaction as the core built it. `destinations` is present only when the build needed one
 transaction; `totalDebited` is `amount` plus `fee`, in the source asset; `outputs` includes the change.
-Guide: [Building to inspect](../06-sending.md#building-to-inspect).
+Guide: [Building to inspect](../07-sending.md#building-to-inspect).
 
 ### `ZephyrTransferBuild`
 
@@ -573,7 +573,7 @@ interface ZephyrConversionConfig {
 ```
 
 The configuration of `buildConversion` and `prepareConversion`: one of the six pairs and exactly one
-destination. Guide: [The configuration](../07-conversions.md#the-configuration).
+destination. Guide: [The configuration](../08-conversions.md#the-configuration).
 
 ### `ZephyrConversionBuild`
 
@@ -605,7 +605,7 @@ The one transaction of a conversion: `amountBurnt` in the source asset and `amou
 destination asset, as the transaction states them; `totalDebited` is `amountBurnt` plus `fee`;
 `outputs` is four; `pricingRecordHeight` names the block whose pricing record sets the rate. The
 library computes no rate. Guide:
-[What a conversion build describes](../07-conversions.md#what-a-conversion-build-describes).
+[What a conversion build describes](../08-conversions.md#what-a-conversion-build-describes).
 
 ### `ZephyrPreparedTransfer`
 
@@ -617,7 +617,7 @@ interface ZephyrPreparedTransfer {
 ```
 
 The result of `prepareTransfer`: the token of the kept build (32 lowercase hexadecimal characters, not
-a secret) and its description. Guide: [Preparing and relaying](../06-sending.md#preparing-and-relaying).
+a secret) and its description. Guide: [Preparing and relaying](../07-sending.md#preparing-and-relaying).
 
 ### `ZephyrPreparedConversion`
 
@@ -628,7 +628,7 @@ interface ZephyrPreparedConversion {
 }
 ```
 
-The result of `prepareConversion`. Guide: [Relaying a conversion](../07-conversions.md#relaying-a-conversion).
+The result of `prepareConversion`. Guide: [Relaying a conversion](../08-conversions.md#relaying-a-conversion).
 
 ### `ZephyrRelayOutcome`
 
@@ -666,4 +666,4 @@ interface ZephyrRelayResult {
 ```
 
 The result of `relayPrepared`: one entry per kept transaction in the build's order; `complete` when
-every one was accepted. Guide: [Outcomes of a relay](../06-sending.md#outcomes-of-a-relay).
+every one was accepted. Guide: [Outcomes of a relay](../07-sending.md#outcomes-of-a-relay).
