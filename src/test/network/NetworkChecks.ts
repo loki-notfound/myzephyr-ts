@@ -5,8 +5,10 @@
  *
  * Load rules are enforced here as well as in the runners: every sync starts at most
  * 2,000 blocks below the daemon height (fresh restores use exactly height - 2,000, reopened seed
- * wallets start at their own height), syncs run one at a time, no background sync is started, and
- * every sync call is recorded with its target kind so the validator can count the syncs that
+ * wallets start at their own height), except the syncs of N30 on a copy of the saved seed wallet as it
+ * was saved (at most SEED_BEHIND_MAX blocks below, as the stage's presync); syncs run one at a time; the only
+ * background synchronization is N31's, for a bounded time at a period of 1 s (its iterations are counted
+ * separately); every sync call is recorded with its target kind so the validator can count the syncs that
  * reached a configured daemon.
  */
 import * as F from "../../main/ts/index";
@@ -18,12 +20,18 @@ import { parseDaemonAddress } from "../../main/ts/common/ZephyrDaemonAddress";
 import { CheckFailure, CheckResult, codeOf, diagnosticOf, expect, expectCode, present, randomPassword, withDeadline } from "../lifecycle/LifecycleChecks";
 import { GUARD_LEDGER, channelOf, combinedGuard, installGuardLedger, readGuardInto } from "../lifecycle/testSupport";
 import { plainDecimal } from "../../main/ts/common/ZephyrReserveInternal";
+import { busyWait, recordingListener, recordsOf } from "../lifecycle/NotificationChecks";
 
 /** Thrown by a check whose optional configuration is absent: the check is reported as not run. */
 export class CheckNotRun extends Error {}
 
 /** Sync budget of one run: syncs that reach a configured daemon. */
-export const MAX_REAL_SYNCS = 12;
+export const MAX_REAL_SYNCS = 14;
+/** N30: blocks a copy of the saved seed wallet may be below the daemon (the stage's presync bound). */
+export const SEED_BEHIND_MAX = 10000;
+/** N31: background synchronization at this period for this time (iterations bounded by the ratio plus one). */
+export const BACKGROUND_PERIOD_MS = 1000;
+export const BACKGROUND_RUN_MS = 20000;
 /** Blocks below the daemon height at which a fresh restore starts (the upper bound of a sync). */
 export const FRESH_SYNC_BLOCKS = 2000;
 
@@ -90,6 +98,8 @@ export interface NetworkOptions {
   readonly checks: readonly string[];
   /** seed wallet saved by an earlier run (reopened wallets sync a few blocks only) */
   readonly seed?: SeedWallet;
+  /** the saved seed wallet as it was saved, before the stage's presync (N30: an incremental sync of the blocks since) */
+  readonly seedBehind?: SeedWallet;
   /** where a fresh measured restore stores its wallet for later runs */
   readonly saveSeed?: (seed: SeedWallet) => Promise<void>;
   /** the funded history check's inputs (N20, N22); absent: they are not run */
@@ -826,7 +836,8 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
 
   // ------------------------------------------------------------------ N19: history sends no request
   /** Requests seen by the loopback forwarder (all listeners) and by the SDK's request allowlist of the wallet's context. */
-  async function requestCounts(w: F.ZephyrWallet): Promise<{ forwarder: number; upstream: number; allowlist: number }> {
+  /** The forwarder's own counts: requests received (forwarded or refused) and sent upstream, and the count per route. */
+  async function forwarderCounts(): Promise<{ forwarder: number; upstream: number; routes: Record<string, number> }> {
     const root = t.root as string;
     type Stats = { routes: Record<string, { count: number }>; denied: Record<string, number>; upstreamRequests: number };
     // the page reads its own origin with fetch; Node.js (whose monitor blocks fetch) uses a plain loopback request
@@ -835,7 +846,13 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
       : await new Promise<Stats>((resolve, reject) => {
         http.get(root + "/__stats", (res) => { const chunks: Buffer[] = []; res.on("data", (c: Buffer) => chunks.push(c)); res.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Stats); } catch (e) { reject(e); } }); }).on("error", reject);
       });
-    const forwarder = Object.values(st.routes).reduce((n, r) => n + r.count, 0) + Object.values(st.denied).reduce((n, c) => n + c, 0);
+    const routes: Record<string, number> = {};
+    for (const [k, r] of Object.entries(st.routes)) routes[k] = r.count;
+    return { forwarder: Object.values(st.routes).reduce((n, r) => n + r.count, 0) + Object.values(st.denied).reduce((n, c) => n + c, 0), upstream: st.upstreamRequests, routes };
+  }
+
+  async function requestCounts(w: F.ZephyrWallet): Promise<{ forwarder: number; upstream: number; allowlist: number }> {
+    const { forwarder, upstream } = await forwarderCounts();
     let allowlist: number;
     if (proxy) {
       const ledger = { reports: 0, unreported: 0, blockedRequests: 0, allowedRequests: 0, blockedSummary: {}, allowedSummary: {} };
@@ -844,7 +861,7 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     } else {
       allowlist = HttpClient.ALLOWED_REQUESTS + HttpClient.BLOCKED_REQUESTS;
     }
-    return { forwarder, upstream: st.upstreamRequests, allowlist };
+    return { forwarder, upstream, allowlist };
   }
 
   await check("N19", "History reads what the last sync stored: getTxs, getTransfers and getTx send no request (loopback forwarder and request allowlist count none)", async (notes) => {
@@ -1004,6 +1021,155 @@ export async function runNetworkChecks(opts: NetworkOptions): Promise<NetworkRep
     } finally {
       await w.close();
     }
+  });
+
+  // ------------------------------------------------------------------ N30, N31: progress, listeners, background synchronization
+  /** The progress records of one listener checked against the sync: one progress call and one new block per fetched block. */
+  function checkProgress(records: readonly string[], blocks: number, h0: number, dh: number, what: string): { heights: number; first: number; last: number } {
+    const progress = records.filter((e) => e.startsWith("progress:")).map((e) => e.split(":"));
+    const newBlocks = records.filter((e) => e.startsWith("block:")).map((e) => Number(e.split(":")[1]));
+    expect(progress.length === blocks && newBlocks.length === blocks, what + ": one progress call and one new block per fetched block (" + progress.length + ", " + newBlocks.length + " for " + blocks + ")");
+    let lastPercent = 0;
+    for (let i = 0; i < progress.length; i++) {
+      const [, height, start, end, percent, message] = progress[i];
+      expect(Number(height) === h0 + i && newBlocks[i] === h0 + i, what + ": heights consecutive from the wallet's height (" + height + " at " + i + ")");
+      expect(Number(start) === h0 && Number(end) >= dh && Number(end) > Number(height), what + ": start at the wallet's height, end at the daemon's height or above");
+      expect(Number(percent) > lastPercent && Number(percent) <= 1 && message === "Synchronizing", what + ": percentDone grows (" + percent + ")");
+      lastPercent = Number(percent);
+    }
+    expect(blocks === 0 || lastPercent === 1, what + ": percentDone reaches 1");
+    return { heights: progress.length, first: h0, last: h0 + progress.length - 1 };
+  }
+
+  await check("N30", "Progress of an incremental sync on a copy of the saved seed wallet (behind the daemon by the blocks since it was saved), through the forwarder: one onSyncProgress and one onNewBlock per fetched block with consecutive heights from the wallet's height, percentDone growing to exactly 1, the fixed message; the added listener and the per-sync listener get the same sequence; Node.js direct: a sync without a listener against one with (the overhead); proxied: the worker posts two messages per block, and a listener that blocks its context for about as long as the scan takes does not hold the scan", async (notes) => {
+    const behind = opts.seedBehind;
+    if (behind === undefined) throw new CheckNotRun("no copy of the saved seed wallet before the presync (--seed-behind)");
+    if (t.base === undefined) throw new CheckFailure("no target");
+    const openBehind = () => F.openWalletData({ networkType: 0, password: behind.password, keysData: new Uint8Array(behind.keys), cacheData: new Uint8Array(behind.cache), server: t.base, proxyToWorker: proxy });
+    // CPU time of this process (every thread, the wallet's worker included) during a sync: the work of the core, the bridge and the
+    // listeners, without the time spent waiting for the daemon
+    const cpu = (): number | undefined => typeof process !== "undefined" && typeof process.cpuUsage === "function" ? (() => { const u = process.cpuUsage(); return Math.round((u.user + u.system) / 1000); })() : undefined;
+    const timed = async (w: F.ZephyrWallet, listener: F.ZephyrWalletListener | undefined, label: string) => {
+      const h0 = await w.getHeight();
+      const dh = await w.getDaemonHeight();
+      expect(dh - h0 > 0 && dh - h0 <= SEED_BEHIND_MAX, label + ": the copy is " + (dh - h0) + " blocks behind (1 to " + SEED_BEHIND_MAX + ")");
+      if (report.syncs.filter((x) => x.kind === "real").length >= MAX_REAL_SYNCS) throw new CheckFailure("sync budget of the run exhausted");
+      const t0 = Date.now();
+      const c0 = cpu();
+      try {
+        const r = await (listener === undefined ? w.sync() : w.sync(undefined, listener));
+        const ms = Date.now() - t0;
+        const c1 = cpu();
+        report.syncs.push({ check: "N30", target: label, kind: "real", outcome: "ok", numBlocksFetched: r.numBlocksFetched, startBelowDaemonHeight: dh - h0, firstSync: false, ms });
+        return { h0, dh, ms, blocks: r.numBlocksFetched, cpuMs: c0 === undefined || c1 === undefined ? undefined : c1 - c0 };
+      } catch (err) {
+        report.syncs.push({ check: "N30", target: label, kind: "real", outcome: codeOf(err) + diagnosticOf(err), startBelowDaemonHeight: dh - h0, firstSync: false, ms: Date.now() - t0 });
+        throw err;
+      }
+    };
+    const m: Record<string, unknown> = {};
+    if (!proxy) {
+      const a = await openBehind();
+      let plain: { h0: number; dh: number; ms: number; blocks: number; cpuMs: number | undefined };
+      try { plain = await timed(a, undefined, "behind copy without a listener"); } finally { await a.close(); }
+      const b = await openBehind();
+      const seen: string[] = [];
+      let listened: { h0: number; dh: number; ms: number; blocks: number; cpuMs: number | undefined };
+      try {
+        await b.addListener(recordingListener("L", seen));
+        listened = await timed(b, recordingListener("P", seen), "behind copy with a listener");
+      } finally { await b.close(); }
+      const range = checkProgress(recordsOf(seen, "L"), listened.blocks, listened.h0, listened.dh, "added listener");
+      expect(recordsOf(seen, "P").join("|") === recordsOf(seen, "L").join("|"), "the per-sync listener got the same sequence");
+      expect(recordsOf(seen, "L").filter((e) => e.startsWith("error:")).length === 0, "no onSyncError");
+      m.withoutListener = { blocks: plain.blocks, ms: plain.ms, cpuMs: plain.cpuMs };
+      m.withListener = { blocks: listened.blocks, ms: listened.ms, cpuMs: listened.cpuMs, notifications: recordsOf(seen, "L").length, heights: range.first + ".." + range.last };
+      m.overheadPercent = plain.ms > 0 ? Math.round(100 * (listened.ms - plain.ms) / plain.ms) : undefined;
+      m.cpuOverheadPercent = plain.cpuMs !== undefined && listened.cpuMs !== undefined && plain.cpuMs > 0 ? Math.round(100 * (listened.cpuMs - plain.cpuMs) / plain.cpuMs) : undefined;
+      notes.push("without a listener " + plain.blocks + " blocks in " + plain.ms + " ms (CPU " + plain.cpuMs + " ms); with an added and a per-sync listener " + listened.blocks + " blocks in " + listened.ms + " ms (CPU " + listened.cpuMs + " ms; " + recordsOf(seen, "L").length + " notifications each, heights " + range.first + ".." + range.last + ")");
+    } else {
+      const b = await openBehind();
+      const seen: string[] = [];
+      let messages = 0;
+      let listened: { h0: number; dh: number; ms: number; blocks: number; cpuMs: number | undefined };
+      try {
+        await b.addListener(recordingListener("L", seen));
+        await b.addListener({ onSyncProgress: () => { messages++; }, onNewBlock: () => { messages++; }, onBalancesChanged: () => { messages++; }, onOutputReceived: () => { messages++; }, onOutputSpent: () => { messages++; }, onSyncError: () => { messages++; } });
+        listened = await timed(b, recordingListener("P", seen), "behind copy with a listener (worker)");
+      } finally { await b.close(); }
+      const range = checkProgress(recordsOf(seen, "L"), listened.blocks, listened.h0, listened.dh, "added listener");
+      expect(recordsOf(seen, "P").join("|") === recordsOf(seen, "L").join("|"), "the per-sync listener got the same sequence");
+      const perBlock = listened.blocks > 0 ? messages / listened.blocks : 0;
+      expect(listened.blocks === 0 || perBlock === 2, "two notification messages per block without funds: " + perBlock);
+      // a listener that blocks its context for about the scan's own time
+      const c = await openBehind();
+      const per = Math.max(1, Math.round(listened.ms / Math.max(1, 2 * listened.blocks)));
+      let blocked = 0;
+      let slow: { h0: number; dh: number; ms: number; blocks: number; cpuMs: number | undefined };
+      try {
+        await c.addListener({ onSyncProgress: () => { const s0 = Date.now(); busyWait(per); blocked += Date.now() - s0; }, onNewBlock: () => { const s0 = Date.now(); busyWait(per); blocked += Date.now() - s0; } });
+        slow = await timed(c, undefined, "behind copy with a slow listener (worker)");
+      } finally { await c.close(); }
+      expect(slow.ms < listened.ms + 0.75 * blocked + 3000, "the scan was not held by the slow listener: " + slow.ms + " ms < " + listened.ms + " + 0.75 x " + blocked + " ms");
+      m.withListener = { blocks: listened.blocks, ms: listened.ms, cpuMs: listened.cpuMs, notifications: recordsOf(seen, "L").length, messagesPerBlock: perBlock, heights: range.first + ".." + range.last };
+      m.slowListener = { blocks: slow.blocks, ms: slow.ms, cpuMs: slow.cpuMs, blockedMs: blocked, perCallbackMs: per };
+      notes.push("worker: " + listened.blocks + " blocks with a listener in " + listened.ms + " ms, " + perBlock + " messages per block; a listener blocking " + per + " ms per callback (" + blocked + " ms in total): " + slow.blocks + " blocks in " + slow.ms + " ms");
+    }
+    report.measurements.N30 = m;
+  });
+
+  await check("N31", "Background synchronization through the forwarder, a period of 1 s for 20 s on the presynced seed wallet: the wallet's height stays within one period of the daemon's, nothing fails; the requests per iteration are counted; after stopSyncing resolved no request follows; close during an iteration (the slow forwarder mount) waits for it, then nothing follows and no notification is delivered after close", async (notes) => {
+    if (t.root === undefined || t.slow === undefined) throw new CheckFailure("no target");
+    const m: Record<string, unknown> = {};
+    const w = await openSeed(t.root);
+    const seen: string[] = [];
+    try {
+      await w.addListener(recordingListener("L", seen));
+      const c0 = await requestCounts(w);
+      const r0 = (await forwarderCounts()).routes;
+      const samples: Array<{ wallet: number; daemon: number; at: number }> = [];
+      const t0 = Date.now();
+      await w.startSyncing(BACKGROUND_PERIOD_MS);
+      while (Date.now() - t0 < BACKGROUND_RUN_MS) {
+        await sleep(2000);
+        samples.push({ wallet: await w.getHeight(), daemon: await w.getDaemonHeight(), at: Date.now() - t0 });
+      }
+      await w.stopSyncing();
+      const c1 = await requestCounts(w);
+      const r1 = (await forwarderCounts()).routes;
+      const routes: Record<string, number> = {};
+      for (const k of Object.keys(r1)) if (r1[k] !== (r0[k] ?? 0)) routes[k] = r1[k] - (r0[k] ?? 0);
+      await sleep(3 * BACKGROUND_PERIOD_MS + 500);
+      const c2 = await requestCounts(w);
+      for (let i = 1; i < samples.length; i++) expect(samples[i].wallet >= samples[i - 1].daemon, "the wallet's height at " + samples[i].at + " ms reached the daemon's of the sample before (" + samples[i].wallet + " >= " + samples[i - 1].daemon + ")");
+      expect(recordsOf(seen, "L").filter((e) => e.startsWith("error:")).length === 0, "no failed iteration");
+      expect(c2.forwarder === c1.forwarder && c2.upstream === c1.upstream && c2.allowlist === c1.allowlist, "no request after stopSyncing resolved (" + (c2.forwarder - c1.forwarder) + ")");
+      m.background = { periodMs: BACKGROUND_PERIOD_MS, runMs: BACKGROUND_RUN_MS, samples: samples.length, requests: c1.forwarder - c0.forwarder, upstreamRequests: c1.upstream - c0.upstream, routes,
+        newBlocks: recordsOf(seen, "L").filter((e) => e.startsWith("block:")).length, lastHeights: samples[samples.length - 1] };
+      notes.push("background " + BACKGROUND_RUN_MS + " ms at " + BACKGROUND_PERIOD_MS + " ms: " + (c1.forwarder - c0.forwarder) + " requests (" + samples.length + " height samples), new blocks " + recordsOf(seen, "L").filter((e) => e.startsWith("block:")).length + "; after stopSyncing 0 requests in " + (3 * BACKGROUND_PERIOD_MS + 500) + " ms");
+    } finally {
+      await w.close();
+    }
+    // close during an iteration: every binary answer of the slow mount is delayed
+    const s = await openSeed(t.slow);
+    const sseen: string[] = [];
+    await s.addListener(recordingListener("L", sseen));
+    const before = await requestCounts(s);
+    await s.startSyncing(BACKGROUND_PERIOD_MS);
+    await sleep(400); // the first iteration runs: its binary request waits at the slow mount
+    const atClose = sseen.length;
+    const t1 = Date.now();
+    await s.close();
+    const closeMs = Date.now() - t1;
+    const f1 = await forwarderCounts();
+    await sleep(3 * BACKGROUND_PERIOD_MS + 500);
+    const f2 = await forwarderCounts();
+    expect(sseen.length === atClose, "no notification after close was called");
+    expect(closeMs >= 500, "close waited for the running iteration (" + closeMs + " ms)");
+    expect(f2.forwarder === f1.forwarder && f2.upstream === f1.upstream, "no request after close resolved (" + (f2.forwarder - f1.forwarder) + ")");
+    m.closeDuringIteration = { closeMs, requestsOfTheIteration: f1.forwarder - before.forwarder };
+    notes.push("close during an iteration at the slow mount resolved after " + closeMs + " ms; no notification after close");
+    report.measurements.N31 = m;
   });
 
   // ------------------------------------------------------------------ N20: funded history (inputs from outside the public tree)

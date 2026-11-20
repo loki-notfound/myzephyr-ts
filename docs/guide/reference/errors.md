@@ -130,11 +130,11 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `WORKER_FUNCTION` | `UNSUPPORTED_CAPABILITY` | a worker function outside the supported set |
 | `WALLET_KIND` | `UNSUPPORTED_CAPABILITY` | a worker function not available for the wallet's kind |
 | `NATIVE_EXPORT` | `UNSUPPORTED_CAPABILITY` | a native function that is not built into the module |
-| `LISTENER` | `UNSUPPORTED_CAPABILITY` | a listener |
-| `LISTENERS` | `UNSUPPORTED_CAPABILITY` | `addListener` |
+| `LISTENER` | `INVALID_CONFIG`, `UNSUPPORTED_CAPABILITY` | `INVALID_CONFIG`: a listener argument that is not an object or has a callback that is not a function (`addListener`, `sync`); `UNSUPPORTED_CAPABILITY`: an inherited native listener handle (never sent by the library) |
+| `LISTENERS` | `UNSUPPORTED_CAPABILITY` | not reported since listeners are supported; the identifier stays valid |
 | `SAVE_ON_CLOSE` | `UNSUPPORTED_CAPABILITY` | saving on close |
 | `BALANCE` | `UNSUPPORTED_CAPABILITY` | the asset-less `getBalance(accountIdx, subaddressIdx)` |
-| `SYNC` | `UNSUPPORTED_CAPABILITY` | background synchronization, or `sync` with more than one argument |
+| `SYNC` | `UNSUPPORTED_CAPABILITY` | `sync` with more than two arguments |
 | `TRANSACTIONS` | `UNSUPPORTED_CAPABILITY` | the inherited transaction creation (`createTxs`) |
 | `DAEMON_SETTINGS` | `UNSUPPORTED_CAPABILITY` | rescans and key image import |
 | `RESERVE_PROOF` | `UNSUPPORTED_CAPABILITY` | reserve proofs |
@@ -155,6 +155,8 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `FIELD_TYPE` | `INVALID_CONFIG` | a field or argument of the wrong type, or too many arguments |
 | `BLOCK_HEIGHT` | `INVALID_CONFIG` | a block height that is not a safe integer from 0 (`ZephyrDaemonRpc.getBlockHeaderByHeight`) |
 | `BLOCK_HASH` | `INVALID_CONFIG` | a block hash that is not 64 lowercase hexadecimal characters (`ZephyrDaemonRpc.getBlockHeaderByHash`) |
+| `LISTENER_NOT_REGISTERED` | `INVALID_CONFIG` | `removeListener` with a listener that is not added |
+| `SYNC_PERIOD` | `INVALID_CONFIG` | a `startSyncing` period that is not an integer from 1,000 to 86,400,000 milliseconds |
 | `NETWORK_TYPE` | `INVALID_CONFIG` | a missing or unknown network type |
 | `CREATE_MODE` | `INVALID_CONFIG` | recovery fields that do not fit the construction function |
 | `SEED_AND_KEYS` | `INVALID_CONFIG` | a seed together with keys |

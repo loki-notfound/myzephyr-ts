@@ -82,6 +82,18 @@ export function isNetworkTypeNumber(value: unknown): value is 0 | 1 | 2 {
   return value === 0 || value === 1 || value === 2;
 }
 
+/**
+ * Period of background synchronization (startSyncing) in milliseconds: the Java port's default of 10 s, and the
+ * accepted range, from 1 s (a shorter period would ask the daemon more often than blocks arrive by far) to one day.
+ */
+export const SYNC_PERIOD_DEFAULT_MS = 10000;
+export const SYNC_PERIOD_MIN_MS = 1000;
+export const SYNC_PERIOD_MAX_MS = 86400000;
+
+export function isSyncPeriod(value: unknown): value is number {
+  return isIntegerIn(value, SYNC_PERIOD_MIN_MS, SYNC_PERIOD_MAX_MS);
+}
+
 /** Bridge log level: int parameter forwarded to epee mlog_set_log_level. */
 export function isLogLevel(value: unknown): value is number {
   return isIntegerIn(value, 0, INT32_MAX);
@@ -161,6 +173,8 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   "change_wallet_password", "close",
   // read-only daemon access
   "set_daemon_connection", "is_connected_to_daemon", "get_daemon_height", "set_restore_height_from_daemon", "get_height", "sync",
+  // the core's wallet notifications (listeners, progress of a sync, background synchronization)
+  "set_notifications",
   "get_balance_wallet", "get_unlocked_balance_wallet", "get_balance_account", "get_unlocked_balance_account",
   "get_balance_asset", "get_unlocked_balance_asset", "is_daemon_synced",
   // the reserve and the circulating supply
@@ -181,7 +195,7 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
  * inherited binding adapted to the fixed core.
  */
 export const SDK_ADDED_NATIVE_EXPORTS: readonly string[] = ["get_balance_asset", "get_unlocked_balance_asset", "set_restore_height_from_daemon", "refresh_pool", "build_txs", "build_conversion",
-  "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared", "get_reserve_info", "get_circulating_supply"];
+  "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared", "get_reserve_info", "get_circulating_supply", "set_notifications"];
 
 /**
  * Inherited monero-ts bridge exports at the base commit that the SDK does not build. If an
@@ -213,7 +227,8 @@ export interface LifecycleArgSpec {
   readonly kind: "uint32" | "networkType" | "logLevel" | "string" | "optionalString" | "address" | "password"
     | "keysBytes" | "optionalBytes" | "emptyPath" | "absent" | "falseFlag" | "createConfig" | "keysConfig"
     | "boolean" | "daemonUri" | "height" | "assetType" | "label" | "subaddressIndices" | "historyStatus" | "historyHeight" | "txHashes"
-    | "txAddresses" | "txAmounts" | "txSubaddressIndices" | "txPriority" | "txAddress" | "conversionAmount" | "relayToken";
+    | "txAddresses" | "txAmounts" | "txSubaddressIndices" | "txPriority" | "txAddress" | "conversionAmount" | "relayToken"
+    | "syncTag" | "syncPeriod";
   readonly optional?: boolean;
 }
 
@@ -266,7 +281,16 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   getReserveInfo: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_reserve_info"], errorContext: "daemon" },
   getCirculatingSupply: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_circulating_supply"], errorContext: "daemon" },
   getHeight: { scope: "wallet", kinds: FULL, args: [], nativeExports: ["get_height"], errorContext: "other" },
-  sync: { scope: "wallet", kinds: FULL, args: [{ kind: "height", optional: true }], nativeExports: ["sync"], errorContext: "sync" },
+  // one sync; the optional tag (a worker id) names a per-sync listener of the owner: the worker then turns the core's
+  // notifications on for this sync and marks the notifications it posts with the tag
+  sync: { scope: "wallet", kinds: FULL, args: [{ kind: "height", optional: true }, { kind: "syncTag", optional: true }], nativeExports: ["sync", "set_notifications"], errorContext: "sync" },
+  // the owner has listeners (true) or none (false): the worker turns the core's notifications on or off behind the work
+  // already queued and posts every notification to the owner (common/ZephyrNotificationsInternal.ts)
+  setNotifications: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }], nativeExports: ["set_notifications"], errorContext: "sync" },
+  // background synchronization in the wallet's worker: a sync per period through the wallet's one queue (the period in
+  // milliseconds, checked), and its stop, which replies once the running iteration has settled
+  startSyncing: { scope: "wallet", kinds: FULL, args: [{ kind: "syncPeriod" }], nativeExports: ["sync", "is_connected_to_daemon"], errorContext: "sync" },
+  stopSyncing: { scope: "wallet", kinds: FULL, args: [], nativeExports: [], errorContext: "sync" },
   getBalances: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }], nativeExports: ["get_balance_wallet", "get_unlocked_balance_wallet"], errorContext: "other" },
   getAccountBalances: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }, { kind: "uint32" }], nativeExports: ["get_balance_account", "get_unlocked_balance_account"], errorContext: "other" },
   getAssetBalance: { scope: "wallet", kinds: FULL, args: [{ kind: "boolean" }, { kind: "assetType" }, { kind: "uint32" }, { kind: "uint32", optional: true }], nativeExports: ["get_balance_asset", "get_unlocked_balance_asset"], errorContext: "other" },
@@ -355,6 +379,8 @@ export function validateWorkerArgs(method: LifecycleWorkerMethod, args: readonly
       case "txAddress": if (typeof value !== "string" || !/^[1-9A-HJ-NP-Za-km-z]{90,140}$/.test(value)) fail("INVALID_ADDRESS", "ADDRESS_TYPE"); break;
       case "conversionAmount": if (typeof value !== "string" || !/^[1-9][0-9]{0,19}$/.test(value)) fail("INVALID_CONFIG", "AMOUNT_RANGE"); break;
       case "relayToken": if (typeof value !== "string" || !/^[0-9a-f]{32}$/.test(value)) fail("INVALID_CONFIG", "RELAY_TOKEN"); break;
+      case "syncTag": if (!isWorkerId(value)) fail("MALFORMED_MESSAGE", "ARGUMENT_TYPE"); break;
+      case "syncPeriod": if (!isSyncPeriod(value)) fail("INVALID_CONFIG", "SYNC_PERIOD"); break;
       case "createConfig":
       case "keysConfig": if (value === null || typeof value !== "object" || Array.isArray(value)) fail("INVALID_CONFIG", "CONFIG_TYPE"); break;
     }

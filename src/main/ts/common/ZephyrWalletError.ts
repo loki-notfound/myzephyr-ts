@@ -137,7 +137,12 @@ const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // block (it then computes nothing); ZephyrDaemonRpc: UNSUPPORTED_CAPABILITY/DAEMON_RPC_METHOD for every inherited
   // method that is not supported (before any request), INVALID_CONFIG/BLOCK_HEIGHT and BLOCK_HASH for the arguments
   // of the block header calls
-  "PRICING_RECORD_UNAVAILABLE", "DAEMON_RPC_METHOD", "BLOCK_HEIGHT", "BLOCK_HASH"
+  "PRICING_RECORD_UNAVAILABLE", "DAEMON_RPC_METHOD", "BLOCK_HEIGHT", "BLOCK_HASH",
+  // listeners and background synchronization of full wallets (keys-only wallets: UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON):
+  // INVALID_CONFIG/LISTENER for a listener that is not an object or whose callback is not a function,
+  // INVALID_CONFIG/LISTENER_NOT_REGISTERED for removeListener with a listener that is not registered,
+  // INVALID_CONFIG/SYNC_PERIOD for a startSyncing period outside 1,000 to 86,400,000 milliseconds
+  "LISTENER_NOT_REGISTERED", "SYNC_PERIOD"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];

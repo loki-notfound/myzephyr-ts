@@ -37,7 +37,8 @@ import ZephyrWalletConfig from "./model/ZephyrWalletConfig";
 import ZephyrWalletError from "../common/ZephyrWalletError";
 import * as WalletErrors from "../common/ZephyrWalletErrorMapping";
 import { ZephyrBridgeErrorIdentifier, ZephyrBridgePasswordState, bridgePasswordErrorOf } from "../common/ZephyrWalletErrorMapping";
-import { MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL, checkLabel, checkSubaddressIndices, isAddressIndex, isRestoreHeight, parseRestoreHeightText } from "../common/ZephyrLifecycleContract";
+import { MAX_ACCOUNTS_PER_CALL, MAX_SUBADDRESSES_PER_CALL, checkLabel, checkSubaddressIndices, isAddressIndex, isRestoreHeight, isSyncPeriod, isWorkerId, parseRestoreHeightText } from "../common/ZephyrLifecycleContract";
+import { NOTIFICATION_CALLBACK_ID, ZephyrNotification, ZephyrSyncLoop, fromNotificationMessage, parseBridgeNotification } from "../common/ZephyrNotificationsInternal";
 import HttpClient from "../common/HttpClient";
 import { ZephyrDaemonRoute, parseDaemonAddress } from "../common/ZephyrDaemonAddress";
 import { ZephyrAccountBalances, ZephyrAssetBalances } from "../common/ZephyrBalances";
@@ -90,6 +91,17 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   protected syncCalls = new Set<Promise<any>>();
   /** Daemon route of a direct wallet, registered in this context's request allowlist */
   protected daemonRoute: ZephyrDaemonRoute | undefined = undefined;
+  /** Where the notifications of a direct wallet go: the facade's queue, or in a worker the message to the owner */
+  protected notificationSink: ((notification: ZephyrNotification, tag: string | undefined) => void) | undefined = undefined;
+  /** The core's notifications wanted for the facade's added listeners, and whether the bridge listener is registered */
+  protected notificationsWanted = false;
+  protected notificationsOn = false;
+  /** The tag of the per-sync listener of the sync that runs now (set inside its queued task only) */
+  protected syncTag: string | undefined = undefined;
+  /** Background synchronization (startSyncing): one sync per period through the module queue */
+  protected readonly syncLoop = new ZephyrSyncLoop(() => this.backgroundIteration());
+  /** The last background iteration failed with DAEMON_NOT_CONNECTED: the next one first checks the connection */
+  protected backgroundConnectionCheck = false;
 
   /**
    * Internal constructor which is given the memory address of a C++ wallet instance.
@@ -533,21 +545,65 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   
   // -------------------------- COMMON WALLET METHODS -------------------------
   
-  async addListener(listener: ZephyrWalletListener): Promise<void> {
-    if (this.getWalletProxy()) return this.getWalletProxy().addListener(listener);
-    await super.addListener(listener);
-    await this.refreshListening();
+  // The inherited listener path (one native listener per JavaScript listener, callbacks run inside the core) is not
+  // used: listeners are kept by the wallet facade (ZephyrWallet), which receives every notification through
+  // setNotificationSink and setNotifying below.
+  async addListener(listener: ZephyrWalletListener): Promise<void> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async removeListener(listener: ZephyrWalletListener): Promise<void> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  getListeners(): ZephyrWalletListener[] { return []; }
+
+  // ----------------------------- NOTIFICATIONS ------------------------------
+
+  /**
+   * Where this wallet's notifications go. A direct wallet calls sink for every notification of the core (parsed
+   * strictly; one it cannot read becomes a syncError with NATIVE_ERROR/UNEXPECTED_RESULT) and for every failure of a
+   * background iteration; the sink must only record or forward (it runs while the core's call is still active). A
+   * proxied wallet registers a callback on its worker channel that validates each notification message strictly (a
+   * malformed one becomes a syncError with MALFORMED_MESSAGE/MESSAGE_SHAPE) and calls sink.
+   */
+  setNotificationSink(sink: (notification: ZephyrNotification, tag: string | undefined) => void): void {
+    if (this.getWalletProxy()) return this.getWalletProxy().setNotificationSink(sink);
+    this.notificationSink = sink;
   }
-  
-  async removeListener(listener): Promise<void> {
-    if (this.getWalletProxy()) return this.getWalletProxy().removeListener(listener);
-    await super.removeListener(listener);
-    await this.refreshListening();
+
+  /**
+   * The facade has added listeners (true) or none (false). The bridge listener is registered or removed in a task of the
+   * module queue behind the work already queued (a listener added while a sync runs gets that sync's notifications only
+   * if one was registered when it started); resolves without waiting for that task. A failure of the task is delivered
+   * as a syncError.
+   */
+  async setNotifying(wanted: boolean): Promise<void> {
+    if (typeof wanted !== "boolean") throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    if (this.getWalletProxy()) return this.getWalletProxy().setNotifying(wanted);
+    this.assertNotClosed();
+    this.notificationsWanted = wanted;
+    this.module.queueTask(async () => {
+      if (this._isClosed) return;
+      this.applyNotifications(this.notificationsWanted);
+    }).catch((err: unknown) => {
+      if (!this._isClosed) this.emitNotification({ type: "syncError", error: WalletErrors.fromUnknown("sync", err) }, undefined);
+    });
   }
-  
-  getListeners(): ZephyrWalletListener[] {
-    if (this.getWalletProxy()) return this.getWalletProxy().getListeners();
-    return super.getListeners();
+
+  /** Register or remove the bridge listener (inside a task of the module queue only). */
+  protected applyNotifications(on: boolean): void {
+    if (on === this.notificationsOn) return;
+    WalletErrors.checkBridgeResult("sync", this.module.set_notifications(this.cppAddress, on, this.nativeNotificationSink));
+    this.notificationsOn = on;
+  }
+
+  /** The bridge's sink: called inside the core's notification job; it only parses and passes on, and never throws. */
+  protected readonly nativeNotificationSink = (text: unknown): void => {
+    try {
+      this.emitNotification(parseBridgeNotification(text), this.syncTag);
+    } catch (ignored) {
+      // nothing may unwind into native code
+    }
+  };
+
+  protected emitNotification(notification: ZephyrNotification, tag: string | undefined): void {
+    const sink = this.notificationSink;
+    if (sink !== undefined) sink(notification, tag);
   }
   
   async setConnectionManager(connectionManager?: ZephyrConnectionManager): Promise<void> {
@@ -730,16 +786,34 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   async sync(listenerOrStartHeight?: ZephyrWalletListener | number, startHeight?: number, allowConcurrentCalls = false): Promise<ZephyrSyncResult> {
     if (listenerOrStartHeight instanceof ZephyrWalletListener) throw WalletErrors.unsupported("LISTENERS");
     if (startHeight !== undefined || allowConcurrentCalls !== false) throw WalletErrors.unsupported("SYNC");
-    const start = listenerOrStartHeight;
+    return this.syncChecked(listenerOrStartHeight, undefined);
+  }
+
+  /**
+   * One sync in the module queue (the facade's sync and every background iteration). tag names the facade's per-sync
+   * listener: the bridge listener is then registered for this sync even without added listeners, and every
+   * notification raised during it carries the tag. Other calls of the wallet wait for it, close included.
+   */
+  async syncChecked(start: number | undefined, tag: string | undefined): Promise<ZephyrSyncResult> {
     if (start !== undefined && !isRestoreHeight(start)) throw new ZephyrWalletError("INVALID_CONFIG", "SYNC_START_HEIGHT");
-    if (this.getWalletProxy()) return this.getWalletProxy().syncFrom(start);
+    if (tag !== undefined && !isWorkerId(tag)) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    if (this.getWalletProxy()) return this.getWalletProxy().syncChecked(start, tag);
     return this.module.queueTask(async () => {
       this.assertNotClosed();
-      return new Promise<ZephyrSyncResult>((resolve, reject) => {
-        this.module.sync(this.cppAddress, start === undefined ? "" : String(start), (result: unknown) => {
-          try { resolve(ZephyrWalletFull.parseSyncResult(WalletErrors.checkBridgeResult("sync", result))); } catch (err) { reject(err instanceof ZephyrWalletError ? err : new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT")); }
+      if (tag !== undefined) this.applyNotifications(true);
+      this.syncTag = tag;
+      try {
+        return await new Promise<ZephyrSyncResult>((resolve, reject) => {
+          this.module.sync(this.cppAddress, start === undefined ? "" : String(start), (result: unknown) => {
+            try { resolve(ZephyrWalletFull.parseSyncResult(WalletErrors.checkBridgeResult("sync", result))); } catch (err) { reject(err instanceof ZephyrWalletError ? err : new ZephyrWalletError("NATIVE_ERROR", "UNEXPECTED_RESULT")); }
+          });
         });
-      });
+      } finally {
+        this.syncTag = undefined;
+        if (tag !== undefined && !this.notificationsWanted && !this._isClosed) {
+          try { this.applyNotifications(false); } catch (ignored) { /* stays registered until the next change */ }
+        }
+      }
     });
   }
 
@@ -803,17 +877,50 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   }
   
   async startSyncing(syncPeriodInMs?: number): Promise<void> {
-    if (this.getWalletProxy()) return this.getWalletProxy().startSyncing(syncPeriodInMs);
-    this.syncPeriodInMs = syncPeriodInMs === undefined ? ZephyrWalletFull.DEFAULT_SYNC_PERIOD_IN_MS : syncPeriodInMs;
-    if (!this.syncLooper) this.syncLooper = new TaskLooper(async () => await this.backgroundSync())
-    this.syncLooper.start(this.syncPeriodInMs);
+    return this.startSyncingChecked(syncPeriodInMs === undefined ? 10000 : syncPeriodInMs);
   }
-    
+
   async stopSyncing(): Promise<void> {
-    if (this.getWalletProxy()) return this.getWalletProxy().stopSyncing();
+    return this.stopSyncingChecked();
+  }
+
+  /**
+   * Start background synchronization, or set the period of the running loop (common/ZephyrNotificationsInternal.ts,
+   * ZephyrSyncLoop): a sync at once, then one per period, each through the module queue like every other call, so a
+   * call made while an iteration runs waits for it and an iteration does not start while another call runs. Resolves
+   * once the loop runs, before its first iteration.
+   */
+  async startSyncingChecked(periodMs: number): Promise<void> {
+    if (!isSyncPeriod(periodMs)) throw new ZephyrWalletError("INVALID_CONFIG", "SYNC_PERIOD");
+    if (this.getWalletProxy()) return this.getWalletProxy().startSyncingChecked(periodMs);
     this.assertNotClosed();
-    if (this.syncLooper) this.syncLooper.stop();
-    this.module.stop_syncing(this.cppAddress); // task is not queued so wallet stops immediately
+    this.syncLoop.start(periodMs);
+  }
+
+  /** Stop background synchronization; resolves once the running iteration (if any) has settled and no other will start. */
+  async stopSyncingChecked(): Promise<void> {
+    if (this.getWalletProxy()) return this.getWalletProxy().stopSyncingChecked();
+    this.assertNotClosed();
+    await this.syncLoop.stop();
+  }
+
+  /**
+   * One background iteration: a sync without a per-sync listener. Its failure is delivered as a syncError with the code
+   * and diagnostic a sync rejects with, and the loop goes on; an iteration ended because the wallet was closed is not
+   * reported. After DAEMON_NOT_CONNECTED (the core's state since its last connection check) the next iteration checks
+   * the connection first, so the loop recovers when the daemon answers again.
+   */
+  protected async backgroundIteration(): Promise<void> {
+    try {
+      if (this.backgroundConnectionCheck) await this.isConnectedToDaemon();
+      await this.syncChecked(undefined, undefined);
+      this.backgroundConnectionCheck = false;
+    } catch (err) {
+      if (this._isClosed) return;
+      const error = WalletErrors.fromUnknown("sync", err);
+      this.backgroundConnectionCheck = error.code === "DAEMON_ERROR" && error.diagnostic === "DAEMON_NOT_CONNECTED";
+      this.emitNotification({ type: "syncError", error }, undefined);
+    }
   }
   
   async scanTxs(txHashes: string[]): Promise<void> {
@@ -1959,6 +2066,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       });
     }
     await super.closeInternal(false, this.wasmListenerHandle);
+    this.notificationSink = undefined; // the bridge removed its listener with the native close
     if (this.daemonRoute) { HttpClient.removeDaemonRoute(this.daemonRoute); this.daemonRoute = undefined; }
     this.wasmListenerHandle = 0;
     delete this.path;
@@ -1970,7 +2078,7 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   // cancel outside the module queue so a blocked request can release it
   protected async prepareClose(): Promise<void> {
     this._isClosed = true;
-    if (this.syncLooper) this.syncLooper.stop();
+    await this.syncLoop.stop(); // no further background iteration; the running one settles first (no native cancellation)
     // the fixed core has no request_shutdown(): no native cancellation; wait for active work below
     if (this.connectionManager && this.connectionManager.getListeners().includes(this.connectionManagerListener)) this.connectionManager.removeListener(this.connectionManagerListener);
     this.connectionManager = undefined;
@@ -2037,40 +2145,6 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
 
   protected getWalletProxy(): ZephyrWalletFullProxy {
     return super.getWalletProxy() as ZephyrWalletFullProxy;
-  }
-  
-  protected async backgroundSync() {
-    let label = this.path ? this.path : (this.browserMainPath ? this.browserMainPath : "in-memory wallet"); // label for log
-    LibraryUtils.log(1, "Background synchronizing " + label);
-    try { await this.sync(); }
-    catch (err: any) { if (!this._isClosed) console.error("Failed to background synchronize " + label + ": " + err.message); }
-  }
-  
-  protected async refreshListening() {
-    if (this._isClosed) return;
-    let isEnabled = this.listeners.length > 0;
-    if (this.wasmListenerHandle === 0 && !isEnabled || this.wasmListenerHandle > 0 && isEnabled) return; // no difference
-    return this.module.queueTask(async () => {
-      if (this._isClosed) return;
-      return new Promise<void>((resolve, reject) => {
-        this.module.set_listener(
-          this.cppAddress,
-          this.wasmListenerHandle,
-            newListenerHandle => {
-              if (typeof newListenerHandle === "string") reject(new ZephyrError(newListenerHandle));
-              else {
-                this.wasmListenerHandle = newListenerHandle;
-                resolve();
-              }
-            },
-            isEnabled ? async (height, startHeight, endHeight, percentDone, message) => await this.wasmListener.onSyncProgress(height, startHeight, endHeight, percentDone, message) : undefined,
-            isEnabled ? async (height) => await this.wasmListener.onNewBlock(height) : undefined,
-            isEnabled ? async (newBalanceStr, newUnlockedBalanceStr) => await this.wasmListener.onBalancesChanged(newBalanceStr, newUnlockedBalanceStr) : undefined,
-            isEnabled ? async (height, txHash, amountStr, accountIdx, subaddressIdx, version, unlockTime, isLocked) => await this.wasmListener.onOutputReceived(height, txHash, amountStr, accountIdx, subaddressIdx, version, unlockTime, isLocked) : undefined,
-            isEnabled ? async (height, txHash, amountStr, accountIdxStr, subaddressIdxStr, version, unlockTime, isLocked) => await this.wasmListener.onOutputSpent(height, txHash, amountStr, accountIdxStr, subaddressIdxStr, version, unlockTime, isLocked) : undefined,
-        );
-      });
-    });
   }
   
   static sanitizeBlock(block) {
@@ -2373,41 +2447,32 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     return ZephyrWalletFullProxy.heightOf(await this.invokeWorker("getHeight"));
   }
   
-  async addListener(listener) {
-    let wrappedListener = new WalletWorkerListener(listener, () => this._isClosed);
-    let listenerId = wrappedListener.getId();
-    this.channel.addCallback(this.walletId, "onSyncProgress_" + listenerId, [wrappedListener.onSyncProgress, wrappedListener]);
-    this.channel.addCallback(this.walletId, "onNewBlock_" + listenerId, [wrappedListener.onNewBlock, wrappedListener]);
-    this.channel.addCallback(this.walletId, "onBalancesChanged_" + listenerId, [wrappedListener.onBalancesChanged, wrappedListener]);
-    this.channel.addCallback(this.walletId, "onOutputReceived_" + listenerId, [wrappedListener.onOutputReceived, wrappedListener]);
-    this.channel.addCallback(this.walletId, "onOutputSpent_" + listenerId, [wrappedListener.onOutputSpent, wrappedListener]);
-    this.wrappedListeners.push(wrappedListener);
-    return this.invokeWorker("addListener", [listenerId]);
-  }
-  
-  async removeListener(listener) {
-    for (let i = 0; i < this.wrappedListeners.length; i++) {
-      if (this.wrappedListeners[i].getListener() === listener) {
-        let listenerId = this.wrappedListeners[i].getId();
-        await this.invokeWorker("removeListener", [listenerId]);
-        this.channel.removeCallback(this.walletId, "onSyncProgress_" + listenerId);
-        this.channel.removeCallback(this.walletId, "onNewBlock_" + listenerId);
-        this.channel.removeCallback(this.walletId, "onBalancesChanged_" + listenerId);
-        this.channel.removeCallback(this.walletId, "onOutputReceived_" + listenerId);
-        this.channel.removeCallback(this.walletId, "onOutputSpent_" + listenerId);
-        this.wrappedListeners.splice(i, 1);
-        return;
+  // listeners are kept by the wallet facade; the worker posts every notification (setNotificationSink below)
+  async addListener(listener: ZephyrWalletListener): Promise<void> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  async removeListener(listener: ZephyrWalletListener): Promise<void> { throw WalletErrors.unsupported("NATIVE_EXPORT"); }
+  getListeners(): ZephyrWalletListener[] { return []; }
+
+  /**
+   * Receive the notifications the wallet's worker posts: each message is validated strictly (fromNotificationMessage);
+   * a malformed one is not delivered and becomes a syncError with MALFORMED_MESSAGE/MESSAGE_SHAPE. The callback is
+   * removed with the worker's other callbacks when the wallet closes or its worker ends.
+   */
+  setNotificationSink(sink: (notification: ZephyrNotification, tag: string | undefined) => void): void {
+    this.channel.addCallback(this.walletId, NOTIFICATION_CALLBACK_ID, (...args: unknown[]) => {
+      let received: { readonly notification: ZephyrNotification; readonly tag: string | undefined };
+      try {
+        received = fromNotificationMessage(args);
+      } catch (ignored) {
+        received = { notification: { type: "syncError", error: new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE") }, tag: undefined };
       }
-    }
-    throw new ZephyrError("Listener is not registered with wallet");
+      try { sink(received.notification, received.tag); } catch (ignored) { /* the sink only queues */ }
+    });
   }
-  
-  getListeners() {
-    let listeners = [];
-    for (let wrappedListener of this.wrappedListeners) listeners.push(wrappedListener.getListener());
-    return listeners;
+
+  async setNotifying(wanted: boolean): Promise<void> {
+    await this.invokeWorker("setNotifications", [wanted]);
   }
-  
+
   async isSynced() {
     return this.invokeWorker("isSynced");
   }
@@ -2416,12 +2481,13 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     if (listenerOrStartHeight instanceof ZephyrWalletListener) throw WalletErrors.unsupported("LISTENERS");
     if (startHeight !== undefined || allowConcurrentCalls !== false) throw WalletErrors.unsupported("SYNC");
     if (listenerOrStartHeight !== undefined && !isRestoreHeight(listenerOrStartHeight)) throw new ZephyrWalletError("INVALID_CONFIG", "SYNC_START_HEIGHT");
-    return this.syncFrom(listenerOrStartHeight);
+    return this.syncChecked(listenerOrStartHeight, undefined);
   }
 
-  /** One blocking sync in the wallet's worker; the reply is a strict DTO */
-  async syncFrom(start: number | undefined): Promise<ZephyrSyncResult> {
-    return ZephyrWalletFull.syncResultOf(await this.invokeWorker("sync", start === undefined ? [] : [start]), "MALFORMED_MESSAGE");
+  /** One sync in the wallet's worker (with the tag of a per-sync listener); the reply is a strict DTO */
+  async syncChecked(start: number | undefined, tag: string | undefined): Promise<ZephyrSyncResult> {
+    const args = tag !== undefined ? [start, tag] : start === undefined ? [] : [start];
+    return ZephyrWalletFull.syncResultOf(await this.invokeWorker("sync", args), "MALFORMED_MESSAGE");
   }
 
   async getBalanceMap(unlocked: boolean): Promise<ZephyrAssetBalances> {
@@ -2437,12 +2503,21 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     try { return parseUint64Text(value); } catch (err) { throw new ZephyrWalletError("MALFORMED_MESSAGE", "MESSAGE_SHAPE"); }
   }
   
-  async startSyncing(syncPeriodInMs) {
-    return this.invokeWorker("startSyncing", Array.from(arguments));
+  async startSyncing(syncPeriodInMs?: number): Promise<void> {
+    return this.startSyncingChecked(syncPeriodInMs === undefined ? 10000 : syncPeriodInMs);
   }
-    
-  async stopSyncing() {
-    return this.invokeWorker("stopSyncing");
+
+  async stopSyncing(): Promise<void> {
+    return this.stopSyncingChecked();
+  }
+
+  /** Background synchronization runs in the wallet's worker, next to its module queue */
+  async startSyncingChecked(periodMs: number): Promise<void> {
+    await this.invokeWorker("startSyncing", [periodMs]);
+  }
+
+  async stopSyncingChecked(): Promise<void> {
+    await this.invokeWorker("stopSyncing");
   }
   
   async scanTxs(txHashes) {
@@ -2919,58 +2994,5 @@ class WalletWasmListener {
     
     // announce output
     await this.wallet.announceOutputSpent(output);
-  }
-}
-
-/**
- * Internal listener to bridge notifications to external listeners.
- * 
- * @private
- */
-class WalletWorkerListener {
-
-  protected id: any;
-  protected listener: any;
-  protected isClosed: () => boolean;
-  
-  constructor(listener, isClosed) {
-    this.id = GenUtils.getUUID();
-    this.listener = listener;
-    this.isClosed = isClosed;
-  }
-  
-  getId() {
-    return this.id;
-  }
-  
-  getListener() {
-    return this.listener;
-  }
-  
-  onSyncProgress(height, startHeight, endHeight, percentDone, message) {
-    if (this.isClosed()) return;
-    this.listener.onSyncProgress(height, startHeight, endHeight, percentDone, message);
-  }
-
-  async onNewBlock(height) {
-    if (this.isClosed()) return;
-    await this.listener.onNewBlock(height);
-  }
-  
-  async onBalancesChanged(newBalanceStr, newUnlockedBalanceStr) {
-    if (this.isClosed()) return;
-    await this.listener.onBalancesChanged(BigInt(newBalanceStr), BigInt(newUnlockedBalanceStr));
-  }
-
-  async onOutputReceived(blockJson) {
-    if (this.isClosed()) return;
-    let block = new ZephyrBlock(blockJson, ZephyrBlock.DeserializationType.TX_WALLET);
-    await this.listener.onOutputReceived(block.getTxs()[0].getOutputs()[0]);
-  }
-  
-  async onOutputSpent(blockJson) {
-    if (this.isClosed()) return;
-    let block = new ZephyrBlock(blockJson, ZephyrBlock.DeserializationType.TX_WALLET);
-    await this.listener.onOutputSpent(block.getTxs()[0].getInputs()[0]);
   }
 }

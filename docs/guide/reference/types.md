@@ -430,6 +430,45 @@ ratios as the shortest decimal text, without exponent, that reads back as exactl
 `BigDecimal`); `hfVersion` the daemon's hard fork version. `assetsMa` and `equityMa` are 0 on the current hard
 fork. Units and warnings: [The reserve and the pricing record](../07-conversions.md#the-reserve-and-the-pricing-record).
 
+## Listeners
+
+### `ZephyrWalletListener`
+
+```ts signature
+interface ZephyrWalletListener {
+    onSyncProgress?(height: number, startHeight: number, endHeight: number, percentDone: number, message: string): void;
+    onNewBlock?(height: number): void;
+    onBalancesChanged?(balance: bigint, unlockedBalance: bigint, assetType: string): void;
+    onOutputReceived?(output: ZephyrWalletOutput): void;
+    onOutputSpent?(output: ZephyrWalletOutput): void;
+    onSyncError?(error: ZephyrWalletError): void;
+}
+```
+
+The listener of `addListener` and `sync(listener)`, with the callbacks of the Java port's `ZephyrWalletListener` and
+`onSyncError`; each optional. `onSyncProgress` and `onNewBlock` once per scanned block (`percentDone` from 0 to 1, `message`
+always `"Synchronizing"`), `onBalancesChanged` once per asset whose balance changed (the wallet's totals), the output callbacks
+for an output in the pool, at confirmation and at unlock (repeated: count each transaction once), `onSyncError` for a failed
+background iteration or a notification the library could not read. Callbacks never run inside the core; whatever they throw or
+reject is dropped unread. Guide: [Syncing and listeners](../03-connecting-to-a-daemon.md#synchronizing).
+
+### `ZephyrWalletOutput`
+
+```ts signature
+interface ZephyrWalletOutput {
+    readonly amount: bigint;
+    readonly accountIndex?: number;
+    readonly subaddressIndex?: number;
+    readonly txHash: string;
+    readonly height?: number;
+    readonly assetType?: string;
+}
+```
+
+The output of `onOutputReceived` and `onOutputSpent`, a frozen plain object. A field the core does not report is absent: the
+asset of a pool output and of the outputs notified at unlock, the height of a pool output, the subaddress of a spent summary
+taken from several subaddresses.
+
 ## Building and relaying
 
 ### `ZephyrTxPriority`

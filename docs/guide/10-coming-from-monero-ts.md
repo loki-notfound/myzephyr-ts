@@ -49,7 +49,8 @@ reshaped, and what is not ported.
 | `getBalance(accountIdx?, subaddressIdx?)`: one `bigint` | `getBalance()`: a map by asset; `getBalance(accountIdx)`: a map by subaddress index; `getBalance(asset, accountIdx, subaddressIdx?)`: one `bigint` |
 | `getTxs(query)` with `MoneroTxQuery`, results `MoneroTxWallet` | `getTxs(query)` with `ZephyrHistoryQuery`, results frozen plain objects |
 | `MoneroAccount`, `MoneroSubaddress` model classes | `ZephyrAccount`, `ZephyrSubaddress` plain objects with balance maps |
-| `sync(listener?, startHeight?)` | `sync(startHeight?)`; no listener |
+| `sync(listener?, startHeight?)` | `sync()`, `sync(listener)`, `sync(startHeight)`, `sync(startHeight, listener)` (the Java port's order); the listener is any object with some of the callbacks |
+| `MoneroWalletListener` (a class to extend) | `ZephyrWalletListener` (an interface, each callback optional), `onBalancesChanged` names the asset; `onSyncError` reports background failures |
 | `createTx(config)` and `relayTx(...)` | `buildTransfer(config)` to inspect; `prepareTransfer(config)` and `relayPrepared(token)` to send |
 | `getDaemonConnection()`: a connection object | `getDaemonConnection()`: `{ uri, trusted: true }`, without a request |
 | one shared worker for all wallets | one worker per wallet, with `terminate()` for one wallet |
@@ -86,7 +87,6 @@ is not exported by the package:
   `new ZephyrDaemonRpc(address)` (there is no `connectToDaemonRpc`), and offers the node's information, its height
   and block headers with their pricing record ([ZephyrDaemonRpc](reference/daemon.md)); its other inherited calls
   reject with `UNSUPPORTED_CAPABILITY`/`DAEMON_RPC_METHOD`;
-- listeners (`addListener`) and background synchronization (`startSyncing`);
 - the inherited query-based history model, transaction creation, its relay and sweeps;
 - outputs, key images, rescans, proofs and multisig;
 - file-system wallets.
@@ -96,14 +96,13 @@ source or the package: a port that used it talks to a wallet RPC server directly
 `ZephyrWallet`.
 
 A few inherited method names remain on `ZephyrWallet` and reject with `UNSUPPORTED_CAPABILITY`, so
-that a port finds them: `startSyncing`, `createTxs`, `addListener`, `getReserveProofWallet`,
-`rescanSpent` and `importKeyImages`.
+that a port finds them: `createTxs`, `getReserveProofWallet`, `rescanSpent` and `importKeyImages`.
 
 ```ts run
 import { createRandomWallet, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
 
 const wallet = await createRandomWallet({ networkType: "mainnet", password: "a long passphrase" });
-for (const call of [() => wallet.startSyncing(), () => wallet.createTxs(), () => wallet.addListener()]) {
+for (const call of [() => wallet.createTxs(), () => wallet.getReserveProofWallet(), () => wallet.rescanSpent()]) {
   try {
     await call();
   } catch (err) {

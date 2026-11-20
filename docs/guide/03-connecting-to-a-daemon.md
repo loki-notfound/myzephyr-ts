@@ -142,9 +142,10 @@ proxy requirements in full.
 
 ## Synchronizing
 
-`sync(startHeight?)` is one blocking synchronization. It resolves with `{ numBlocksFetched,
-receivedMoney }` when the wallet has caught up with the daemon. There is no progress callback and no
-background synchronization; other calls of the wallet, `close` included, wait until it is done.
+`sync(startHeight?, listener?)` is one synchronization. It resolves with `{ numBlocksFetched,
+receivedMoney }` when the wallet has caught up with the daemon; a listener receives its progress, and
+`startSyncing` keeps the wallet in sync in the background ([ZephyrWallet](reference/wallet.md#listeners-and-background-synchronization)).
+Other calls of the wallet, `close` included, wait until a sync is done.
 
 ```ts
 const result = await wallet.sync();

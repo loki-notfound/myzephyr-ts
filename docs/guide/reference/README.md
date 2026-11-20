@@ -65,6 +65,8 @@ only.
 | `ZephyrRelayedTx` | type | [ZephyrRelayedTx](types.md#zephyrrelayedtx) |
 | `ZephyrRelayResult` | type | [ZephyrRelayResult](types.md#zephyrrelayresult) |
 | `ZephyrReserveInfo` | type | [ZephyrReserveInfo](types.md#zephyrreserveinfo) |
+| `ZephyrWalletListener` | type | [ZephyrWalletListener](types.md#zephyrwalletlistener) |
+| `ZephyrWalletOutput` | type | [ZephyrWalletOutput](types.md#zephyrwalletoutput) |
 | `ZephyrDaemonInfo` | type | [ZephyrDaemonInfo](daemon.md#zephyrdaemoninfo) |
 | `ZephyrBlockHeader` | type | [ZephyrBlockHeader](daemon.md#zephyrblockheader) |
 | `ZephyrPricingRecord` | type | [ZephyrPricingRecord](daemon.md#zephyrpricingrecord) |

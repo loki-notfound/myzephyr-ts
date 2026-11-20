@@ -2,7 +2,7 @@
  * Node runner of the network stage (test only).
  *
  *   --mode direct|worker --out report.json --targets targets.json --marker TEXT --checks N01,N02,...
- *   [--seed-in dir] [--seed-out dir] [--funded-in dir --funded-expect file [--funded-out dir] [--funded-build-out dir]]
+ *   [--seed-in dir] [--seed-out dir] [--seed-behind dir] [--funded-in dir --funded-expect file [--funded-out dir] [--funded-build-out dir]]
  *   [--test-module file --funded-synced dir]
  *
  * --funded-in names a copy of a funded test wallet (keys.bin, cache.bin, password.txt) and
@@ -11,6 +11,9 @@
  * synced bytes of N20 (0600) for a later comparison with another implementation, --funded-build-out those
  * of N22 (with the password) for N23; the inputs are never written. N23 runs in direct mode with the test
  * module (--test-module, the instrumented module) and opens --funded-synced without a sync.
+ *
+ * --seed-behind names a copy of the saved seed wallet as it was saved, before the stage's presync: N30 syncs copies of
+ * it (an incremental sync of the blocks since) and is reported as not run without it.
  *
  * The seed directory (test output only, never published) holds a disposable wallet without funds saved
  * by the measured fresh sync, so later runs reopen it and sync a few blocks only. Writes a
@@ -44,6 +47,8 @@ async function main(): Promise<number> {
   const seedOut = arg("seed-out");
   let seed: SeedWallet | undefined = undefined;
   if (seedIn !== undefined) seed = { keys: new Uint8Array(fs.readFileSync(path.join(seedIn, "keys.bin"))), cache: new Uint8Array(fs.readFileSync(path.join(seedIn, "cache.bin"))), password: fs.readFileSync(path.join(seedIn, "password.txt"), "utf8") };
+  const seedBehindIn = arg("seed-behind");
+  const seedBehind: SeedWallet | undefined = seedBehindIn === undefined ? undefined : { keys: new Uint8Array(fs.readFileSync(path.join(seedBehindIn, "keys.bin"))), cache: new Uint8Array(fs.readFileSync(path.join(seedBehindIn, "cache.bin"))), password: fs.readFileSync(path.join(seedBehindIn, "password.txt"), "utf8") };
   const saveSeed = seedOut === undefined ? undefined : async (s: SeedWallet): Promise<void> => {
     fs.mkdirSync(seedOut, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(seedOut, "keys.bin"), s.keys, { mode: 0o600 });
@@ -91,7 +96,7 @@ async function main(): Promise<number> {
   let recorder: RequestRecorder | undefined = undefined;
   if (mode === "direct") recorder = installRequestRecorder(async (b: Uint8Array) => crypto.createHash("sha256").update(b).digest("hex"));
   const log = (line: string): void => { process.stdout.write(line + "\n"); };
-  const report = await runNetworkChecks({ env: mode === "direct" ? "node-direct" : "node-worker", proxyToWorker: mode === "worker", targets, marker, checks, seed, saveSeed, funded, saveBuildSynced, fundedSynced, recorder, log });
+  const report = await runNetworkChecks({ env: mode === "direct" ? "node-direct" : "node-worker", proxyToWorker: mode === "worker", targets, marker, checks, seed, seedBehind, saveSeed, funded, saveBuildSynced, fundedSynced, recorder, log });
   const output = Object.assign({}, report, { node: process.version, platform: process.platform + "-" + process.arch, artifacts: { ...artifacts, "zephyr.js": crypto.createHash("sha256").update(fs.readFileSync(path.resolve(__dirname, "../../../zephyr.js"))).digest("hex"), ...(mode === "worker" ? { "ZephyrWebWorker.js": crypto.createHash("sha256").update(fs.readFileSync(LibraryUtils.WORKER_DIST_PATH)).digest("hex") } : {}) } });
   fs.writeFileSync(out, JSON.stringify(output, null, 2) + "\n");
   process.stdout.write("checks: " + report.checks.map((c) => c.id + "=" + c.status).join(" ") + "\n");

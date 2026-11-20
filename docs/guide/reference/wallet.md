@@ -350,16 +350,22 @@ The wallet's height; no request. Guide: [Heights](../03-connecting-to-a-daemon.m
 ### `sync`
 
 ```ts signature
-sync(startHeight?: number): Promise<ZephyrWalletSyncResult>;
+sync(startHeight?: number, listener?: ZephyrWalletListener): Promise<ZephyrWalletSyncResult>;
+sync(listener: ZephyrWalletListener): Promise<ZephyrWalletSyncResult>;
 ```
 
-One blocking synchronization, from `startHeight` or from the core's default start. Other calls of the
-wallet wait for it. A kept build is voided if the wallet's height afterwards differs from the height
-at the build by more than 10 blocks.
+One synchronization, as the Java port's four forms: `sync()`, `sync(listener)`, `sync(startHeight)` and
+`sync(startHeight, listener)`. It starts at `startHeight` or at the core's default start (the larger of the
+wallet's height and its restore height); a start below the restore height lowers it. `listener` receives the
+notifications of this sync only, after the added listeners (once if it is one of them); it is not registered.
+Every notification of the sync is delivered before it resolves. A wallet at the daemon's height gets no progress
+call; a daemon that is itself not synchronized makes it resolve with 0 blocks and no notification. Other calls of
+the wallet wait for it, close and background iterations included. A kept build is voided if the wallet's height
+afterwards differs from the height at the build by more than 10 blocks.
 
-Rejects with: `INVALID_CONFIG`/`SYNC_START_HEIGHT` (not a safe integer from 0),
-`UNSUPPORTED_CAPABILITY`/`SYNC` (more than one argument), `DAEMON_ERROR`, `NATIVE_ERROR`/`SYNC_FAILED`.
-Guide: [Synchronizing](../03-connecting-to-a-daemon.md#synchronizing).
+Rejects with: `INVALID_CONFIG`/`SYNC_START_HEIGHT` (not a safe integer from 0), `INVALID_CONFIG`/`LISTENER`
+(a second argument that is not a listener), `UNSUPPORTED_CAPABILITY`/`SYNC` (more than two arguments),
+`DAEMON_ERROR`, `NATIVE_ERROR`/`SYNC_FAILED`. Guide: [Synchronizing](../03-connecting-to-a-daemon.md#synchronizing).
 
 ### `refreshPool`
 
@@ -608,19 +614,74 @@ none.
 Rejects with: `INVALID_CONFIG`/`RELAY_TOKEN`. Guide:
 [The life of a kept build](../06-sending.md#the-life-of-a-kept-build).
 
+## Listeners and background synchronization
+
+Full wallets, direct and proxied, with the names of the Java port. Keys-only wallets reject with
+`UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_DAEMON`, closed ones with `WALLET_CLOSED`. Callbacks never run inside the
+core; whatever a callback throws or rejects is dropped unread. The callbacks: `ZephyrWalletListener` in
+[Types](types.md#zephyrwalletlistener).
+
+### `addListener`
+
+```ts signature
+addListener(listener: ZephyrWalletListener): Promise<void>;
+```
+
+Registers a listener for every later notification of the wallet (syncs, background iterations, pool refreshes,
+relays). A listener already added is kept once. In a proxied wallet resolves after the worker was told.
+
+Rejects with: `INVALID_CONFIG`/`LISTENER` (not an object, or a callback that is not a function).
+
+### `removeListener`
+
+```ts signature
+removeListener(listener: ZephyrWalletListener): Promise<void>;
+```
+
+Removes an added listener; it gets no notification delivered after this call. With the last listener gone the
+wallet stops asking the core for notifications.
+
+Rejects with: `INVALID_CONFIG`/`LISTENER_NOT_REGISTERED` (a listener that is not added).
+
+### `getListeners`
+
+```ts signature
+getListeners(): ReadonlyArray<ZephyrWalletListener>;
+```
+
+The added listeners, first added first, as a frozen copy; empty after close and for a keys-only wallet. A
+per-sync listener is not listed.
+
+### `startSyncing`
+
+```ts signature
+startSyncing(periodInMs?: number): Promise<void>;
+```
+
+Background synchronization: a sync at once, then one every `periodInMs` (default 10,000) after the previous one
+started, each through the wallet's one queue. Called while the loop runs it only sets the period. A failed
+iteration is delivered to the listeners' `onSyncError`, and the loop goes on. Resolves once the loop runs. The
+loop's timer keeps a Node.js process alive until `stopSyncing` or `close`.
+
+Rejects with: `INVALID_CONFIG`/`SYNC_PERIOD` (not an integer from 1,000 to 86,400,000),
+`INVALID_CONFIG`/`FIELD_TYPE` (more than one argument), `DAEMON_ERROR`/`DAEMON_NOT_CONNECTED` (no daemon).
+
+### `stopSyncing`
+
+```ts signature
+stopSyncing(): Promise<void>;
+```
+
+Stops background synchronization. Resolves when no further iteration will start and the running one, if any, has
+finished (it is not ended); resolves at once when no loop runs.
+
+Rejects with: `INVALID_CONFIG`/`FIELD_TYPE` (an argument).
+
 ## Unsupported inherited calls
 
 These names remain from monero-ts so that a port finds them. Each rejects with
 `UNSUPPORTED_CAPABILITY` before any native code runs. Guide:
 [What is not ported](../10-coming-from-monero-ts.md#what-is-not-ported).
-
-### `startSyncing`
-
-```ts signature
-startSyncing(): Promise<never>;
-```
-
-Background synchronization. Rejects with `UNSUPPORTED_CAPABILITY`/`SYNC`.
 
 ### `createTxs`
 
@@ -629,14 +690,6 @@ createTxs(): Promise<never>;
 ```
 
 The inherited transaction creation. Rejects with `UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`.
-
-### `addListener`
-
-```ts signature
-addListener(): Promise<never>;
-```
-
-Listeners. Rejects with `UNSUPPORTED_CAPABILITY`/`LISTENERS`.
 
 ### `getReserveProofWallet`
 

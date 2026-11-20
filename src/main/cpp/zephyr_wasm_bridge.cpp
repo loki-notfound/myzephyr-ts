@@ -89,6 +89,23 @@ EM_JS(char*, zephyr_ts_test_pool_records, (), {
   return p;
 });
 
+// test-only synthetic sync armed by the test layer ({"blocks":n,"start":h,"yieldEvery":k,"barrierAt":i,"message":"..",
+// "outputs":b,"receivedMoney":b}); the sync binding then notifies the wallet's listener as the core would and returns
+// without contacting a daemon. Returns a malloc'd JSON text, or 0 when none is armed; an armed spec is used once
+// unless syntheticSyncKeep is set.
+EM_JS(char*, zephyr_ts_test_synthetic_sync, (), {
+  var h = Module["__zephyrTsTestHooks"];
+  if (!h || !h.syntheticSync) return 0;
+  var s = JSON.stringify(h.syntheticSync);
+  if (!h.syntheticSyncKeep) h.syntheticSync = undefined;
+  if (!h.events) h.events = [];
+  h.events.push("synthetic-sync");
+  var n = lengthBytesUTF8(s) + 1;
+  var p = _malloc(n);
+  stringToUTF8(s, p, n);
+  return p;
+});
+
 static bool test_inject(const char* point) { return zephyr_ts_test_inject(point) != 0; }
 
 // test-only failure of the armed kind; kind 1 deliberately carries the call's inputs (passwords,
@@ -997,6 +1014,247 @@ void zephyr_wasm_bridge::get_daemon_max_peer_height(int handle, emscripten::val 
 //  int get_network_type(int handle) const;
 
 #endif // ZEPHYR_WASM_BRIDGE_UNPORTED
+// --------------------------- WALLET NOTIFICATIONS ---------------------------
+
+// The core's wallet listener (zephyr-cpp wallet2_listener) calls the listeners registered with a wallet from its
+// notification job. In this single-threaded build that job runs synchronously inside the core call that raised it: a
+// sync, a pool refresh or a relay. The bridge registers at most one listener per wallet, and only while the SDK asks for
+// notifications (set_notifications). Each notification becomes one fixed-format JSON text handed to the JavaScript sink
+// given at registration, which only records or forwards it: no callback of the application runs inside a native frame,
+// and the sink catches everything itself, so nothing thrown in JavaScript unwinds through the core. No notification may
+// throw into the core's job either (the core would skip the rest of that block's notifications): every method below
+// catches everything, and a notification it cannot write is replaced by {"type":"unreadable"}.
+//
+//   {"type":"newBlock","height":"<decimal>"}
+//   {"type":"syncProgress","height":"<decimal>","startHeight":"<decimal>","endHeight":"<decimal>","percentDone":"<17 digits>",
+//    "message":"Synchronizing"|""}   (the core's text when it is one of the fixed set below, otherwise "")
+//   {"type":"balancesChanged","balance":"<decimal>","unlockedBalance":"<decimal>","assetType":"<core asset type>"}
+//   {"type":"outputReceived"|"outputSpent","amount":"<decimal>","accountIndex":n?,"subaddressIndex":n?,"txHash":"<64 hex>",
+//    "height":"<decimal>"?,"assetType":"<core asset type>"?}   (each optional field absent where the core reports none)
+namespace {
+  // the progress texts of the pinned core (wallet2_listener::on_new_block sends only "Synchronizing")
+  const char* const SYNC_PROGRESS_MESSAGES[] = { "Synchronizing" };
+
+  bool is_sync_progress_message(const string& message) {
+    for (const char* m : SYNC_PROGRESS_MESSAGES) if (message == m) return true;
+    return false;
+  }
+
+  bool is_notified_tx_hash(const boost::optional<std::string>& hash) {
+    if (!hash || hash->size() != 64) return false;
+    for (char c : *hash) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    return true;
+  }
+
+  // the core's fraction as decimal text with 17 significant digits (exactly the double when read back), C locale
+  string fraction_text(double value) {
+    if (!std::isfinite(value)) throw bridge_failure("UNEXPECTED_RESULT");
+    char buffer[40];
+    int n = snprintf(buffer, sizeof(buffer), "%.17g", value);
+    if (n <= 0 || (size_t) n >= sizeof(buffer)) throw bridge_failure("UNEXPECTED_RESULT");
+    return string(buffer, (size_t) n);
+  }
+
+  struct bridge_listener : public monero_wallet_listener {
+    explicit bridge_listener(emscripten::val sink) : m_sink(sink) {}
+
+    void on_sync_progress(uint64_t height, uint64_t start_height, uint64_t end_height, double percent_done, const string& message) override {
+      try {
+        rapidjson::StringBuffer buffer;
+        json_writer w(buffer);
+        w.StartObject();
+        w.Key("type"); w.String("syncProgress");
+        w.Key("height"); write_string(w, decimal(height));
+        w.Key("startHeight"); write_string(w, decimal(start_height));
+        w.Key("endHeight"); write_string(w, decimal(end_height));
+        w.Key("percentDone"); write_string(w, fraction_text(percent_done));
+        // test module only: "notify.raw" writes the core's text unfiltered, so that the tests prove the TypeScript layer replaces it too
+        w.Key("message"); write_string(w, is_sync_progress_message(message) || test_inject("notify.raw") ? message : string(""));
+        w.EndObject();
+        emit(buffer);
+      } catch (...) {
+        emit_unreadable();
+      }
+    }
+
+    void on_new_block(uint64_t height) override {
+      try {
+        rapidjson::StringBuffer buffer;
+        json_writer w(buffer);
+        w.StartObject();
+        w.Key("type"); w.String("newBlock");
+        w.Key("height"); write_string(w, decimal(height));
+        w.EndObject();
+        emit(buffer);
+      } catch (...) {
+        emit_unreadable();
+      }
+    }
+
+    void on_balances_changed(uint64_t new_balance, uint64_t new_unlocked_balance, const std::string& asset_type) override {
+      try {
+        if (!is_core_asset_type(asset_type)) throw bridge_failure("UNEXPECTED_ASSET_TYPE");
+        rapidjson::StringBuffer buffer;
+        json_writer w(buffer);
+        w.StartObject();
+        w.Key("type"); w.String("balancesChanged");
+        w.Key("balance"); write_string(w, decimal(new_balance));
+        w.Key("unlockedBalance"); write_string(w, decimal(new_unlocked_balance));
+        w.Key("assetType"); write_string(w, asset_type);
+        w.EndObject();
+        emit(buffer);
+      } catch (...) {
+        emit_unreadable();
+      }
+    }
+
+    void on_output_received(const monero_output_wallet& output) override { notify_output("outputReceived", output); }
+    void on_output_spent(const monero_output_wallet& output) override { notify_output("outputSpent", output); }
+
+  private:
+    emscripten::val m_sink;
+
+    void notify_output(const char* type, const monero_output_wallet& output) {
+      try {
+        if (!output.m_amount || !output.m_tx || !is_notified_tx_hash(output.m_tx->m_hash)) throw bridge_failure("UNEXPECTED_RESULT");
+        if (!output.m_asset_type.empty() && !is_core_asset_type(output.m_asset_type)) throw bridge_failure("UNEXPECTED_ASSET_TYPE");
+        boost::optional<uint64_t> height = output.m_tx->get_height();
+        rapidjson::StringBuffer buffer;
+        json_writer w(buffer);
+        w.StartObject();
+        w.Key("type"); w.String(type);
+        w.Key("amount"); write_string(w, decimal(*output.m_amount));
+        if (output.m_account_index) { w.Key("accountIndex"); w.Uint(*output.m_account_index); }
+        if (output.m_subaddress_index) { w.Key("subaddressIndex"); w.Uint(*output.m_subaddress_index); }
+        w.Key("txHash"); write_string(w, *output.m_tx->m_hash);
+        if (height) { w.Key("height"); write_string(w, decimal(*height)); }
+        if (!output.m_asset_type.empty()) { w.Key("assetType"); write_string(w, output.m_asset_type); }
+        w.EndObject();
+        emit(buffer);
+      } catch (...) {
+        emit_unreadable();
+      }
+    }
+
+    void emit(const rapidjson::StringBuffer& buffer) {
+      m_sink(string(buffer.GetString(), buffer.GetSize()));
+    }
+
+    void emit_unreadable() {
+      try {
+        m_sink(string("{\"type\":\"unreadable\"}"));
+      } catch (...) {
+        // nothing more can be reported; the core's job goes on
+      }
+    }
+  };
+
+  std::map<int, bridge_listener*> WALLET_LISTENERS;
+
+  // remove and free the wallet's bridge listener, if any; the core no longer calls it afterwards
+  void remove_bridge_listener(int handle) {
+    auto it = WALLET_LISTENERS.find(handle);
+    if (it == WALLET_LISTENERS.end()) return;
+    bridge_listener* listener = it->second;
+    WALLET_LISTENERS.erase(it);
+    try {
+      ((monero_wallet*) handle)->remove_listener(*listener); // only the core's update after the erase can throw
+    } catch (...) {
+      delete listener;
+      throw;
+    }
+    delete listener;
+  }
+
+#if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)
+  std::shared_ptr<monero_output_wallet> test_output(const string& hash, uint64_t amount, const string& asset, boost::optional<uint32_t> account, boost::optional<uint32_t> subaddress, boost::optional<uint64_t> height) {
+    std::shared_ptr<monero_tx_wallet> tx = std::make_shared<monero_tx_wallet>();
+    tx->m_hash = hash;
+    if (height) {
+      std::shared_ptr<monero_block> block = std::make_shared<monero_block>();
+      block->m_height = *height;
+      tx->m_block = block;
+    }
+    std::shared_ptr<monero_output_wallet> output = std::make_shared<monero_output_wallet>();
+    output->m_tx = tx;
+    output->m_amount = amount;
+    output->m_asset_type = asset;
+    output->m_account_index = account;
+    output->m_subaddress_index = subaddress;
+    return output;
+  }
+
+  // test-only synthetic sync (see zephyr_ts_test_synthetic_sync): the wallet's bridge listener receives, per block, the
+  // notifications the core's on_new_block job sends (the new block, then the progress), with a pool output before the
+  // blocks, a received output and a balance change at the second block and a spent output at the third when asked; the
+  // sync yields to the event loop every yieldEvery blocks and waits at the barrier "sync.synthetic" before the block
+  // barrierAt. Returns false when no synthetic sync is armed.
+  bool test_synthetic_sync(int handle, string& result) {
+    char* text = zephyr_ts_test_synthetic_sync();
+    if (text == nullptr) return false;
+    rapidjson::Document doc;
+    doc.Parse(text);
+    free(text);
+    if (doc.HasParseError() || !doc.IsObject() || !doc.HasMember("blocks") || !doc["blocks"].IsUint() || !doc.HasMember("start") || !doc["start"].IsUint()) throw bridge_failure("UNEXPECTED_RESULT");
+    uint64_t blocks = doc["blocks"].GetUint(), start = doc["start"].GetUint();
+    uint32_t yield_every = doc.HasMember("yieldEvery") && doc["yieldEvery"].IsUint() ? doc["yieldEvery"].GetUint() : 0;
+    int64_t barrier_at = doc.HasMember("barrierAt") && doc["barrierAt"].IsInt() ? doc["barrierAt"].GetInt() : -1;
+    string message = doc.HasMember("message") && doc["message"].IsString() ? doc["message"].GetString() : "Synchronizing";
+    bool outputs = doc.HasMember("outputs") && doc["outputs"].IsBool() && doc["outputs"].GetBool();
+    bool received = doc.HasMember("receivedMoney") && doc["receivedMoney"].IsBool() && doc["receivedMoney"].GetBool();
+    auto listener_of = [handle]() -> bridge_listener* { auto it = WALLET_LISTENERS.find(handle); return it == WALLET_LISTENERS.end() ? nullptr : it->second; };
+    if (outputs && listener_of() != nullptr) listener_of()->on_output_received(*test_output(string(64, 'a'), 1000, "", (uint32_t) 0, (uint32_t) 0, boost::none));
+    for (uint64_t i = 0; i < blocks; i++) {
+      if ((int64_t) i == barrier_at) test_barrier("sync.synthetic");
+      uint64_t height = start + i;
+      bridge_listener* listener = listener_of();
+      if (listener != nullptr) {
+        listener->on_new_block(height);
+        listener->on_sync_progress(height, start, start + blocks, (double) (i + 1) / (double) blocks, message);
+        if (outputs && i == 1) {
+          listener->on_output_received(*test_output(string(64, 'b'), 9223372036854775813ULL, "ZSD", (uint32_t) 1, (uint32_t) 2, height));
+          listener->on_balances_changed(9223372036854775813ULL, 0, "ZSD");
+        }
+        if (outputs && i == 2) listener->on_output_spent(*test_output(string(64, 'c'), 77, "ZPH", (uint32_t) 0, boost::none, height));
+      }
+      if (yield_every > 0 && (i + 1) % yield_every == 0) emscripten_sleep(0);
+    }
+    result = string("{\"numBlocksFetched\":\"") + decimal(blocks) + "\",\"receivedMoney\":" + (received ? "true" : "false") + "}";
+    return true;
+  }
+#else
+  inline bool test_synthetic_sync(int, string&) { return false; }
+#endif
+}
+
+// Register (enabled) or remove the wallet's bridge listener. sink is a JavaScript function of one string argument that
+// never throws. "" or a fixed error; full wallets only.
+string zephyr_wasm_bridge::set_notifications(int handle, bool enabled, emscripten::val sink) {
+  try {
+    route_of(handle);
+    ZEPHYR_TS_TEST_THROW("error.notifications", "notifications");
+    if (!enabled) {
+      remove_bridge_listener(handle);
+      return string("");
+    }
+    if (sink.typeOf().as<std::string>() != "function") throw bridge_failure("SYNC_FAILED");
+    if (WALLET_LISTENERS.find(handle) != WALLET_LISTENERS.end()) return string("");
+    bridge_listener* listener = new bridge_listener(sink);
+    try {
+      WALLET_LISTENERS[handle] = listener;
+      ((monero_wallet*) handle)->add_listener(*listener);
+    } catch (...) {
+      WALLET_LISTENERS.erase(handle);
+      try { ((monero_wallet*) handle)->remove_listener(*listener); } catch (...) { /* the core holds it no more */ }
+      delete listener;
+      throw;
+    }
+    return string("");
+  } catch (...) {
+    return bridge_error(classify_current_exception(ERROR_CONTEXT_SYNC));
+  }
+}
+
 // ----------------- DAEMON CONNECTION, SYNC AND BALANCES -----------------
 
 // Read-only daemon access. Callers are full wallets only (the SDK gates the kind; a keys-only
@@ -1014,7 +1272,9 @@ void zephyr_wasm_bridge::set_daemon_connection(int handle, const string& uri, co
     route->origin = uri;
     route->last_failure = 0;
     monero_wallet* wallet = (monero_wallet*) handle;
-    wallet->set_daemon_connection(uri, "", ""); // no credentials: the SDK rejects them before this call
+    // test module only: "daemon.offline" leaves the core without the address (no connection check, no request), so the
+    // offline suites can run background synchronization over synthetic syncs with a configured daemon
+    if (!test_inject("daemon.offline")) wallet->set_daemon_connection(uri, "", ""); // no credentials: the SDK rejects them before this call
   } catch (...) {
     result = bridge_error(daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_DAEMON)));
   }
@@ -1089,10 +1349,12 @@ void zephyr_wasm_bridge::sync(int handle, const string& start_height, emscripten
     route_of(handle);
     ZEPHYR_TS_TEST_THROW("error.sync", start_height);
     monero_wallet* wallet = (monero_wallet*) handle;
-    monero_sync_result sync_result = start_height.empty() ? wallet->sync() : wallet->sync(parse_height(start_height));
-    void_kept_after_sync(handle, wallet->get_height());
+    if (!test_synthetic_sync(handle, result)) { // test module only: a synthetic sync without a daemon
+      monero_sync_result sync_result = start_height.empty() ? wallet->sync() : wallet->sync(parse_height(start_height));
+      void_kept_after_sync(handle, wallet->get_height());
+      result = string("{\"numBlocksFetched\":\"") + decimal(sync_result.m_num_blocks_fetched) + "\",\"receivedMoney\":" + (sync_result.m_received_money ? "true" : "false") + "}";
+    }
     test_barrier("sync.after");
-    result = string("{\"numBlocksFetched\":\"") + decimal(sync_result.m_num_blocks_fetched) + "\",\"receivedMoney\":" + (sync_result.m_received_money ? "true" : "false") + "}";
   } catch (...) {
     result = bridge_error(daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_SYNC)));
   }
@@ -3561,9 +3823,10 @@ void zephyr_wasm_bridge::close(int handle, bool save, int listener_handle, emscr
   monero_wallet* wallet = (monero_wallet*) handle;
   string error;
   try {
-    if (listener_handle != 0) throw bridge_failure("LISTENER"); // set_listener is not bound in this build
+    if (listener_handle != 0) throw bridge_failure("LISTENER"); // set_listener is not bound in this build (notifications: set_notifications)
     if (save) throw bridge_failure("SAVE_ON_CLOSE"); // saving is handled outside WebAssembly
     ZEPHYR_TS_TEST_THROW("close.native", "close"); // test-only; the handle stays valid
+    remove_bridge_listener(handle); // no notification after this point; the core no longer holds the listener
     void_kept(handle); // the kept build is wiped before the wallet goes
     wallet->close(save); // drain native work before deleting the wallet
     delete wallet;

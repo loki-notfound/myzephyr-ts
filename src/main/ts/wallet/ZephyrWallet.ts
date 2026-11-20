@@ -27,6 +27,8 @@ import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult } f
 import { checkRelayToken } from "../common/ZephyrRelayInternal";
 import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx } from "../common/ZephyrHistory";
 import { ZephyrReserveInfo } from "../common/ZephyrReserve";
+import { ZephyrWalletListener } from "../common/ZephyrNotifications";
+import { ZephyrNotification, checkListener, checkSyncPeriod, deliverNotification } from "../common/ZephyrNotificationsInternal";
 import { checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistoryInternal";
 
 
@@ -251,6 +253,16 @@ export class ZephyrWallet {
   private closePromise: Promise<void> | undefined = undefined;
   /** the token and hashes of the last prepare (the bridge's one slot): a relay result must name exactly these hashes */
   private prepared: { token: string; hashes: readonly string[] } | undefined = undefined;
+  /** listeners added with addListener, first added first */
+  private readonly listeners = new Set<ZephyrWalletListener>();
+  /** the listener of each running sync(listener), by the tag its notifications carry */
+  private readonly syncListeners = new Map<string, ZephyrWalletListener>();
+  private syncCount = 0;
+  /** notifications received and not yet delivered (delivered in a microtask, never inside the core) */
+  private readonly pendingNotifications: Array<{ readonly notification: ZephyrNotification; readonly tag: string | undefined }> = [];
+  private deliveryScheduled = false;
+  /** the inner wallet passes its notifications here once a listener, a per-sync listener or the background loop needs them */
+  private sinkInstalled = false;
 
   private constructor(inner: InnerWallet, kind: "full" | "keys", proxied: boolean) {
     this.inner = inner;
@@ -366,6 +378,7 @@ export class ZephyrWallet {
     if (this.closeSettled) return Promise.resolve();
     if (this.closePromise) return this.closePromise;
     this.closed = true;
+    this.dropListeners(); // no notification is delivered after close was called
     const attempt = (async () => {
       try {
         await this.inner.close(false);
@@ -399,6 +412,7 @@ export class ZephyrWallet {
     if (this.terminated || this.closeSettled) return;
     this.terminated = true;
     this.closed = true;
+    this.dropListeners();
     try {
       this.inner.terminateProxiedWorker();
     } finally {
@@ -492,15 +506,42 @@ export class ZephyrWallet {
   }
 
   /**
-   * One blocking sync from startHeight (a safe integer), or from the core's default start when it is
-   * omitted. Other calls of this wallet wait for it, close included.
+   * One sync, as the Java port's four forms: sync(), sync(listener), sync(startHeight) and sync(startHeight, listener).
+   * startHeight is a safe integer (default: the larger of the wallet's height and its restore height, the core's
+   * start); a start below the restore height lowers the restore height (the core's rule). The listener receives the
+   * notifications of this sync only, after the added listeners (once if it is one of them); it is not registered and
+   * getListeners does not list it. A wallet already at the daemon's height gets no progress call, and a daemon that is
+   * itself not synchronized makes the sync fetch nothing: it resolves with numBlocksFetched 0 and receivedMoney false
+   * and no notification. Other calls of this wallet wait for the sync, close and background iterations included.
    */
-  async sync(startHeight?: number): Promise<ZephyrWalletSyncResult> {
+  sync(startHeight?: number, listener?: ZephyrWalletListener): Promise<ZephyrWalletSyncResult>;
+  sync(listener: ZephyrWalletListener): Promise<ZephyrWalletSyncResult>;
+  async sync(first?: number | ZephyrWalletListener, second?: ZephyrWalletListener): Promise<ZephyrWalletSyncResult> {
     const wallet = this.full("KEYS_ONLY_DAEMON");
-    if (startHeight !== undefined && (typeof startHeight !== "number" || !Number.isSafeInteger(startHeight) || startHeight < 0)) throw new ZephyrWalletError("INVALID_CONFIG", "SYNC_START_HEIGHT");
-    if (arguments.length > 1) throw WalletErrors.unsupported("SYNC");
-    const result = await this.call("sync", () => wallet.sync(startHeight));
-    return { numBlocksFetched: result.getNumBlocksFetched(), receivedMoney: result.getReceivedMoney() };
+    let startHeight: number | undefined = undefined;
+    let listener: ZephyrWalletListener | undefined = undefined;
+    if (arguments.length <= 1 && first !== null && !Array.isArray(first) && (typeof first === "object" || typeof first === "function")) {
+      listener = checkListener(first);
+    } else {
+      if (first !== undefined && (typeof first !== "number" || !Number.isSafeInteger(first) || first < 0)) throw new ZephyrWalletError("INVALID_CONFIG", "SYNC_START_HEIGHT");
+      startHeight = first as number | undefined;
+      if (arguments.length > 2) throw WalletErrors.unsupported("SYNC");
+      if (second !== undefined) listener = checkListener(second);
+    }
+    if (listener === undefined) {
+      const result = await this.call("sync", () => wallet.syncChecked(startHeight, undefined));
+      this.deliverPending();
+      return { numBlocksFetched: result.getNumBlocksFetched(), receivedMoney: result.getReceivedMoney() };
+    }
+    const tag = "sync-" + (++this.syncCount);
+    this.syncListeners.set(tag, listener);
+    try {
+      const result = await this.call("sync", () => { this.installSink(wallet); return wallet.syncChecked(startHeight, tag); });
+      this.deliverPending(); // every notification of this sync reaches its listener before the sync resolves
+      return { numBlocksFetched: result.getNumBlocksFetched(), receivedMoney: result.getReceivedMoney() };
+    } finally {
+      this.syncListeners.delete(tag);
+    }
   }
 
   /**
@@ -785,11 +826,124 @@ export class ZephyrWallet {
     return this.call("relay", () => wallet.discardPreparedChecked(t));
   }
 
+  // ------------------------- listeners and background synchronization -------------------------
+  //
+  // Full wallets, direct and proxied, with the names and semantics of the Java port (common/ZephyrNotifications.ts);
+  // keys-only wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON. Notifications come from the core while the
+  // wallet syncs (a foreground sync or a background iteration), refreshes the pool or relays. Callbacks never run inside
+  // the core: they run in a microtask of the calling context (direct mode: between the core's steps; proxied: as the
+  // worker's messages arrive). Whatever a callback throws or rejects is dropped unread and changes nothing else.
+
+  /**
+   * Add a listener for every later notification of this wallet. A listener already added is kept once (as in the Java
+   * port). Rejects with INVALID_CONFIG/LISTENER for a value that is not a listener. In a proxied wallet resolves after
+   * the worker has been told; the core's notifications are switched on behind the work already queued, so a sync that
+   * already runs notifies the new listener only if another listener was added before it started.
+   */
+  async addListener(listener: ZephyrWalletListener): Promise<void> {
+    const wallet = this.full("KEYS_ONLY_DAEMON");
+    if (this.closed) throw this.closedError();
+    const l = checkListener(listener);
+    if (this.listeners.has(l)) return;
+    this.listeners.add(l);
+    if (this.listeners.size !== 1) return;
+    try {
+      await this.call("sync", () => { this.installSink(wallet); return wallet.setNotifying(true); });
+    } catch (err) {
+      this.listeners.delete(l);
+      throw err;
+    }
+  }
+
+  /**
+   * Remove a listener added with addListener; it receives no notification delivered after this call. Rejects with
+   * INVALID_CONFIG/LISTENER_NOT_REGISTERED for a listener that is not added (as the Java port's error). The core's
+   * notifications are switched off when the last listener goes.
+   */
+  async removeListener(listener: ZephyrWalletListener): Promise<void> {
+    const wallet = this.full("KEYS_ONLY_DAEMON");
+    if (this.closed) throw this.closedError();
+    if (!this.listeners.has(listener)) throw new ZephyrWalletError("INVALID_CONFIG", "LISTENER_NOT_REGISTERED");
+    this.listeners.delete(listener);
+    if (this.listeners.size === 0) await this.call("sync", () => wallet.setNotifying(false));
+  }
+
+  /** The listeners added with addListener, first added first (a frozen copy; empty after close). */
+  getListeners(): ReadonlyArray<ZephyrWalletListener> {
+    return Object.freeze(Array.from(this.listeners));
+  }
+
+  /**
+   * Keep the wallet in sync in the background: a sync at once, then one every periodInMs (default 10,000, as in the Java
+   * port; an integer from 1,000 to 86,400,000, else INVALID_CONFIG/SYNC_PERIOD) after the previous one started. Called
+   * while the loop runs it only sets the period. Each iteration goes through the wallet's one queue: a call made while
+   * an iteration runs waits for it, and an iteration does not start while another call runs. The added listeners receive
+   * its notifications; a failed iteration is delivered to their onSyncError (never to this caller) and the loop goes on.
+   * A wallet without a daemon rejects with DAEMON_ERROR/DAEMON_NOT_CONNECTED; an unreachable one is a failed iteration.
+   * Resolves once the loop runs. The loop's timer keeps a Node.js process alive until stopSyncing or close; a proxied
+   * wallet's loop runs in its worker.
+   */
+  async startSyncing(periodInMs?: number): Promise<void> {
+    const wallet = this.full("KEYS_ONLY_DAEMON");
+    const period = checkSyncPeriod(periodInMs);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    if (this.closed) throw this.closedError();
+    if (this.daemon === undefined) throw new ZephyrWalletError("DAEMON_ERROR", "DAEMON_NOT_CONNECTED");
+    await this.call("sync", () => { this.installSink(wallet); return wallet.startSyncingChecked(period); });
+  }
+
+  /**
+   * Stop background synchronization. Resolves when no further iteration will start and the running one, if any, has
+   * finished (it is not ended: the core has no cancellation); a call made after that runs with no background sync.
+   * Resolves at once when no loop runs.
+   */
+  async stopSyncing(): Promise<void> {
+    const wallet = this.full("KEYS_ONLY_DAEMON");
+    if (arguments.length > 0) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    await this.call("sync", () => wallet.stopSyncingChecked());
+  }
+
+  /**
+   * Have the inner wallet pass its notifications to this facade (once; in a proxied wallet a callback on its worker
+   * channel, removed with the worker's other callbacks at close). Wallets that never use notifications register nothing.
+   */
+  private installSink(wallet: ZephyrWalletFull): void {
+    if (this.sinkInstalled) return;
+    wallet.setNotificationSink((notification, tag) => this.receiveNotification(notification, tag));
+    this.sinkInstalled = true;
+  }
+
+  /** A notification from the inner wallet: queued, delivered in a microtask (never inside the core's call). */
+  private receiveNotification(notification: ZephyrNotification, tag: string | undefined): void {
+    if (this.closed) return;
+    this.pendingNotifications.push({ notification, tag });
+    if (this.deliveryScheduled) return;
+    this.deliveryScheduled = true;
+    Promise.resolve().then(() => this.deliverPending());
+  }
+
+  /** Deliver the queued notifications in order: to the added listeners, then to the tag's per-sync listener. */
+  private deliverPending(): void {
+    this.deliveryScheduled = false;
+    while (this.pendingNotifications.length > 0) {
+      const next = this.pendingNotifications.shift() as { readonly notification: ZephyrNotification; readonly tag: string | undefined };
+      if (this.closed) continue;
+      const targets = Array.from(this.listeners);
+      const perSync = next.tag === undefined ? undefined : this.syncListeners.get(next.tag);
+      if (perSync !== undefined && !this.listeners.has(perSync)) targets.push(perSync);
+      deliverNotification(targets, next.notification);
+    }
+  }
+
+  private dropListeners(): void {
+    this.listeners.clear();
+    this.syncListeners.clear();
+    this.pendingNotifications.length = 0;
+  }
+
   // ----------------------- representative unsupported calls -----------------------
 
-  async startSyncing(): Promise<never> { throw WalletErrors.unsupported("SYNC"); }
   async createTxs(): Promise<never> { throw WalletErrors.unsupported("TRANSACTIONS"); }
-  async addListener(): Promise<never> { throw WalletErrors.unsupported("LISTENERS"); }
   async getReserveProofWallet(): Promise<never> { throw WalletErrors.unsupported("RESERVE_PROOF"); }
   async rescanSpent(): Promise<never> { throw WalletErrors.unsupported("DAEMON_SETTINGS"); }
   async importKeyImages(): Promise<never> { throw WalletErrors.unsupported("DAEMON_SETTINGS"); }

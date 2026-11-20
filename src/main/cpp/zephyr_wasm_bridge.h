@@ -65,6 +65,9 @@ namespace zephyr_wasm_bridge
   void set_restore_height_from_daemon(int handle, emscripten::val callback);
   string get_height(int handle);
   void sync(int handle, const string& start_height, emscripten::val callback);
+  // the core's wallet notifications: register (enabled) or remove the wallet's one bridge listener, which hands each
+  // notification as a fixed-format JSON text to sink (a JavaScript function that never throws); "" or a fixed error
+  string set_notifications(int handle, bool enabled, emscripten::val sink);
   string get_balance_wallet(int handle);
   string get_unlocked_balance_wallet(int handle);
   string get_balance_account(int handle, const uint32_t account_idx);

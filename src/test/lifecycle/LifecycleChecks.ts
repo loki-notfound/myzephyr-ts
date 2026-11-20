@@ -21,6 +21,8 @@ import * as Conversion from "../../main/ts/common/ZephyrConversionInternal";
 import * as Relay from "../../main/ts/common/ZephyrRelayInternal";
 import * as Reserve from "../../main/ts/common/ZephyrReserveInternal";
 import { parseDaemonAddress } from "../../main/ts/common/ZephyrDaemonAddress";
+import * as Notifications from "../../main/ts/common/ZephyrNotificationsInternal";
+import { recordingListener, recordsOf, sleep } from "./NotificationChecks";
 
 /**
  * The construction functions and validateAddress with untyped arguments: these checks pass configurations
@@ -701,8 +703,7 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
   await check("C12", "Unsupported calls reject as UNSUPPORTED_CAPABILITY before native access", async (notes) => {
     const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
     const calls: Array<[string, () => Promise<unknown>]> = [
-      ["startSyncing", () => w.startSyncing()],
-      ["createTxs", () => w.createTxs()], ["addListener", () => w.addListener()],
+      ["createTxs", () => w.createTxs()],
       ["getReserveProofWallet", () => w.getReserveProofWallet()], ["rescanSpent", () => w.rescanSpent()], ["importKeyImages", () => w.importKeyImages()],
       ["asset-less getBalance(account, subaddress)", () => (w.getBalance as unknown as (a: number, b: number) => Promise<unknown>)(0, 0)]
     ];
@@ -2289,6 +2290,139 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     try { Reserve.fromSupplyDto([["ZPH", "1"], ["ZPH", "2"]]); notes.push("a duplicate label: accepted"); } catch (err) { expect(codeOf(err) === "MALFORMED_MESSAGE", "duplicate label"); rejected++; }
     notes.push(rejected + " malformed results rejected");
     expect(rejected === 21, "21 malformed results rejected, " + rejected);
+  });
+
+  await check("C47", "Listeners and background synchronization offline (no request): addListener keeps a listener once, in order; getListeners is a frozen copy; a value that is not a listener rejects INVALID_CONFIG/LISTENER, removing one not added INVALID_CONFIG/LISTENER_NOT_REGISTERED; the four sync forms and their argument checks; startSyncing's period range (INVALID_CONFIG/SYNC_PERIOD) and its rejection without a daemon; stopSyncing without a loop resolves; keys-only wallets reject UNSUPPORTED_CAPABILITY/KEYS_ONLY_DAEMON and closed ones WALLET_CLOSED", async (notes) => {
+    type UntypedListenerApi = { addListener(l: unknown): Promise<void>; removeListener(l: unknown): Promise<void>; sync(...a: unknown[]): Promise<unknown>; startSyncing(...a: unknown[]): Promise<void>; stopSyncing(...a: unknown[]): Promise<void> };
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    const u = w as unknown as UntypedListenerApi;
+    const seen: string[] = [];
+    const A = recordingListener("A", seen), B = recordingListener("B", seen);
+    const fnListener = Object.assign(function listenerFunction() { /* a function object with callbacks */ }, { onNewBlock: () => undefined });
+    await w.addListener(A); await w.addListener(B); await w.addListener(A); await w.addListener(fnListener);
+    let listed = w.getListeners();
+    expect(listed.length === 3 && listed[0] === A && listed[1] === B && listed[2] === fnListener && Object.isFrozen(listed), "added once each, in order (a function object too), as a frozen copy");
+    let invalid = 0;
+    for (const [what, value] of [["null", null], ["a number", 5], ["a string", "x"], ["an array", []], ["onNewBlock not a function", { onNewBlock: 5 }], ["onSyncError not a function", { onSyncError: "f" }],
+      ["onSyncProgress null", { onSyncProgress: null }]] as const) {
+      await expectCode(u.addListener(value), "INVALID_CONFIG", "addListener(" + what + ")", notes, "LISTENER");
+      invalid++;
+    }
+    await expectCode(u.removeListener({}), "INVALID_CONFIG", "removeListener of a listener not added", notes, "LISTENER_NOT_REGISTERED");
+    await w.removeListener(B);
+    listed = w.getListeners();
+    expect(listed.length === 2 && listed[0] === A && listed[1] === fnListener, "B removed, the sequence kept");
+    // the sync forms (no daemon: the core rejects the sync itself)
+    await expectCode(w.sync({}), "DAEMON_ERROR", "sync(listener) without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await expectCode(w.sync(undefined, A), "DAEMON_ERROR", "sync(undefined, listener) without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await expectCode(w.sync(5, A), "DAEMON_ERROR", "sync(startHeight, listener) without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await expectCode(w.sync(5), "DAEMON_ERROR", "sync(startHeight) without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await expectCode(u.sync("5"), "INVALID_CONFIG", "sync(\"5\")", notes, "SYNC_START_HEIGHT");
+    await expectCode(u.sync([]), "INVALID_CONFIG", "sync([])", notes, "SYNC_START_HEIGHT");
+    await expectCode(u.sync(-1, A), "INVALID_CONFIG", "sync(-1, listener)", notes, "SYNC_START_HEIGHT");
+    await expectCode(u.sync(A, 5), "INVALID_CONFIG", "sync(listener, 5)", notes, "SYNC_START_HEIGHT");
+    await expectCode(u.sync(1, 2), "INVALID_CONFIG", "sync(1, 2)", notes, "LISTENER");
+    await expectCode(u.sync({ onNewBlock: 1 }), "INVALID_CONFIG", "sync(not a listener)", notes, "LISTENER");
+    await expectCode(u.sync(1, A, 3), "UNSUPPORTED_CAPABILITY", "sync with three arguments", notes, "SYNC");
+    expect(seen.length === 0, "no notification without a sync");
+    // background synchronization: the period, the arguments, the daemon
+    for (const [what, value] of [["999", 999], ["86400001", 86400001], ["1.5", 1.5], ["\"1000\"", "1000"], ["null", null], ["0", 0]] as const) {
+      await expectCode(u.startSyncing(value), "INVALID_CONFIG", "startSyncing(" + what + ")", notes, "SYNC_PERIOD");
+      invalid++;
+    }
+    await expectCode(u.startSyncing(1000, 2), "INVALID_CONFIG", "startSyncing with two arguments", notes, "FIELD_TYPE");
+    await expectCode(w.startSyncing(), "DAEMON_ERROR", "startSyncing() without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await expectCode(w.startSyncing(1000), "DAEMON_ERROR", "startSyncing(1000) without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await w.stopSyncing();
+    await expectCode(u.stopSyncing(1), "INVALID_CONFIG", "stopSyncing with an argument", notes, "FIELD_TYPE");
+    // closed wallets
+    await w.close();
+    expect(w.getListeners().length === 0 && Object.isFrozen(w.getListeners()), "no listener after close");
+    for (const [what, call] of [["addListener", () => w.addListener(A)], ["removeListener", () => w.removeListener(A)], ["sync(listener)", () => w.sync(A)], ["startSyncing", () => w.startSyncing()], ["stopSyncing", () => w.stopSyncing()]] as const) {
+      await expectCode(call(), "WALLET_CLOSED", what + " after close", notes);
+    }
+    // keys-only wallets
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy });
+    const native = await countNativeCalls(async () => {
+      for (const [what, call] of [["addListener", () => k.addListener(A)], ["removeListener", () => k.removeListener(A)], ["sync(listener)", () => k.sync(A)], ["sync(startHeight, listener)", () => k.sync(1, A)],
+        ["startSyncing", () => k.startSyncing()], ["stopSyncing", () => k.stopSyncing()]] as const) {
+        await expectCode(call(), "UNSUPPORTED_CAPABILITY", what + " of a keys-only wallet", notes, "KEYS_ONLY_DAEMON");
+      }
+    });
+    expect(k.getListeners().length === 0, "a keys-only wallet lists no listener");
+    if (!proxy) expect(native === 0, "no native call for the keys-only rejections: " + native);
+    await k.close();
+    notes.push(invalid + " invalid listeners and periods rejected; the four sync forms reach the core; keys-only and closed wallets rejected");
+  });
+
+  await check("C48", "Notification data (no request): the bridge's notification texts are read exactly (heights, amounts above 2^53, the fraction, absent fields absent, frozen outputs), an unknown progress text is replaced by \"Synchronizing\", malformed texts and the bridge's unreadable marker become NATIVE_ERROR/UNEXPECTED_RESULT; the worker data round trip is exact and malformed notification messages are MALFORMED_MESSAGE; in a proxied wallet a malformed message is not delivered and reaches onSyncError, a valid one is delivered, and nothing is delivered after close", async (notes) => {
+    const big = "18446744073709551615";
+    const texts: Array<[string, string]> = [
+      ["newBlock", JSON.stringify({ type: "newBlock", height: "911000" })],
+      ["syncProgress", JSON.stringify({ type: "syncProgress", height: "911000", startHeight: "910000", endHeight: "911001", percentDone: "1", message: "Synchronizing" })],
+      ["syncProgress, replaced text", JSON.stringify({ type: "syncProgress", height: "910000", startHeight: "910000", endHeight: "910003", percentDone: "0.33333333333333331", message: "" })],
+      ["balancesChanged", JSON.stringify({ type: "balancesChanged", balance: big, unlockedBalance: "0", assetType: "ZSD" })],
+      ["outputReceived, pool", JSON.stringify({ type: "outputReceived", amount: "9007199254740993", accountIndex: 0, subaddressIndex: 0, txHash: "ab".repeat(32) })],
+      ["outputSpent, summary", JSON.stringify({ type: "outputSpent", amount: "77", accountIndex: 4294967295, txHash: "cd".repeat(32), height: "907000", assetType: "ZPH" })]
+    ];
+    const parsed = texts.map(([, t]) => Notifications.parseBridgeNotification(t));
+    expect(parsed.every((n) => n.type !== "syncError" && Object.isFrozen(n)), "every valid text parses: " + parsed.map((n) => n.type).join(","));
+    const p1 = parsed[1] as { height: number; percentDone: number; message: string }, p2 = parsed[2] as { percentDone: number; message: string };
+    expect(p1.height === 911000 && p1.percentDone === 1 && p1.message === "Synchronizing" && p2.percentDone === 1 / 3 && p2.message === "Synchronizing", "heights, the fraction and the fixed text");
+    const b = parsed[3] as { balance: bigint };
+    expect(b.balance === BigInt(big), "amounts exact");
+    const pool = (parsed[4] as { output: F.ZephyrWalletOutput }).output, spent = (parsed[5] as { output: F.ZephyrWalletOutput }).output;
+    expect(pool.amount === BigInt("9007199254740993") && !("height" in pool) && !("assetType" in pool) && Object.isFrozen(pool), "a pool output without height and asset, frozen");
+    expect(spent.accountIndex === 4294967295 && !("subaddressIndex" in spent) && spent.assetType === "ZPH" && spent.height === 907000, "a spent summary without subaddress");
+    let rejected = 0;
+    const unexpectedOf = (t: unknown) => { const n = Notifications.parseBridgeNotification(t); return n.type === "syncError" && n.error.code === "NATIVE_ERROR" && n.error.diagnostic === "UNEXPECTED_RESULT"; };
+    for (const [what, t] of [["the unreadable marker", "{\"type\":\"unreadable\"}"], ["an extra field", JSON.stringify({ type: "newBlock", height: "1", x: 1 })], ["a height above 2^53", JSON.stringify({ type: "newBlock", height: "9007199254740993" })],
+      ["a height as a number", JSON.stringify({ type: "newBlock", height: 1 })], ["a fraction above 1", JSON.stringify({ type: "syncProgress", height: "1", startHeight: "1", endHeight: "2", percentDone: "1.5", message: "Synchronizing" })],
+      ["a fraction NaN", JSON.stringify({ type: "syncProgress", height: "1", startHeight: "1", endHeight: "2", percentDone: "nan", message: "Synchronizing" })],
+      ["a height beyond the end", JSON.stringify({ type: "syncProgress", height: "5", startHeight: "1", endHeight: "2", percentDone: "1", message: "Synchronizing" })],
+      ["an amount above 2^64 - 1", JSON.stringify({ type: "balancesChanged", balance: "18446744073709551616", unlockedBalance: "0", assetType: "ZPH" })],
+      ["a lower-case asset", JSON.stringify({ type: "balancesChanged", balance: "1", unlockedBalance: "0", assetType: "zph" })],
+      ["an upper-case hash", JSON.stringify({ type: "outputReceived", amount: "1", txHash: "AB".repeat(32) })], ["an index above 2^32 - 1", JSON.stringify({ type: "outputSpent", amount: "1", accountIndex: 4294967296, txHash: "ab".repeat(32) })],
+      ["an unknown type", JSON.stringify({ type: "onReorg", height: "1" })], ["not JSON", "{type"], ["a number", 5]] as const) {
+      expect(unexpectedOf(t), what + " is NATIVE_ERROR/UNEXPECTED_RESULT");
+      rejected++;
+    }
+    // worker data
+    for (const n of parsed) {
+      const back = Notifications.fromNotificationMessage([JSON.parse(JSON.stringify(Notifications.toNotificationDto(n, "sync-7")))]);
+      expect(back.tag === "sync-7" && JSON.stringify(Notifications.toNotificationDto(back.notification, undefined)) === JSON.stringify(Notifications.toNotificationDto(n, undefined)), "round trip of " + n.type);
+    }
+    const errBack = Notifications.fromNotificationMessage([{ type: "syncError", error: { type: "ZephyrWalletError", code: "DAEMON_ERROR", diagnostic: "DAEMON_UNREACHABLE" } }]).notification as { type: string; error: F.ZephyrWalletError };
+    expect(errBack.type === "syncError" && errBack.error.code === "DAEMON_ERROR" && errBack.error.diagnostic === "DAEMON_UNREACHABLE", "a syncError envelope");
+    const dto = Notifications.toNotificationDto(parsed[1], undefined) as Record<string, unknown>;
+    class NotPlain { type = "newBlock"; height = "1"; }
+    for (const [what, args] of [["an extra field", [Object.assign({}, dto, { note: "MARKERextra" })]], ["a missing field", [{ type: "syncProgress", height: "1" }]], ["the fraction as text", [Object.assign({}, dto, { percentDone: "1" })]],
+      ["a fraction above 1", [Object.assign({}, dto, { percentDone: 1.5 })]], ["a height as a number", [{ type: "newBlock", height: 1 }]], ["a malformed tag", [{ type: "newBlock", height: "1", sync: "a b" }]],
+      ["a class instance", [new NotPlain()]], ["two arguments", [{ type: "newBlock", height: "1" }, 1]], ["an envelope with a message", [{ type: "syncError", error: { type: "ZephyrWalletError", code: "NATIVE_ERROR", message: "MARKERmsg" } }]],
+      ["an envelope with an invalid code", [{ type: "syncError", error: { type: "ZephyrWalletError", code: "NOPE" } }]], ["an array", [[1]]]] as const) {
+      try { Notifications.fromNotificationMessage(args as unknown as unknown[]); notes.push(what + ": accepted"); } catch (err) { expect(codeOf(err) === "MALFORMED_MESSAGE" && diagnosticOf(err) === "/MESSAGE_SHAPE", what + ": " + codeOf(err) + diagnosticOf(err)); rejected++; }
+    }
+    notes.push(rejected + " malformed texts and messages rejected");
+    expect(rejected === 25, "25 malformed texts and messages rejected, " + rejected);
+    if (!proxy) return;
+    // a proxied wallet: messages as the worker would post them, through the channel's own receive path
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: true });
+    const seen: string[] = [];
+    await w.addListener(recordingListener("L", seen));
+    const post = (dtoValue: unknown) => { const ch = channelOf(w); (ch.worker.onmessage as (e: { data: unknown }) => void)({ data: [walletIdOf(w), Notifications.NOTIFICATION_CALLBACK_ID, dtoValue] }); };
+    post({ type: "newBlock", height: "911000" });
+    post(Object.assign({}, Notifications.toNotificationDto(parsed[1], undefined), { note: "MARKERextra" }));
+    post({ type: "newBlock", height: "911001", sync: "sync-99" });
+    await sleep(50);
+    const got = recordsOf(seen, "L");
+    expect(got.join("|") === "block:911000|error:MALFORMED_MESSAGE/MESSAGE_SHAPE:true|block:911001", "a valid message delivered, a malformed one reported to onSyncError, an unknown tag to the added listeners: " + got.join("|"));
+    expect(!seen.join("|").includes("MARKER"), "nothing of a malformed message reaches a listener");
+    await w.close();
+    seen.length = 0;
+    try { post({ type: "newBlock", height: "911002" }); } catch (err) { /* a closed channel has no receive path */ }
+    await sleep(50);
+    expect(seen.length === 0, "nothing delivered after close");
+    notes.push("proxied: valid message delivered, malformed message reported to onSyncError and not delivered, nothing after close");
   });
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close

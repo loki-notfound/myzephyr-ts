@@ -25,6 +25,7 @@ import { checkTransferRequest, toBuildDto } from "./ZephyrTransferInternal";
 import { checkConversionRequest, toConversionDto } from "./ZephyrConversionInternal";
 import { checkRelayToken, toPreparedConversionDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelayInternal";
 import { toReserveInfoDto, toSupplyDto } from "./ZephyrReserveInternal";
+import { NOTIFICATION_CALLBACK_ID, ZephyrNotification, toNotificationDto } from "./ZephyrNotificationsInternal";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
 declare var self: any;
@@ -134,6 +135,21 @@ function walletOf(walletId: string): any {
   return self.WORKER_WALLETS.get(walletId).wallet; // existence and kind checked by the dispatcher
 }
 
+/**
+ * A full wallet of this worker posts each of its notifications to the wallet's owner as one message
+ * [walletId, NOTIFICATION_CALLBACK_ID, dto] (common/ZephyrNotificationsInternal.ts). The owner validates it like an error
+ * envelope; the worker never waits for it, so a slow listener of the owner does not slow the scan.
+ */
+function forwardNotifications(walletId: string, wallet: ZephyrWalletFull): void {
+  wallet.setNotificationSink((notification: ZephyrNotification, tag: string | undefined) => {
+    try {
+      postMessage([walletId, NOTIFICATION_CALLBACK_ID, toNotificationDto(notification, tag)]);
+    } catch (ignored) {
+      // a message that cannot be posted is lost; nothing unwinds into the core
+    }
+  });
+}
+
 /** Implementations of the table's worker methods; arguments are already validated. */
 type LifecycleImpl = (objectId: string, ...args: any[]) => Promise<unknown>;
 
@@ -145,6 +161,7 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   openWalletData: async (walletId: string, path: unknown, password: string, networkType: number, keysData: Uint8Array, cacheData: Uint8Array | undefined) => {
     const validated = validateOpenConfig({networkType, password, keysData, cacheData}); // path, daemon and regtest checked by the table
     const wallet = await ZephyrWalletFull.openWallet({networkType: validated.networkType, password: validated.password, keysData: validated.keysData, cacheData: validated.cacheData, proxyToWorker: false});
+    forwardNotifications(walletId, wallet);
     self.WORKER_WALLETS.set(walletId, {kind: "full", wallet});
   },
   createWalletFull: async (walletId: string, configJson: Record<string, unknown>) => {
@@ -152,6 +169,7 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
     const config = new ZephyrWalletConfig(configJson);
     config.setProxyToWorker(false);
     const wallet = await ZephyrWalletFull.createWallet(config);
+    forwardNotifications(walletId, wallet);
     self.WORKER_WALLETS.set(walletId, {kind: "full", wallet});
   },
   createWalletKeys: async (walletId: string, configJson: Record<string, unknown>) => {
@@ -187,7 +205,11 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
   getReserveInfo: async (walletId: string) => toReserveInfoDto(await walletOf(walletId).getReserveInfoChecked()),
   getCirculatingSupply: async (walletId: string) => toSupplyDto(await walletOf(walletId).getCirculatingSupplyChecked()),
   getHeight: async (walletId: string) => walletOf(walletId).getHeight(),
-  sync: async (walletId: string, startHeight: number | undefined) => ZephyrWalletFull.syncResultDto(await walletOf(walletId).sync(startHeight)),
+  sync: async (walletId: string, startHeight: number | undefined, tag: string | undefined) => ZephyrWalletFull.syncResultDto(await walletOf(walletId).syncChecked(startHeight, tag)),
+  // notifications and background synchronization: the arguments were validated by the table
+  setNotifications: async (walletId: string, enabled: boolean) => { await walletOf(walletId).setNotifying(enabled); },
+  startSyncing: async (walletId: string, periodMs: number) => { await walletOf(walletId).startSyncingChecked(periodMs); },
+  stopSyncing: async (walletId: string) => { await walletOf(walletId).stopSyncingChecked(); },
   getBalances: async (walletId: string, unlocked: boolean) => toAssetBalancesDto(await walletOf(walletId).getBalanceMap(unlocked)),
   getAccountBalances: async (walletId: string, unlocked: boolean, accountIdx: number) => toAccountBalancesDto(await walletOf(walletId).getAccountBalanceMap(unlocked, accountIdx)),
   getAssetBalance: async (walletId: string, unlocked: boolean, assetType: string, accountIdx: number, subaddressIdx: number | undefined) => (await walletOf(walletId).getAssetBalance(unlocked, assetType, accountIdx, subaddressIdx)).toString(),

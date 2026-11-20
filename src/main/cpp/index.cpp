@@ -7,8 +7,8 @@
 // register bindings from JS to C++ using emscripten
 EMSCRIPTEN_BINDINGS(module)
 {
-  // Supported wallet lifecycle, read-only daemon access, accounts and subaddresses, read-only
-  // history, the explicit pool refresh, building transactions and relaying a prepared build: only the bindings
+  // Supported wallet lifecycle, read-only daemon access with the core's wallet notifications, accounts and subaddresses,
+  // read-only history, the explicit pool refresh, building transactions and relaying a prepared build: only the bindings
   // below are exported. Every other inherited monero-ts binding is excluded together with its
   // definition in zephyr_wasm_bridge.cpp (ZEPHYR_WASM_BRIDGE_UNPORTED) until it is adapted to the
   // fixed core.
@@ -58,6 +58,7 @@ EMSCRIPTEN_BINDINGS(module)
   emscripten::function("set_restore_height_from_daemon", &zephyr_wasm_bridge::set_restore_height_from_daemon);
   emscripten::function("get_height", &zephyr_wasm_bridge::get_height);
   emscripten::function("sync", &zephyr_wasm_bridge::sync);
+  emscripten::function("set_notifications", &zephyr_wasm_bridge::set_notifications);
   emscripten::function("get_balance_wallet", &zephyr_wasm_bridge::get_balance_wallet);
   emscripten::function("get_unlocked_balance_wallet", &zephyr_wasm_bridge::get_unlocked_balance_wallet);
   emscripten::function("get_balance_account", &zephyr_wasm_bridge::get_balance_account);

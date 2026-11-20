@@ -277,6 +277,27 @@ export interface InstrumentationArm {
   readonly passwordThrow?: boolean;
   /** synthetic incoming pool records for refresh_pool of the test module (with fail["pool.core"] the core's selection is skipped) */
   readonly poolRecords?: ReadonlyArray<TestPoolRecord>;
+  /** the next sync of the test module is synthetic: no daemon, the notifications of these blocks (see TestSyntheticSync) */
+  readonly syntheticSync?: TestSyntheticSync;
+  /** keep the synthetic sync armed for every later sync (background iterations) until the next reset */
+  readonly syntheticSyncKeep?: boolean;
+}
+
+/**
+ * A synthetic sync of the test module (zephyr_wasm_bridge.cpp, test_synthetic_sync): the bridge listener gets, per block
+ * from start, the new block and the progress (percentDone (i + 1) / blocks, the message given, default "Synchronizing");
+ * with outputs a pool output before the blocks, a received output and a balance change at the second block and a spent
+ * output at the third; the sync yields every yieldEvery blocks and waits at the barrier "sync.synthetic" before block
+ * barrierAt. The result has numBlocksFetched = blocks.
+ */
+export interface TestSyntheticSync {
+  readonly blocks: number;
+  readonly start: number;
+  readonly yieldEvery?: number;
+  readonly barrierAt?: number;
+  readonly message?: string;
+  readonly outputs?: boolean;
+  readonly receivedMoney?: boolean;
 }
 
 /** Instrumentation driver; direct (same context) or worker (test worker messages). */
@@ -315,6 +336,8 @@ interface Hooks {
   barrier?: { point: string; entered?: boolean; released?: boolean };
   buffers?: { allocated: number; bytes: number; live: Record<string, number> };
   poolRecords?: ReadonlyArray<TestPoolRecord>;
+  syntheticSync?: TestSyntheticSync;
+  syntheticSyncKeep?: boolean;
 }
 
 /** A synthetic incoming pool record that refresh_pool of the test module adds to the core's selection. */
@@ -415,6 +438,8 @@ export class ModuleInstrumentation {
     if (arm.passwordResult !== undefined) this.passwordResult = { value: arm.passwordResult.value };
     if (arm.passwordThrow === true) this.passwordThrow = true;
     if (arm.poolRecords !== undefined) hooks.poolRecords = arm.poolRecords.map((r) => Object.assign({}, r));
+    if (arm.syntheticSync !== undefined) hooks.syntheticSync = Object.assign({}, arm.syntheticSync);
+    if (arm.syntheticSyncKeep !== undefined) hooks.syntheticSyncKeep = arm.syntheticSyncKeep;
   }
 
   release(): void {
@@ -437,6 +462,8 @@ export class ModuleInstrumentation {
     this.passwordResult = undefined;
     this.passwordThrow = false;
     hooks.poolRecords = undefined;
+    hooks.syntheticSync = undefined;
+    hooks.syntheticSyncKeep = false;
     this.calls = {};
     this.freed = 0;
     this.doubleFrees = 0;

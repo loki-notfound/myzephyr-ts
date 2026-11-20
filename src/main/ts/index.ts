@@ -56,7 +56,11 @@
  * The reserve and the oracle's prices: getReserveInfo and getCirculatingSupply on full wallets with a daemon,
  * and ZephyrDaemonRpc (the node's information, its height and block headers with their pricing record), with
  * the names and fields of the Java port; ZephyrDaemonRpc runs in the calling context on the same transport.
- * Not supported: listeners, background sync, outputs, sweeps, key images, rescans.
+ * Progress of a sync, listeners and background synchronization of full wallets, with the names and semantics of the
+ * Java port: sync(startHeight, listener), addListener, removeListener and getListeners with the six callbacks of
+ * ZephyrWalletListener (common/ZephyrNotifications.ts), startSyncing and stopSyncing; callbacks never run inside the core,
+ * and what they throw is dropped.
+ * Not supported: outputs, sweeps, key images, rescans.
  */
 export {
   ZephyrWallet,
@@ -88,6 +92,7 @@ export type { ZephyrTransferConfig, ZephyrTransferDestinationInput, ZephyrTransf
 export type { ZephyrConversionConfig, ZephyrConversionDestinationInput, ZephyrConversionBuild } from "./common/ZephyrConversion";
 export type { ZephyrPreparedTransfer, ZephyrPreparedConversion, ZephyrRelayResult, ZephyrRelayedTx, ZephyrRelayOutcome } from "./common/ZephyrRelay";
 export type { ZephyrReserveInfo } from "./common/ZephyrReserve";
+export type { ZephyrWalletListener, ZephyrWalletOutput } from "./common/ZephyrNotifications";
 export type { ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination, ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "./common/ZephyrHistory";
 export { ZephyrDaemonRpc } from "./daemon/ZephyrDaemonRpc";
 export type { ZephyrDaemonInfo, ZephyrBlockHeader, ZephyrPricingRecord } from "./daemon/ZephyrDaemonRpc";

@@ -14,6 +14,7 @@ import HttpClient from "../../main/ts/common/HttpClient";
 import ZephyrWalletFull from "../../main/ts/wallet/ZephyrWalletFull";
 import ZephyrWalletConfig from "../../main/ts/wallet/model/ZephyrWalletConfig";
 import { toEnvelope } from "../../main/ts/common/ZephyrWalletErrorMapping";
+import { busyWait, countingValue, expectedSynthetic, recordingListener, recordsOf, sleep, unhandledRejections } from "./NotificationChecks";
 
 /**
  * The construction functions and validateAddress with untyped arguments: these checks pass configurations
@@ -1259,6 +1260,258 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await hooks.resetCounters();
     await w.close();
   });
+
+  // ------------------------- listeners and background synchronization -------------------------
+  // The test module's synthetic sync (TestSyntheticSync) notifies the bridge listener as the core does, without a daemon.
+
+  const syntheticCount = (st: InstrumentationState) => st.events.filter((e) => e === "synthetic-sync").length;
+
+  await check("T25", "Notifications of a sync in the test module (synthetic sync, no request): the bridge's notifications reach every added listener and the per-sync listener in order with exact values (frozen outputs, absent fields absent, amounts above 2^53 exact); a listener added twice is kept once; a removed or a per-sync listener gets nothing later; the core's progress text outside the fixed set never reaches a callback (bridge and TypeScript layer); callbacks run outside the core (no WebAssembly frame on their stack); repeated syncs with a listener leave the allocator unchanged", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    await hooks.resetCounters();
+    const seen: string[] = [];
+    const A = recordingListener("A", seen), B = recordingListener("B", seen), P = recordingListener("P", seen);
+    await w.addListener(A); await w.addListener(B); await w.addListener(A);
+    const listed = w.getListeners();
+    expect(listed.length === 2 && listed[0] === A && listed[1] === B && Object.isFrozen(listed), "added once each, in order, as a frozen copy");
+    await hooks.arm({ syntheticSync: { blocks: 5, start: 1000, yieldEvery: 2, outputs: true, receivedMoney: true } });
+    const r = await w.sync(1000, P);
+    expect(r.numBlocksFetched === 5 && r.receivedMoney === true, "the synthetic result");
+    const want = expectedSynthetic(5, 1000, true);
+    for (const name of ["A", "B", "P"]) expect(recordsOf(seen, name).join("|") === want.join("|"), name + " got every notification in order: " + recordsOf(seen, name).slice(0, 4).join("|"));
+    expect(seen.slice(0, 3).map((e) => e.charAt(0)).join("") === "ABP", "each notification goes to the added listeners in order, then to the per-sync listener");
+    expect(!w.getListeners().includes(P), "the per-sync listener is not registered");
+    notes.push("synthetic sync of 5 blocks with outputs: " + want.length + " notifications to each of 2 added listeners and the per-sync listener, in order");
+    // a removed and a per-sync listener get nothing later; removing again rejects
+    seen.length = 0;
+    await w.removeListener(B);
+    await expectCode(w.removeListener(B), "INVALID_CONFIG", "removeListener of a listener not added", notes, "LISTENER_NOT_REGISTERED");
+    const marker = "MARKERcoretext" + randomPassword().substring(0, 8);
+    await hooks.arm({ syntheticSync: { blocks: 3, start: 2000, message: marker } });
+    await w.sync();
+    expect(recordsOf(seen, "B").length === 0 && recordsOf(seen, "P").length === 0, "no notification for a removed or a past per-sync listener");
+    const progress = recordsOf(seen, "A").filter((e) => e.startsWith("progress:"));
+    expect(progress.length === 3 && progress.every((e) => e.endsWith(":Synchronizing")) && !seen.join("|").includes("MARKER"), "a core text outside the fixed set is replaced in the bridge");
+    // the TypeScript layer replaces it too (the bridge of the test module writes it unfiltered with notify.raw)
+    seen.length = 0;
+    await hooks.arm({ fail: { "notify.raw": 3 }, syntheticSync: { blocks: 3, start: 3000, message: marker } });
+    await w.sync();
+    const raw = recordsOf(seen, "A").filter((e) => e.startsWith("progress:"));
+    let st = await hooks.state();
+    expect(st.events.filter((e) => e === "injected:notify.raw").length === 3, "the bridge wrote the core text unfiltered three times");
+    expect(raw.length === 3 && raw.every((e) => e.endsWith(":Synchronizing")) && !seen.join("|").includes("MARKER"), "the TypeScript layer replaces an unknown progress text");
+    notes.push("progress text outside the fixed set: replaced by the bridge, and by the TypeScript layer when the bridge passes it (3 of 3)");
+    // callbacks never run inside the core: no WebAssembly frame on their stack (V8 names wasm frames "wasm")
+    const stacks: string[] = [];
+    await hooks.arm({ syntheticSync: { blocks: 4, start: 4000, yieldEvery: 1 } });
+    await w.sync({ onNewBlock: () => { stacks.push(String(new Error().stack)); } });
+    expect(stacks.length === 4 && stacks.every((t) => !/wasm/i.test(t)), "no WebAssembly frame on a callback's stack (" + stacks.length + " callbacks)");
+    notes.push("callback stacks without a WebAssembly frame: " + stacks.length + " of 4");
+    // allocation: repeated synthetic syncs with a listener (after a warm-up)
+    const heapOf = async () => (await hooks.state()).heapInUse;
+    const one = async () => { await hooks.arm({ syntheticSync: { blocks: 3, start: 5000, outputs: true } }); await w.sync(); };
+    await one();
+    const deltas: number[] = [];
+    for (let i = 0; i < 3; i++) { const h0 = await heapOf(); await one(); deltas.push((await heapOf()) - h0); }
+    notes.push("allocator growth of 3 synthetic syncs with notifications: " + deltas.join(","));
+    expect(deltas.every((d) => d === 0), "notifications leave nothing in the module");
+    // the last listener removed: the bridge listener goes, a sync notifies nothing
+    await w.removeListener(A);
+    seen.length = 0;
+    await hooks.arm({ syntheticSync: { blocks: 2, start: 6000 } });
+    await w.sync();
+    expect(seen.length === 0 && w.getListeners().length === 0, "no listener, no notification");
+    st = await hooks.state();
+    expect(syntheticCount(st) >= 9, "the synthetic syncs ran");
+    await hooks.resetCounters();
+    await w.close();
+    expect(w.getListeners().length === 0, "no listener after close");
+  });
+
+  await check("T26", "A listener that throws, or returns a promise that rejects, changes nothing (synthetic sync, no request): the sync resolves with its result, the listeners after it get every notification, the throwing listener still gets the rest of each block's notifications, nothing reaches the caller or the process as an unhandled rejection, and the thrown values are never read", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    await hooks.resetCounters();
+    const counter = { reads: 0 };
+    const poison = countingValue(counter);
+    const calls: Record<string, number> = {};
+    const count = (name: string) => { calls[name] = (calls[name] ?? 0) + 1; };
+    const thrower: F.ZephyrWalletListener = {
+      onSyncProgress: () => { count("T.progress"); throw poison; }, onNewBlock: () => { count("T.block"); throw poison; },
+      onBalancesChanged: () => { count("T.balance"); throw poison; }, onOutputReceived: () => { count("T.received"); throw poison; },
+      onOutputSpent: () => { count("T.spent"); throw poison; }, onSyncError: () => { count("T.error"); throw poison; }
+    };
+    const rejecter: F.ZephyrWalletListener = {
+      onSyncProgress: () => Promise.reject(poison) as unknown as void, onNewBlock: async () => { count("R.block"); throw poison; },
+      onBalancesChanged: () => Promise.reject(poison) as unknown as void, onOutputReceived: async () => { throw poison; }, onOutputSpent: async () => { throw poison; }
+    };
+    const seen: string[] = [];
+    const C = recordingListener("C", seen);
+    const unhandled = unhandledRejections();
+    try {
+      await w.addListener(thrower); await w.addListener(rejecter); await w.addListener(C);
+      await hooks.arm({ syntheticSync: { blocks: 5, start: 1000, yieldEvery: 2, outputs: true, receivedMoney: true } });
+      const r = await w.sync(1000, thrower);
+      await sleep(300); // unhandled rejections are reported after the microtask queue drains
+      expect(r.numBlocksFetched === 5 && r.receivedMoney === true, "the sync resolved with its result");
+      expect(recordsOf(seen, "C").join("|") === expectedSynthetic(5, 1000, true).join("|"), "the listener after the throwing ones got every notification");
+      expect(calls["T.block"] === 5 && calls["T.progress"] === 5 && calls["R.block"] === 5, "the throwing listener got each block's progress after its throwing onNewBlock (once: it is also the per-sync listener)");
+      expect(calls["T.received"] === 2 && calls["T.spent"] === 1 && calls["T.balance"] === 1, "and every other notification");
+      expect(unhandled.count() === 0, "no unhandled rejection: " + unhandled.count());
+      expect(counter.reads === 0, "the thrown and rejected values were never read: " + counter.reads);
+      notes.push("throwing and rejecting listeners: sync resolved (5 blocks), the next listener got " + recordsOf(seen, "C").length + " notifications, the thrower " + calls["T.progress"] + " progress calls after 5 throwing block calls, unhandled rejections 0, reads of the thrown value 0");
+    } finally {
+      unhandled.stop();
+    }
+    await hooks.resetCounters();
+    await w.close();
+  });
+
+  await check("T27", "Background synchronization in the test module (synthetic syncs, no request): without a daemon startSyncing rejects DAEMON_ERROR/DAEMON_NOT_CONNECTED; iterations run each period and notify the added listeners; a call made while an iteration runs waits for it; an iteration does not start while another call runs; stopSyncing resolves after the running iteration and no iteration follows; a failed iteration reaches onSyncError with its fixed code and the loop goes on", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    await hooks.resetCounters();
+    await expectCode(w.startSyncing(1000), "DAEMON_ERROR", "startSyncing without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await hooks.arm({ fail: { "daemon.offline": 1 } }); // the bridge keeps the address from the core: no connection check, no request
+    await w.setDaemonConnection("http://127.0.0.1:9");
+    const seen: string[] = [];
+    const L = recordingListener("L", seen);
+    await w.addListener(L);
+    const blocks = () => recordsOf(seen, "L").filter((e) => e.startsWith("block:")).length;
+    await hooks.arm({ syntheticSync: { blocks: 2, start: 5000 }, syntheticSyncKeep: true });
+    const t0 = Date.now();
+    await w.startSyncing(1000);
+    expect(await waitUntil(() => blocks() >= 6, 8000), "three iterations (" + blocks() / 2 + ") within 8 s");
+    notes.push("iterations at a period of 1 s: " + blocks() / 2 + " in " + (Date.now() - t0) + " ms, each notifying its 2 blocks");
+    // a call made while an iteration runs waits for it; stopSyncing resolves after it, and no iteration follows
+    await hooks.arm({ barrier: "sync.synthetic", syntheticSync: { blocks: 2, start: 6000, barrierAt: 1 }, syntheticSyncKeep: true });
+    expect(await hooks.waitBarrierEntered(5000), "an iteration entered the barrier");
+    const order: string[] = [];
+    const height = w.getHeight().then(() => { order.push("height"); }, (err) => { order.push("height-" + codeOf(err)); });
+    const stopping = w.stopSyncing().then(() => { order.push("stopped"); }, (err) => { order.push("stop-" + codeOf(err)); });
+    await sleep(400);
+    expect(order.length === 0, "neither the call nor stopSyncing settled while the iteration runs: " + order.join(","));
+    order.push("released");
+    await hooks.release();
+    await height; await stopping;
+    expect(order[0] === "released" && order.includes("height") && order.includes("stopped"), "both settled after the iteration: " + order.join(","));
+    let st = await hooks.state();
+    const afterStop = syntheticCount(st);
+    await sleep(2500);
+    st = await hooks.state();
+    expect(syntheticCount(st) === afterStop, "no iteration after stopSyncing resolved (" + syntheticCount(st) + " = " + afterStop + ")");
+    notes.push("a call during an iteration and stopSyncing settled after it: " + order.join(" > ") + "; iterations in the 2.5 s after the stop: 0");
+    // a failed iteration reaches onSyncError (no text), and the loop goes on
+    await hooks.resetCounters();
+    seen.length = 0;
+    await hooks.arm({ fail: { "error.sync": 1 }, syntheticSync: { blocks: 1, start: 7000 }, syntheticSyncKeep: true });
+    await w.startSyncing(1000);
+    expect(await waitUntil(() => recordsOf(seen, "L").some((e) => e.startsWith("block:")), 6000), "an iteration after the failure");
+    await w.stopSyncing();
+    const errors = recordsOf(seen, "L").filter((e) => e.startsWith("error:"));
+    expect(errors.length === 1 && errors[0] === "error:NATIVE_ERROR/SYNC_FAILED:true", "the failed iteration reached onSyncError: " + errors.join(","));
+    expect(recordsOf(seen, "L").indexOf(errors[0]) < recordsOf(seen, "L").findIndex((e) => e.startsWith("block:")), "the loop went on after the failure");
+    expect(!seen.join("|").includes("injected"), "no injected text in what the listener got");
+    notes.push("a failed iteration: onSyncError NATIVE_ERROR/SYNC_FAILED, then the next iteration notified its block");
+    // an iteration does not start while another call runs
+    await hooks.resetCounters();
+    await hooks.arm({ barrier: "change_password", syntheticSync: { blocks: 1, start: 8000 }, syntheticSyncKeep: true });
+    const changing = w.changePassword(pw, pw);
+    expect(await hooks.waitBarrierEntered(5000), "a password change waits at the barrier");
+    await w.startSyncing(1000);
+    await sleep(500);
+    st = await hooks.state(false);
+    expect(syntheticCount(st) === 0, "no iteration started while the password change runs");
+    await hooks.release();
+    await changing;
+    expect(await waitUntil(() => recordsOf(seen, "L").filter((e) => e.startsWith("block:8000")).length >= 1, 6000), "the iteration ran after the call");
+    await w.stopSyncing();
+    notes.push("a running password change held the first iteration until it settled");
+    await expectCode(w.startSyncing(999), "INVALID_CONFIG", "startSyncing(999)", notes, "SYNC_PERIOD");
+    await hooks.resetCounters();
+    await w.close();
+  });
+
+  await check("T28", "Close and terminate while a background iteration runs (synthetic syncs, no request): close stops the loop, waits for the running iteration and then closes natively once; the listeners get nothing after close was called and no iteration follows; terminate (proxied wallets) ends the worker at once and every pending call rejects WALLET_CLOSED/WALLET_TERMINATED; direct mode rejects terminate with UNSUPPORTED_CAPABILITY/TERMINATE", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "daemon.offline": 1 } });
+    await w.setDaemonConnection("http://127.0.0.1:9");
+    const seen: string[] = [];
+    await w.addListener(recordingListener("L", seen));
+    await hooks.arm({ barrier: "sync.synthetic", syntheticSync: { blocks: 3, start: 9000, barrierAt: 1 }, syntheticSyncKeep: true });
+    await w.startSyncing(1000);
+    expect(await hooks.waitBarrierEntered(5000), "the first iteration entered the barrier");
+    const order: string[] = [];
+    const atClose = seen.length;
+    const closing = w.close().then(() => { order.push("closed"); }, (err) => { order.push("close-" + codeOf(err)); });
+    await sleep(400);
+    let st = await hooks.state(false);
+    expect(order.length === 0 && (st.nativeCalls.close ?? 0) === 0 && (await hooks.handlePresent(w)), "close waits for the running iteration; no native close yet");
+    order.push("released");
+    await hooks.release();
+    await closing;
+    st = await hooks.state(false);
+    expect(order.join(",") === "released,closed", "close settled after the iteration: " + order.join(","));
+    expect((st.nativeCalls.close ?? 0) === 1, "native close exactly once");
+    expect(seen.length === atClose, "no notification after close was called (" + (seen.length - atClose) + ")");
+    expect(syntheticCount(st) === 1, "no iteration after the running one: " + syntheticCount(st));
+    notes.push("close during an iteration: " + order.join(" > ") + "; native close 1; notifications after close 0; iterations 1");
+    if (!proxy) {
+      const d = await open();
+      await expectCode(d.terminate(), "UNSUPPORTED_CAPABILITY", "terminate in direct mode", notes, "TERMINATE");
+      await d.close();
+      return;
+    }
+    const t = await open();
+    await hooks.target(t);
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "daemon.offline": 1 } });
+    await t.setDaemonConnection("http://127.0.0.1:9");
+    const tseen: string[] = [];
+    await t.addListener(recordingListener("L", tseen));
+    await hooks.arm({ barrier: "sync.synthetic", syntheticSync: { blocks: 3, start: 9100, barrierAt: 1 }, syntheticSyncKeep: true });
+    await t.startSyncing(1000);
+    expect(await hooks.waitBarrierEntered(5000), "the iteration entered the barrier");
+    const pendingHeight = t.getHeight().then(() => "fulfilled", (err) => codeOf(err) + diagnosticOf(err));
+    const pendingStop = t.stopSyncing().then(() => "fulfilled", (err) => codeOf(err) + diagnosticOf(err));
+    const before = tseen.length;
+    const t1 = Date.now();
+    await t.terminate();
+    const ms = Date.now() - t1;
+    const outcomes = [await pendingHeight, await pendingStop];
+    await t.close();
+    await sleep(300);
+    expect(outcomes.every((o) => o === "WALLET_CLOSED/WALLET_TERMINATED"), "pending calls reject WALLET_CLOSED/WALLET_TERMINATED: " + outcomes.join(","));
+    expect(tseen.length === before && t.isClosed(), "no notification after terminate; closed");
+    const last = hooks.started()[hooks.started().length - 1];
+    expect(last !== undefined && last.terminated, "the wallet's worker was terminated");
+    notes.push("terminate during an iteration: resolved in " + ms + " ms, pending calls " + outcomes.join(","));
+  });
+
+  await check("T29", "A blocked owner (proxied wallets): the worker posts each notification without waiting; while the owner's event loop is blocked the notifications queue in order and are all delivered when it unblocks, before the sync resolves; a slow listener does not hold the scan", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    await hooks.resetCounters();
+    const seen: string[] = [];
+    let slowMs = 0;
+    await w.addListener(recordingListener("L", seen));
+    await w.addListener({ onNewBlock: () => { const t = Date.now(); busyWait(2); slowMs += Date.now() - t; } });
+    await hooks.arm({ syntheticSync: { blocks: 400, start: 10000, yieldEvery: 50 } });
+    const t0 = Date.now();
+    const syncing = w.sync();
+    busyWait(1500); // the owner's event loop is blocked while the worker scans
+    const r = await syncing;
+    const total = Date.now() - t0;
+    const blockRecords = recordsOf(seen, "L").filter((e) => e.startsWith("block:"));
+    const inOrder = blockRecords.every((e, i) => e === "block:" + (10000 + i));
+    expect(r.numBlocksFetched === 400 && blockRecords.length === 400 && inOrder && recordsOf(seen, "L").length === 800, "every notification delivered in order after the block: " + blockRecords.length);
+    notes.push("400 blocks: 800 notifications delivered in order after a 1,500 ms block of the owner; the slow listener spent " + slowMs + " ms; sync resolved after " + total + " ms");
+    await hooks.resetCounters();
+    await w.close();
+  }, proxy);
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
