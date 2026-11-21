@@ -1,8 +1,8 @@
 # 6. History
 
 A full wallet lists its transactions and transfers per asset. This chapter explains what a listing
-returns, the query and its filters, paging, incoming transfers in the pool and what a conversion
-looks like.
+returns, the query and its filters, paging, incoming transfers in the pool, what a conversion
+looks like, and the payment proofs and transaction keys a wallet can give for its transactions.
 
 ## Reading the history
 
@@ -67,8 +67,8 @@ incoming transfer: the core counts it with the account's change, and it stays in
 balance. An amount received at the sending account in another asset, such as a conversion's minted
 amount, is listed as incoming.
 
-Not returned: transaction notes, payment identifiers, outputs, key images, transaction keys and
-proofs.
+Not returned: transaction notes, payment identifiers, outputs and key images. Transaction keys and
+proofs have their own calls ([Proofs and transaction keys](#proofs-and-transaction-keys)).
 
 ## The query
 
@@ -202,3 +202,120 @@ for (const tx of await wallet.getTxs({ direction: "outgoing" })) {
 
 On the four conversions relayed on mainnet on 2026-11-15, the amount equalled the burnt amount and
 the fee the fee charged, and the minted amount was received as described.
+
+## Proofs and transaction keys
+
+A payment proof lets someone who does not have your wallet check a payment: an explorer, a shop or a
+support desk. The names are the Java port's:
+
+| Call | Result | Made with |
+|---|---|---|
+| `getTxProof(txHash, address, message?)` | `"OutProofV2..."` when the address is another wallet's, `"InProofV2..."` when it is one of this wallet's | the transaction's secret key (outbound), the view key (inbound) |
+| `getSpendProof(txHash, message?)` | `"SpendProofV1..."` | the spend key of the inputs the wallet spent |
+| `getTxKey(txHash)` | the transaction's secret key: 64 hexadecimal characters, more for a transaction with additional keys | the wallet's cache |
+
+```ts
+declare const txHash: string;            // a transaction this wallet sent
+declare const shopAddress: string;       // the address it paid
+
+const proof = await wallet.getTxProof(txHash, shopAddress, "order 1234");
+// give the shop the transaction hash, the proof and the message; it checks them with a proof checker
+console.log(proof.startsWith("OutProofV2"), proof.length);
+const spent = await wallet.getSpendProof(txHash, "order 1234");
+console.log(spent.startsWith("SpendProofV1"));
+```
+
+**What a proof shows.** A transaction proof shows that the transaction paid the address: a checker
+with the transaction hash, the address and the same message finds the outputs that went to the
+address and their amounts, per asset. It does not show who controls the address or who sent the
+transaction. The message ties the proof to something, such as an order number; a checker given
+another message rejects the proof. A spend proof shows that the maker of the proof spent the
+transaction's inputs, without an address or an amount. Anyone who holds a proof can check it, so a
+proof given away reveals what it proves.
+
+**Outbound or inbound.** The core decides by the address. For an address of another wallet it makes
+an outbound proof with the transaction's secret key: only the wallet that sent the transaction can
+make it. For an address of this wallet (any subaddress, also one the wallet watches but has not
+created yet) it makes an inbound proof with the view key: the receiver proves what it received. A
+payment a wallet sent to one of its own addresses therefore gives an inbound proof.
+
+**The transaction key.** `getTxKey` returns the secret key itself. With it, anyone who also knows
+the transaction can see what it paid to any address, so it is a secret like the private keys. Prefer
+a proof, which is bound to one address and a message.
+
+**Where keys and proofs come from.** The transaction's secret key exists only in the cache of the
+wallet that sent the transaction. A wallet restored from its seed, or opened from bytes saved before
+the send, has no key for it: `getTxKey` and an outbound proof reject with
+`INVALID_CONFIG`/`TX_KEY_UNAVAILABLE`. Save the wallet after `relayPrepared` resolves
+([When to save](02-wallets.md#when-to-save)): the key, like the record of the sent transaction, is
+in the bytes you save then. An inbound proof and a spend proof need only the wallet's keys and its
+synced history, so a restored wallet can make them.
+
+**Before any request** the library checks with the wallet's own records:
+
+| Case | Rejects with |
+|---|---|
+| the wallet does not hold the transaction | `INVALID_CONFIG`/`TX_NOT_FOUND` |
+| the wallet holds it as failed (no daemon has it) | `INVALID_CONFIG`/`TX_FAILED` |
+| the address received nothing in it (no output or incoming transfer of the wallet there, no destination of its outgoing transfer) | `INVALID_CONFIG`/`ADDRESS_NOT_IN_TX` |
+| an outbound proof or `getTxKey` without the transaction's key | `INVALID_CONFIG`/`TX_KEY_UNAVAILABLE` |
+| a spend proof of a transaction the wallet spent nothing in | `INVALID_CONFIG`/`TX_NOT_SENT` |
+| a spend proof of a view-only wallet | `UNSUPPORTED_CAPABILITY`/`VIEW_ONLY_PROOF` |
+| a keys-only wallet | `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_PROOF` |
+
+The address is checked with the core's parser for the wallet's network (`INVALID_ADDRESS`); give the
+standard address of an integrated address (`UNSUPPORTED_CAPABILITY`/`INTEGRATED_ADDRESS`). A message
+is at most 1,024 bytes in UTF-8, without U+0000 or an unpaired surrogate (`INVALID_CONFIG`/
+`PROOF_MESSAGE`), so that a checker can reproduce the bytes that were signed. `getTxKey` sends no
+request. `getTxProof` asks the daemon for the transaction (`/gettransactions`), `getSpendProof` for
+the transaction and the ring members of its inputs (`/get_outs.bin`); failures reject with
+`DAEMON_ERROR`. A result is returned only in the form the core writes, and it never appears in an
+error. The check of the wallet's records uses the core's listing of the history, with its memory
+cost ([Paging](#paging)): one listing call for a confirmed transaction, two otherwise.
+
+```ts run
+import { createRandomWallet, createKeysWallet, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
+
+const wallet = await createRandomWallet({ networkType: "mainnet", password: "a long passphrase" });
+const other = await createKeysWallet({ networkType: "mainnet" });
+const elsewhere = await other.getPrimaryAddress();
+await other.close();
+
+async function expectRejection(call: () => Promise<unknown>, label: string): Promise<void> {
+  try {
+    await call();
+  } catch (err) {
+    if (!(err instanceof ZephyrWalletError)) throw err;
+    console.log(label, err.code, err.diagnostic);
+    return;
+  }
+  throw new Error(label + " resolved");
+}
+const unknown = "00".repeat(32);
+await expectRejection(() => wallet.getTxKey(unknown), "key of an unknown transaction:");
+await expectRejection(() => wallet.getTxProof(unknown, elsewhere, "order 1234"), "proof of an unknown transaction:");
+await expectRejection(() => wallet.getSpendProof(unknown), "spend proof of an unknown transaction:");
+await expectRejection(() => wallet.getTxProof(unknown, elsewhere, "\ud800"), "message with an unpaired surrogate:");
+await expectRejection(() => wallet.checkTxProof(), "checking a proof:");
+await wallet.close();
+```
+
+### Why the library does not check proofs
+
+The core has check functions, but they cannot confirm a Zephyr payment. `checkTxKey` and
+`checkTxProof` report a received amount of 0 for every current transaction: the core reads the
+amount of the V1 asset `ZEPH` only, and since hard fork 11 (height 536,000) no output is `ZEPH`.
+`checkTxKey` also reports a good result whenever it does not fail, even when the transaction paid
+nothing to the address. So `checkTxKey`, `checkTxProof` and `checkSpendProof` reject with
+`UNSUPPORTED_CAPABILITY`/`PROOF_CHECK`. Checking is the task of a separate checker, which reads the
+amounts per asset. Your own wallet does not need a proof: it reads a payment from its history, where
+every transfer carries its asset ([Transfers](#transfers)).
+
+The core's transaction proof itself would also be made for an address that received nothing (its
+check that funds were received does not refuse that case); the library refuses it before the core
+runs (`ADDRESS_NOT_IN_TX`), from the wallet's records.
+
+The forms and every refusal are tested offline. Proofs of real transactions are made and checked
+on copies of the funded test wallet, whose transactions all paid the wallet's own addresses: they
+give inbound proofs, so an outbound proof on real data is not proven yet
+([chapter 12](12-known-limitations.md)).

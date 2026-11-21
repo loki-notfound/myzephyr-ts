@@ -15,7 +15,7 @@ describes version `2.3.0-sec.2-ts.1`.
 | [3. Connecting to a daemon](03-connecting-to-a-daemon.md) | address forms, the transport, trust, CORS and the same-origin proxy, synchronizing, heights |
 | [4. Syncing and listeners](04-syncing-and-listeners.md) | the four forms of a sync, its progress, listeners and their callbacks, where they run and what a throwing one does, background synchronization, closing a wallet that syncs |
 | [5. Assets, accounts and balances](05-assets-and-balances.md) | the four assets, amounts in atomic units, balance maps, accounts and subaddresses, labels |
-| [6. History](06-history.md) | transactions and transfers per asset, the query, paging, the pool refresh, conversions in the history |
+| [6. History](06-history.md) | transactions and transfers per asset, the query, paging, the pool refresh, conversions in the history, payment proofs and transaction keys |
 | [7. Sending](07-sending.md) | building to inspect, preparing and relaying, what to show, fees and priorities, every relay outcome, saving, sweeping |
 | [8. Conversions](08-conversions.md) | the six pairs, the reserve ratio, the reserve info, the supply and the pricing record, burnt and minted amounts, the pricing record and its age |
 | [9. Errors](09-errors.md) | the error class, codes and diagnostics, the codes a wallet must handle |

@@ -39,7 +39,10 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
   constructed records only);
 - how a locked balance appears in the balance maps;
 - the core's "not enough" failures, too few ring members and an oversized transaction (tested with
-  injected failures only).
+  injected failures only);
+- an outbound proof (`OutProofV2`) of a real transaction: the funded test wallet's transactions all paid
+  its own addresses, which give inbound proofs; a failed daemon request of a proof (tested with injected
+  failures only).
 
 ## The daemon
 
@@ -83,7 +86,20 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
 
 - A listing reads what the last sync and the last `refreshPool` stored; incoming pool transfers appear
   only after `refreshPool`, an explicit daemon request.
-- Not returned: notes, payment identifiers, outputs, key images, transaction keys and proofs.
+- Not returned: notes, payment identifiers, outputs and key images.
+
+## Proofs and transaction keys
+
+- The library makes proofs (`getTxProof`, `getSpendProof`) and gives transaction keys (`getTxKey`); it does
+  not check them: the core's checks report a received amount of 0 for every current transaction, so
+  `checkTxKey`, `checkTxProof` and `checkSpendProof` reject with `PROOF_CHECK`
+  ([Why the library does not check proofs](06-history.md#why-the-library-does-not-check-proofs)).
+- A transaction's secret key exists only in the cache of the wallet that sent it: a wallet restored from
+  its seed, or from bytes saved before the send, cannot give the key or an outbound proof.
+- The core's transaction proof does not refuse an address that received nothing; the library refuses it
+  from the wallet's records (`ADDRESS_NOT_IN_TX`), so a payment the records do not show (the change of an
+  own transaction that is still in the pool) is refused until the transaction is confirmed.
+- A transaction key and a proof are secrets of what they prove: anyone who holds one can check it.
 - The core reports no fee asset; `feeAsset` is the asset of the outgoing transfer.
 - An amount sent to the sending account in the source asset is not listed as incoming.
 - Every listing walks the whole stored history in the core, and each listing call keeps 944 bytes the
@@ -96,7 +112,9 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
   addresses, payment identifiers, unlock times or "subtract the fee from a destination".
 - A sweep always names its account (the Java port's `sweepUnlocked` without one sweeps every account) and
   leaves outputs worth less than the fee of spending them where they are.
-- With the default priority the core chooses the fee tier and may take the second tier.
+- With the default priority the core chooses the fee tier and may take the second tier; when its reads of
+  the pool backlog or the recent block headers fail it takes the first tier (in 2.3.0-sec.2-ts.1 such a failed read
+  rejected the build with `DAEMON_ERROR`).
 - The library computes no conversion rate. The reserve ratio decides at build time which pairs are
   possible, and the chain checks it again at inclusion; a pricing record older than 10 blocks at
   inclusion makes the chain reject a conversion.

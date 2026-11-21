@@ -9,10 +9,36 @@ Not released yet: the package version in the repository is still `2.3.0-sec.2-ts
 of that name does not contain these changes. They make the shipped declarations say what the library
 does, remove internal members and names from them, remove the unsupported wallet RPC client from the
 package, and add the reserve, the circulating supply, a supported daemon client, the progress of a sync,
-listeners and background synchronization with the names of the Java port, and sweeping the unlocked balance of
-an account; apart from the additions, the diagnostics and the keys-only `server: ""` below, the library behaves
-as before. `zephyr.wasm` changes (two bindings for the reserve, one for the core's wallet notifications, two for
-sweeps).
+listeners and background synchronization with the names of the Java port, sweeping the unlocked balance of
+an account, and payment proofs and transaction keys; apart from the additions, the diagnostics, the keys-only
+`server: ""` and the fee tier fallback below, the library behaves as before. `zephyr.wasm` changes (two bindings
+for the reserve, one for the core's wallet notifications, two for sweeps, three for proofs and transaction keys,
+and the core's fee tier fallback on the exception whitelist).
+
+### Payment proofs and transaction keys
+
+New on `ZephyrWallet`, for full wallets, with the names of the Java port: `getTxKey(txHash)`, `getTxProof(txHash,
+address, message?)` and `getSpendProof(txHash, message?)`, each resolving with a string (an `OutProofV2` or
+`InProofV2`, a `SpendProofV1`, the transaction key). New diagnostics `KEYS_ONLY_PROOF` and `VIEW_ONLY_PROOF`
+(`UNSUPPORTED_CAPABILITY`), `PROOF_MESSAGE`, `TX_FAILED`, `TX_KEY_UNAVAILABLE`, `ADDRESS_NOT_IN_TX` and
+`TX_NOT_SENT` (`INVALID_CONFIG`), `PROOF_FAILED` (`NATIVE_ERROR`); `TX_NOT_FOUND`, `TX_HASH`, `INTEGRATED_ADDRESS` and
+`ADDRESS_NETWORK` are reported by these calls too. New rejecting members `checkTxKey()`, `checkTxProof()` and
+`checkSpendProof()` (`UNSUPPORTED_CAPABILITY`/`PROOF_CHECK`: the core's checks report amount 0), so that a port
+finds them. Guide chapter 6, "Proofs and transaction keys".
+
+What to change: nothing; new calls.
+
+### The default priority falls back to the first tier when the core's reads fail
+
+At the default priority the core reads the pool's backlog and the recent block headers to choose the fee tier,
+and keeps the first tier when a read fails (`wallet2::adjust_priority`). In the module that fallback was not
+active, so a failed read rejected the whole build (`buildTransfer`, `buildConversion`, `buildSweepUnlocked` and
+their prepare calls) with `DAEMON_ERROR`, unlike a native build and unlike what README and the guide said. Now the
+build goes on with the first tier and ends with its own result: a build, or the build's own refusal (for example
+`TX_NOT_POSSIBLE`/`NOT_ENOUGH_MONEY`). Explicit priorities are unchanged; they make neither read.
+
+What to change: code that treated `DAEMON_ERROR` from a build at the default priority as "the daemon cannot give a
+fee tier" gets a build or the build's own refusal instead.
 
 ### Sweeping the unlocked balance of an account
 

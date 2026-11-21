@@ -151,8 +151,8 @@ that wallet's worker.
   equalled the burnt amount and the fee the fee charged. `conversion` is derived from the outgoing
   transfer's asset and its destinations' asset and amounts.
 * Not returned: transaction notes, payment identifiers, outputs and their assets (the core does not
-  store the asset of an output), key images, transaction keys and proofs (`checkTxKey` reads zero
-  amounts in this core).
+  store the asset of an output) and key images. Transaction keys and proofs: see "Payment proofs and
+  transaction keys" below.
 * A destination address is the text the sending wallet stored; it is returned only if it has the
   form of an address (else the field is absent) and is otherwise untrusted.
 * Cost: every listing walks all of the wallet's stored transfers in the core (the height range
@@ -180,7 +180,12 @@ that wallet's worker.
   `wallet2::create_transactions_2` with `calculate_fee_from_weight`). For a same-asset transfer the core
   does not convert it, so the fee has the same number of atomic units in every asset for the same weight.
   The tier of the estimate follows the priority; with `"default"` the core chooses it (README,
-  `priority`). Observed on mainnet with one input and two outputs at the default priority: 200,000 atomic
+  `priority`). When the core's reads of the pool backlog or the recent block headers fail at the default
+  priority it keeps the first tier and the build goes on (`wallet2::adjust_priority`, whose own catch the
+  module keeps on its exception whitelist; in 2.3.0-sec.2-ts.1 it did not, and such a read rejected the build
+  with `DAEMON_ERROR`). Proven against a constructed daemon whose backlog or header read fails: transfers,
+  conversions and sweeps without funds end with the refusal the same build gets at an explicit priority;
+  the tier itself shows only in a built transaction's fee and is read in the core's code. Observed on mainnet with one input and two outputs at the default priority: 200,000 atomic
   units per byte of weight, about 0.000307 to 0.000309 in each of ZPH, ZSD, ZRS and ZYS (built on
   2026-11-13; charged on 2026-11-15 in ZPH, ZSD and ZRS), 0.000427 with two destinations (built) and
   0.0005628 with two destinations and two inputs (charged). Once in the nine relayed transactions of 2026-11-15 the default
@@ -204,6 +209,42 @@ that wallet's worker.
 * Proven on real data (a funded test wallet, copies only, nothing relayed): one build per V2 asset
   to the wallet's own second account, one from that account back, two destinations, a repeated
   build, direct and proxied. What the network accepted is under "Relaying a prepared transaction".
+
+## Payment proofs and transaction keys
+
+* The library makes proofs and gives transaction keys (`getTxProof`, `getSpendProof`, `getTxKey`) through the
+  core's own functions (zephyr-cpp `monero_wallet_full::get_tx_proof`, `get_spend_proof`, `get_tx_key`; zephyr
+  `wallet2::get_tx_proof`, `get_spend_proof`); it does not check them. The core's `check_tx_key` and
+  `check_tx_proof` report the received amount of the V1 asset `ZEPH` only, so 0 for every current transaction,
+  and `check_tx_key` is good whenever it does not fail; `checkTxKey`, `checkTxProof` and `checkSpendProof`
+  therefore reject with `UNSUPPORTED_CAPABILITY`/`PROOF_CHECK`. A proof is checked by a separate checker.
+* The core chooses the kind of transaction proof by the address: an address in the wallet's subaddress table
+  (also a subaddress within the lookahead that was not created) gives an inbound proof made with the view key,
+  any other address an outbound proof made with the transaction's secret key. A payment the wallet sent to
+  itself gives an inbound proof.
+* The core's transaction proof does not refuse an address that received nothing (its check for received
+  funds runs over a map that is empty in that case). The library refuses such a proof before the core runs,
+  from the wallet's records: an output or an incoming transfer of the wallet at that address, or a destination
+  of the wallet's outgoing transfer paying it. A payment the records do not show yet, such as the change of an
+  own transaction still in the pool, is refused (`ADDRESS_NOT_IN_TX`) until the transaction is confirmed.
+* A transaction's secret key exists only in the cache of the wallet that sent it; a wallet restored from its
+  seed, or opened from bytes saved before the send, has none (`TX_KEY_UNAVAILABLE`). Inbound proofs and spend
+  proofs need only the wallet's keys and synced history.
+* A proof shows which outputs of the transaction went to the address and their amounts to whoever checks it,
+  not who controls the address; a spend proof shows that its maker spent the inputs. A transaction key shows
+  what the transaction paid to any address. Proofs and keys are returned as strings and are as secret as what
+  they show; the library never puts one into an error.
+* Requests: `getTxKey` none; `getTxProof` the transaction (`/gettransactions`); `getSpendProof` the transaction
+  and the ring members of each of its inputs (`/get_outs.bin`). The node learns which transaction the wallet
+  proves.
+* Memory: the check of the wallet's records uses the history's listing calls of the core (see History above): one
+  for a transaction the wallet holds as confirmed or failed, two otherwise, also when the call is refused; each keeps
+  944 bytes plus about 104 for the hash until the page, the process or the wallet's worker ends. The proofs' own
+  failure paths leave nothing (measured in the test module).
+* Tested offline: every refusal, every form, the core's failures injected as it throws them, the allocator
+  unchanged by every refusal. On real data proofs are made and checked on copies of the funded test wallet; its
+  transactions all paid its own addresses, so an outbound proof of a real transaction is not proven yet, nor is
+  a failed daemon request of a proof (injected only).
 
 ## Sweeping the unlocked balance of an account
 

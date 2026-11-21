@@ -105,6 +105,8 @@ must forward the wallet's requests itself; one that answers with a redirect fail
 * For `refreshPool`, also forward `/gettransactions`. For building a transfer or a conversion
   (`buildTransfer`, `buildConversion` and the two prepare calls), also forward
   `/get_output_distribution.bin` and `/get_outs.bin`. All three are read-only.
+* For `getTxProof`, also forward `/gettransactions`; for `getSpendProof`, `/gettransactions` and `/get_outs.bin`.
+  `getTxKey` sends no request.
 * For `getReserveInfo` and `getCirculatingSupply`, `/json_rpc` is enough (the methods are listed below). For
   `ZephyrDaemonRpc`, which runs in the page itself and not in a wallet worker, forward `POST /json_rpc` with the
   methods `get_info`, `get_block_count`, `get_last_block_header`, `get_block_header_by_height` and

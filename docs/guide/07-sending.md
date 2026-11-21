@@ -172,7 +172,8 @@ The priority chooses the tier of the daemon's fee estimate:
 
 With `"default"` the core takes the first tier, or the second tier when the pool holds a backlog at
 the first tier's fee or the last ten blocks fill more than 80 % of the full reward zone; when those
-reads fail, the first tier. A wallet whose keys file turns the automatic low priority off or stores
+reads fail, the first tier, and the build goes on (in 2.3.0-sec.2-ts.1 such a failed read rejected the
+build with `DAEMON_ERROR`). A wallet whose keys file turns the automatic low priority off or stores
 a default priority gets the first tier. So `"default"` is not always the cheapest tier: in the nine
 transactions relayed on mainnet on 2026-11-15 it took the second tier once. A wallet that wants the
 cheapest tier passes `"unimportant"`. Whatever the priority, the prepared description states the fee

@@ -27,10 +27,11 @@ are type-checked against the package and the offline ones are run (`bin/check_gu
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
 the read-only history of transactions and transfers, an explicit pool refresh, building same-asset
 transactions and conversions to inspect them, relaying a prepared transaction or conversion in two
-explicit steps, sweeping the unlocked balance of one asset in one account, the reserve, the circulating supply and the oracle's pricing record, and the progress of a sync,
-listeners and background synchronization, with the names of the Java port (below). Relay was proven on mainnet on 2026-11-15 for transfers in the four V2 assets
+explicit steps, sweeping the unlocked balance of one asset in one account, the reserve, the circulating supply and the oracle's pricing record, the progress of a sync,
+listeners and background synchronization, and payment proofs and transaction keys, with the names of the Java port (below). Relay was proven on mainnet on 2026-11-15 for transfers in the four V2 assets
 and four of the six conversions; its failure paths are proven against a local sink only.
-Sweeps are new in this version and checked offline only; a sweep has not been relayed on mainnet. Read
+Sweeps are new in this version and checked offline only; a sweep has not been relayed on mainnet. Payment proofs are new as well: the library makes
+them and does not check them, and an outbound proof of a real transaction is not proven yet. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 Which systems, runtimes and browsers are tested, automatically or by hand, is in
 [docs/PLATFORMS.md](docs/PLATFORMS.md).
@@ -117,6 +118,8 @@ The package entry (`src/main/ts/index.ts`) exports:
   `ZephyrWalletOutput`), `startSyncing(periodInMs?)` and `stopSyncing()`; callbacks never run inside the core,
   whatever they throw is dropped, a failed background iteration reaches `onSyncError`, and every call and iteration
   of a wallet goes through its one queue (guide chapter 4);
+* payment proofs and transaction keys for full wallets, with the names of the Java port: `getTxProof`,
+  `getSpendProof` and `getTxKey` (strings; below); `checkTxKey`, `checkTxProof` and `checkSpendProof` reject;
 * `validateAddress`, `ZephyrWalletError` (a fixed code and an optional fixed diagnostic; no
   native or daemon text, no secrets; the constructor, `code`, `diagnostic`, `isCode` and
   `isDiagnostic`), `setWorkerDistPath`, `setWasmModuleUrl` and `terminateWorker` (both setters
@@ -325,7 +328,8 @@ reject with `INVALID_CONFIG`/`UNKNOWN_FIELD`):
   (`wallet2::adjust_priority`, called by the wrapper's `create_txs`): while the wallet's automatic low
   priority is on and it stores no default priority (as for a wallet this library creates), the first
   tier, or the second tier when the pool holds a backlog at the first tier's fee or the last ten blocks
-  fill more than 80 % of the full reward zone; when those reads fail, the first tier. A wallet whose keys
+  fill more than 80 % of the full reward zone; when those reads fail, the first tier, and the build goes on
+  (in 2.3.0-sec.2-ts.1 such a failed read rejected the build with `DAEMON_ERROR`). A wallet whose keys
   file turns the automatic low priority off or stores a default priority gets the first tier (the stored
   priority is not applied on this path). So `"default"` is not always the cheapest tier: on mainnet on
   2026-11-15 it took the second tier once in nine transactions.
@@ -437,6 +441,51 @@ Checked offline only (every rejection, a wallet without funds, the one kept buil
 conversions, nothing left in the module after a refused or discarded sweep); a sweep has not been relayed on
 mainnet.
 
+### Payment proofs and transaction keys
+
+With the names of the Java port, for full wallets (keys-only wallets reject with
+`UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_PROOF`):
+
+* `getTxProof(txHash, address, message?)`: a proof that the transaction paid the address, signed over
+  the optional message. `"OutProofV2..."` for an address of another wallet, made with the transaction's
+  secret key (only the wallet that sent the transaction holds it); `"InProofV2..."` for an address of
+  this wallet, made with its view key (the core decides by the address, so a payment the wallet sent to
+  itself gives an inbound proof). One daemon request (`/gettransactions`).
+* `getSpendProof(txHash, message?)`: a proof that the wallet spent the transaction's inputs
+  (`"SpendProofV1..."`); the spend key is needed, so a view-only wallet rejects with
+  `UNSUPPORTED_CAPABILITY`/`VIEW_ONLY_PROOF`. Daemon requests: the transaction and the ring members of its
+  inputs (`/gettransactions`, `/get_outs.bin`).
+* `getTxKey(txHash)`: the transaction's secret key (with its additional keys, 64 hexadecimal characters
+  each) from the wallet's cache, without a request. It is a secret; prefer a proof.
+
+The hash is 64 lowercase hexadecimal characters (`INVALID_CONFIG`/`TX_HASH`), the address is checked with
+the core's parser for the wallet's network (`INVALID_ADDRESS`; an integrated address rejects with
+`UNSUPPORTED_CAPABILITY`/`INTEGRATED_ADDRESS`), and a message is at most 1,024 UTF-8 bytes without U+0000 or
+an unpaired surrogate (`INVALID_CONFIG`/`PROOF_MESSAGE`). Before any request the wallet's own records decide:
+a transaction it does not hold rejects with `INVALID_CONFIG`/`TX_NOT_FOUND`, one it holds as failed with
+`TX_FAILED`, an address that received nothing in it with `ADDRESS_NOT_IN_TX` (the core's proof would not
+refuse it: its check for received funds runs over an empty map), an outbound proof or a key the wallet holds
+no transaction key for with `TX_KEY_UNAVAILABLE` (a wallet restored from its seed, or opened from bytes
+saved before the send, has none: save the wallet after a relay), a spend proof of a transaction the wallet
+spent nothing in with `TX_NOT_SENT`. Daemon failures reject with `DAEMON_ERROR`; any other failure of the
+core's proof with `NATIVE_ERROR`/`PROOF_FAILED`. A result is returned only in the form the core writes, and
+no key or proof appears in an error.
+
+The library does not check proofs: `checkTxKey`, `checkTxProof` and `checkSpendProof` reject with
+`UNSUPPORTED_CAPABILITY`/`PROOF_CHECK`. The core's `check_tx_key` and `check_tx_proof` report a received
+amount of 0 for every current transaction (they read the amount of the V1 asset `ZEPH`, which no output has
+carried since hard fork 11), and `check_tx_key` reports a good result whenever it does not fail. A proof is
+checked by a separate checker; a wallet reads its own payments from its history.
+
+```typescript
+const proof = await wallet.getTxProof(txHash, shopAddress, "order 1234");   // "OutProofV2..." or "InProofV2..."
+const spent = await wallet.getSpendProof(txHash, "order 1234");             // "SpendProofV1..."
+```
+
+Tested offline (every refusal, the forms, failures injected as the core throws them). Proofs of real
+transactions are made and checked on copies of the funded test wallet; its transactions all paid its own
+addresses, so they give inbound proofs, and an outbound proof of a real transaction is not proven yet.
+
 ### Relaying a prepared transaction
 
 Relay is two explicit steps. `prepareTransfer(config)`, `prepareConversion(config)` and
@@ -537,7 +586,7 @@ Everything else inherited from monero-ts stays in the source as unported classes
 `src/main/ts/` and is not exported by the package: the
 connection manager, the inherited listener classes and their native glue (listeners are supported through
 the facade's own path), the inherited query-based history,
-the inherited transaction creation, its relay and sweeps (sweeping an account is `buildSweepUnlocked`), outputs, key images, rescans, proofs, multisig and file-system wallets (the inherited models under `src/main/ts/daemon/model/`,
+the inherited transaction creation, its relay and sweeps (sweeping an account is `buildSweepUnlocked`), outputs, key images, rescans, reserve proofs, checking proofs, multisig and file-system wallets (the inherited models under `src/main/ts/daemon/model/`,
 most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
 inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and

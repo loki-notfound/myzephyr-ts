@@ -90,7 +90,8 @@ is not exported by the package:
   reject with `UNSUPPORTED_CAPABILITY`/`DAEMON_RPC_METHOD`;
 - the inherited query-based history model, transaction creation, its relay, and the inherited sweeps
   (sweeping the unlocked balance of an account is `buildSweepUnlocked` and `prepareSweepUnlocked`);
-- outputs, key images, rescans, proofs and multisig;
+- outputs, key images, rescans, reserve proofs, checking proofs and multisig (making proofs is supported:
+  `getTxProof`, `getSpendProof`, `getTxKey`, [chapter 6](06-history.md#proofs-and-transaction-keys));
 - file-system wallets.
 
 The wallet RPC client (`connectToWalletRpc`, `MoneroWalletRpc`) is not ported and is no longer in the
@@ -98,8 +99,8 @@ source or the package: a port that used it talks to a wallet RPC server directly
 `ZephyrWallet`.
 
 A few inherited method names remain on `ZephyrWallet` and reject with `UNSUPPORTED_CAPABILITY`, so
-that a port finds them: `createTxs`, `sweepOutput`, `sweepDust`, `getReserveProofWallet`, `rescanSpent` and
-`importKeyImages`.
+that a port finds them: `createTxs`, `sweepOutput`, `sweepDust`, `getReserveProofWallet`, `checkTxKey`,
+`checkTxProof`, `checkSpendProof`, `rescanSpent` and `importKeyImages`.
 
 ```ts run
 import { createRandomWallet, ZephyrWalletError } from "@loki-notfound/zephyr-ts";

@@ -66,6 +66,7 @@ diagnostic as the detail for the message and for a support log.
 | `TX_NOT_POSSIBLE`/`RESERVE_RATIO` | conversions | the reserve ratio does not allow this pair now |
 | `TX_NOT_POSSIBLE`/`PRICING_RECORD_AGE` | relay of a conversion | the rate has expired; prepare again and show the new amounts |
 | `TX_REJECTED` | relay | the daemon refused the transaction; sync and prepare again |
+| `INVALID_CONFIG`/`TX_KEY_UNAVAILABLE`, `ADDRESS_NOT_IN_TX`, `TX_NOT_SENT` | proofs and keys | this wallet cannot prove that: it holds no key for the transaction (restored, or bytes from before the send), the address received nothing in it, or the wallet spent nothing in it ([chapter 6](06-history.md#proofs-and-transaction-keys)) |
 | `RELAY_UNKNOWN` | relay | the transaction may have been sent; never show it as not sent ([chapter 7](07-sending.md#outcomes-of-a-relay)) |
 | `WALLET_CLOSED` | all | the wallet was closed or stopped (`WALLET_TERMINATED`); open it again |
 | `NATIVE_ERROR`/`WASM_MODULE_*`, `WORKER_FAILED` | first construction | the deployment is wrong: the module file, the secure context or the policy ([chapter 10](10-deploying-a-web-wallet.md)) |
