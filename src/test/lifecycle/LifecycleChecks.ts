@@ -2655,7 +2655,7 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     notes.push(rejections + " rejections before dispatch, 3 by the core's address parser, 9 TX_NOT_FOUND in the bridge, 3 keys-only, 3 view-only");
   });
 
-  await check("C52", "Proof and key decoding: the bridge's results {\"txKey\"}, {\"proof\"} and the worker's strings are accepted only in the forms the core writes (a key of 64 to 1,088 lowercase hexadecimal characters in whole keys; OutProofV2 or InProofV2 with 1 to 17 pairs of 44 and 88 base58 characters; SpendProofV1 with whole 88-character signatures); every deviation rejects with NATIVE_ERROR/UNEXPECTED_RESULT; the worker table validates the arguments again", async (notes) => {
+  await check("C52", "Proof and key decoding: the bridge's results {\"txKey\"}, {\"proof\"} and the worker's strings are accepted only in the forms the core writes (a key of 64 to 1,088 lowercase hexadecimal characters in whole keys; OutProofV2 or InProofV2 with 1 to 17 pairs of 44 and 88 base58 characters; SpendProofV1 with whole 88-character signatures); every deviation rejects with NATIVE_ERROR/UNEXPECTED_RESULT and its text is in no error; the worker table validates the arguments again", async (notes) => {
     const pair = "2".repeat(44) + "a".repeat(88);
     const keyOk = ["c".repeat(64), "0123456789abcdef".repeat(8), "d".repeat(64 * 17)];
     const txOk = ["InProofV2" + pair, "OutProofV2" + pair, "OutProofV2" + pair.repeat(17), "InProofV2" + pair.repeat(3)];
@@ -2668,17 +2668,28 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       "InProofV2" + "0".repeat(44) + "a".repeat(88), "InProofV2" + "O".repeat(44) + "a".repeat(88), "SpendProofV1" + "b".repeat(132), "InProofV2 " + pair.substring(1)];
     const spendBad = ["", "SpendProofV1", "SpendProofV1" + "b".repeat(87), "SpendProofV1" + "b".repeat(89), "SpendProofV2" + "b".repeat(88), "InProofV2" + pair, "SpendProofV1" + "l".repeat(88)];
     let rejected = 0, total = 0;
-    const rejects = (fn: () => unknown, what: string) => {
-      total++;
-      try { fn(); notes.push("accepted: " + what); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") rejected++; else notes.push(what + ": " + codeOf(err) + diagnosticOf(err)); }
+    // a refused result's text never reaches the error: no run of 24 or more of its characters appears in it
+    const leaked = (err: unknown, text: string): boolean => {
+      const scanned = scanText(err);
+      for (let i = 0; i + 24 <= text.length; i += 12) if (scanned.includes(text.substring(i, i + 24))) return true;
+      return false;
     };
-    for (const k of keyBad) { rejects(() => Proof.parseBridgeTxKey(JSON.stringify({ txKey: k })), "bridge key of " + k.length); rejects(() => Proof.fromTxKeyDto(k), "worker key of " + k.length); }
-    for (const p of txBad) { rejects(() => Proof.parseBridgeTxProof(JSON.stringify({ proof: p })), "bridge proof of " + p.length); rejects(() => Proof.fromTxProofDto(p), "worker proof of " + p.length); }
-    for (const p of spendBad) { rejects(() => Proof.parseBridgeSpendProof(JSON.stringify({ proof: p })), "bridge spend proof of " + p.length); rejects(() => Proof.fromSpendProofDto(p), "worker spend proof of " + p.length); }
+    let carried = 0;
+    const rejects = (fn: () => unknown, what: string, text = "") => {
+      total++;
+      try { fn(); notes.push("accepted: " + what); } catch (err) {
+        if (leaked(err, text)) { carried++; notes.push(what + ": the result's text is in the error"); return; }
+        if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") rejected++; else notes.push(what + ": " + codeOf(err) + diagnosticOf(err));
+      }
+    };
+    for (const k of keyBad) { rejects(() => Proof.parseBridgeTxKey(JSON.stringify({ txKey: k })), "bridge key of " + k.length, k); rejects(() => Proof.fromTxKeyDto(k), "worker key of " + k.length, k); }
+    for (const p of txBad) { rejects(() => Proof.parseBridgeTxProof(JSON.stringify({ proof: p })), "bridge proof of " + p.length, p); rejects(() => Proof.fromTxProofDto(p), "worker proof of " + p.length, p); }
+    for (const p of spendBad) { rejects(() => Proof.parseBridgeSpendProof(JSON.stringify({ proof: p })), "bridge spend proof of " + p.length, p); rejects(() => Proof.fromSpendProofDto(p), "worker spend proof of " + p.length, p); }
     for (const text of ["{\"txKey\":\"" + keyOk[0] + "\",\"x\":1}", "{\"proof\":\"" + txOk[0] + "\"} ", "[\"" + txOk[0] + "\"]", "{\"error\":\"TX_NOT_FOUND\"}", "{\"proof\":" + JSON.stringify(txOk[0]) + ",\"txKey\":\"\"}"]) {
       rejects(() => Proof.parseBridgeTxKey(text), "bridge key text"); rejects(() => Proof.parseBridgeTxProof(text), "bridge proof text"); rejects(() => Proof.parseBridgeSpendProof(text), "bridge spend proof text");
     }
     for (const dto of [undefined, null, 5, {}, [txOk[0]]]) { rejects(() => Proof.fromTxKeyDto(dto), "worker key " + typeof dto); rejects(() => Proof.fromTxProofDto(dto), "worker proof " + typeof dto); rejects(() => Proof.fromSpendProofDto(dto), "worker spend proof " + typeof dto); }
+    expect(carried === 0, "no refused result's text in an error (" + carried + " carried it)");
     expect(rejected === total, "every deviation rejected (" + rejected + " of " + total + ")");
     // the worker table validates the arguments again
     const getTxProof = lifecycleWorkerMethod("getTxProof"), getSpendProof = lifecycleWorkerMethod("getSpendProof"), getTxKey = lifecycleWorkerMethod("getTxKey");
