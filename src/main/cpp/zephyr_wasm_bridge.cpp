@@ -39,8 +39,8 @@ using namespace zephyr_wasm_bridge;
 // returns the armed failure kind for this hook point (after skipping armed passes), else 0:
 // 1 std::runtime_error whose text carries the call's inputs, 2 a non-standard exception,
 // 3 std::bad_alloc, 4 tools::error::invalid_password, 5 tools::error::wallet_internal_error with the
-// pinned core's literal "invalid password" (wallet2::load_keys_buf); 11 to 19 typed build failures
-// (test_throw_build) (h.kind[name], default 1)
+// pinned core's literal "invalid password" (wallet2::load_keys_buf); 11 to 19 typed build failures, 21 to 42 the
+// conversion, supply and sweep failures (test_throw_build) (h.kind[name], default 1)
 EM_JS(int, zephyr_ts_test_inject, (const char* point), {
   var h = Module["__zephyrTsTestHooks"];
   if (!h) return 0;
@@ -51,7 +51,7 @@ EM_JS(int, zephyr_ts_test_inject, (const char* point), {
   if (h.fail && h.fail[name] > 0) {
     h.fail[name]--; h.events.push("injected:" + name);
     var kind = h.kind && h.kind[name] ? h.kind[name] : 1;
-    return (kind >= 1 && kind <= 5) || (kind >= 11 && kind <= 19) || (kind >= 21 && kind <= 37) ? kind : 1;
+    return (kind >= 1 && kind <= 5) || (kind >= 11 && kind <= 19) || (kind >= 21 && kind <= 42) ? kind : 1;
   }
   return 0;
 });
@@ -275,8 +275,23 @@ namespace {
   };
   // END CORE MESSAGE TABLE
 
-  // the contexts of the core's transaction build: same-asset transfers (build_txs) and conversions (build_conversion)
-  bool build_context(int context) { return context == ERROR_CONTEXT_BUILD || context == ERROR_CONTEXT_CONVERSION; }
+  // BEGIN CORE MESSAGE TABLE (sweep context of builds)
+  // fixed messages of the pinned core's sweep (wallet2::create_transactions_all and create_transactions_from, reached through
+  // monero_wallet_full::sweep_unlocked and sweep_account): nothing unlocked to sweep in the account or in the selected
+  // subaddresses (also when every unlocked output is worth less than the fee of spending it, which wallet2 ignores), and
+  // outputs that cannot pay their own fee; any other text is classified as a build failure (BUILD_DAEMON_MESSAGE_RULES,
+  // then TX_BUILD_FAILED)
+  const core_message_rule SWEEP_MESSAGE_RULES[] = {
+    {"No unlocked balance in the specified account", "NOT_ENOUGH_UNLOCKED"},
+    {"No unlocked balance in the specified subaddress(es)", "NOT_ENOUGH_UNLOCKED"},
+    {"Transaction cannot pay for itself", "NOT_ENOUGH_FOR_FEE"},
+    {"Zero dest amount in sweep", "NOT_ENOUGH_FOR_FEE"}
+  };
+  // END CORE MESSAGE TABLE
+
+  // the contexts of the core's transaction build: same-asset transfers (build_txs), conversions (build_conversion) and
+  // sweeps (build_sweep_unlocked)
+  bool build_context(int context) { return context == ERROR_CONTEXT_BUILD || context == ERROR_CONTEXT_CONVERSION || context == ERROR_CONTEXT_SWEEP; }
 
   // BEGIN CORE MESSAGE TABLE (address context)
   const core_message_rule ADDRESS_MESSAGE_RULES[] = {
@@ -340,7 +355,7 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
     // failed daemon request or unusable daemon data during refresh (blocks, hashes, pool, indices)
     return context == ERROR_CONTEXT_DAEMON || context == ERROR_CONTEXT_SYNC || build_context(context) ? "DAEMON_RESPONSE" : context == ERROR_CONTEXT_CLOSE ? "CORE_CLOSE_FAILED" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::not_enough_unlocked_money&) {
-    // the transfer errors of the core's transaction build (build_txs, build_conversion); no other binding builds
+    // the transfer errors of the core's transaction build (build_txs, build_conversion, build_sweep_unlocked); no other binding builds
     return build_context(context) ? "NOT_ENOUGH_UNLOCKED" : "CORE_UNCLASSIFIED";
   } catch (const tools::error::not_enough_money&) {
     return build_context(context) ? "NOT_ENOUGH_MONEY" : "CORE_UNCLASSIFIED";
@@ -373,6 +388,12 @@ const char* zephyr_wasm_bridge::classify_current_exception(int context) {
         // the conversion messages first (reserve ratio, pricing record, pair, destinations, precision, split, zero
         // converted amount), then the build's daemon messages; any other text is TX_BUILD_FAILED
         const char* identifier = match_core_message(CONVERSION_MESSAGE_RULES, e.what(), nullptr);
+        return identifier != nullptr ? identifier : match_core_message(BUILD_DAEMON_MESSAGE_RULES, e.what(), "TX_BUILD_FAILED");
+      }
+      case ERROR_CONTEXT_SWEEP: {
+        // the sweep messages first (nothing unlocked, outputs that cannot pay their fee), then the build's daemon messages;
+        // any other text is TX_BUILD_FAILED
+        const char* identifier = match_core_message(SWEEP_MESSAGE_RULES, e.what(), nullptr);
         return identifier != nullptr ? identifier : match_core_message(BUILD_DAEMON_MESSAGE_RULES, e.what(), "TX_BUILD_FAILED");
       }
       default: return "CORE_UNCLASSIFIED";
@@ -2298,7 +2319,8 @@ namespace {
   // unlocked money, 12 not enough money, 13 not enough for the fee, 14 not enough outputs to mix, 15 too
   // large, 16 no connection to the daemon, 17 a busy daemon, 18 a failed ring member request carrying a
   // node status with the destinations; 36, 37 failed reads of the circulating supply and of the pricing record
-  // history; 21 to 35 the conversion messages of the core (the reserve ratio ones with
+  // history; 38 to 42 the sweep messages of the core (nothing unlocked in the account, in the subaddresses, outputs
+  // that cannot pay their fee, a zero swept amount, a failed sanity check); 21 to 35 the conversion messages of the core (the reserve ratio ones with
   // computed ratios in their text); any other kind an untyped failure whose text carries the destinations. Inlined
   // into the binding: a test-only function cannot be on the exception whitelist, so its own frame would skip the
   // cleanups of the exception's temporaries; inlined, the throw happens in the binding's whitelisted frame. The
@@ -2336,6 +2358,11 @@ namespace {
       case 35: throw std::runtime_error("Transaction would be too large.  Try create_txs()");
       case 36: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Failed to get circulating supply"));
       case 37: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Failed to get pricing record history"));
+      case 38: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("No unlocked balance in the specified account"));
+      case 39: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("No unlocked balance in the specified subaddress(es)"));
+      case 40: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Transaction cannot pay for itself"));
+      case 41: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Zero dest amount in sweep"));
+      case 42: THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, string("Created transaction(s) failed sanity check"));
       default: throw std::runtime_error(std::string("injected build failure: ") + inputs);
     }
   }
@@ -2701,6 +2728,160 @@ namespace {
     return result;
   }
 
+  // the JSON of a sweep's descriptions ({"txs":[...]}, the result of build_sweep_unlocked): as transfer_json, with the one
+  // destination on every transaction (the core attributes each sweep transaction's amount to the destination)
+  string sweep_json(const std::vector<built_description>& described, const std::string& address) {
+    rapidjson::StringBuffer buffer;
+    json_writer w(buffer);
+    w.StartObject();
+    w.Key("txs");
+    w.StartArray();
+    for (const auto& d : described) {
+      w.StartObject();
+      w.Key("hash"); write_string(w, d.hash);
+      w.Key("sourceAsset"); write_string(w, d.source_asset);
+      w.Key("destinationAsset"); write_string(w, d.destination_asset);
+      w.Key("amount"); write_string(w, decimal(d.amount));
+      w.Key("fee"); write_string(w, decimal(d.fee));
+      w.Key("feeAsset"); write_string(w, d.source_asset); // the chain books the fee in the source asset (tx_memory_pool: fee_asset_type)
+      w.Key("totalDebited"); write_string(w, decimal(d.amount + d.fee));
+      w.Key("change"); write_string(w, decimal(d.change));
+      w.Key("ringSize"); w.Uint((unsigned) d.ring_size);
+      w.Key("inputs"); w.Uint((unsigned) d.inputs);
+      w.Key("outputs"); w.Uint((unsigned) d.outputs);
+      w.Key("weight"); write_string(w, decimal(d.weight));
+      w.Key("unlockTime"); write_string(w, decimal(d.unlock_time));
+      w.Key("destinations");
+      w.StartArray();
+      w.StartObject();
+      w.Key("address"); write_string(w, address);
+      w.Key("amount"); write_string(w, decimal(d.amount));
+      w.EndObject();
+      w.EndArray();
+      w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    return string(buffer.GetString(), buffer.GetSize());
+  }
+
+  // The sweep of build_sweep_unlocked and prepare_sweep_unlocked: everything unlocked of one V2 asset in one account (in
+  // the given subaddresses of it, or in every subaddress of it with an unlocked balance of the asset when none are given)
+  // to one address in the same asset, through the core's monero_wallet_full::sweep_unlocked; keep as for transfer_result.
+  // The account index is always passed (the core sweeps every account with an unlocked balance when it is missing) and
+  // source and destination asset are the same (a converting sweep is not offered). Nothing is relayed: m_relay is the
+  // constant false (fix_relay_false). Before the core runs: the wallet's own balance of the asset in the selected outputs
+  // must not be zero (NOT_ENOUGH_MONEY) and its unlocked balance must not be zero (NOT_ENOUGH_UNLOCKED), so a sweep with
+  // nothing to sweep sends no request.
+  string sweep_result(int handle, const string& asset, const string& address, uint32_t account_idx, const string& subaddress_indices, uint32_t priority, bool keep) {
+    string result;
+    std::vector<std::shared_ptr<monero_tx_wallet>> txs;
+    monero_tx_config config;
+    kept_build kept;
+    try {
+      if (WALLET_ROUTES.find(handle) == WALLET_ROUTES.end()) throw bridge_failure("KEYS_ONLY_TX");
+      if (keep) void_kept(handle); // a prepare voids the wallet's previous kept build when it starts
+      monero_wallet* wallet = (monero_wallet*) handle;
+      if (wallet->is_view_only()) throw bridge_failure("VIEW_ONLY_TX");
+      if (wallet->is_multisig()) throw bridge_failure("MULTISIG");
+      if (!is_core_asset_type(asset)) throw bridge_failure("ASSET_TYPE");
+      if (!is_v2_asset(asset)) throw bridge_failure("TX_ASSET");
+      if (priority > 3) throw bridge_failure("TX_PRIORITY");
+      std::vector<std::string> destination_addresses = parse_destination_addresses(address, 1);
+      std::vector<uint32_t> indices = parse_indices(subaddress_indices, 1000);
+      require_account(wallet, account_idx);
+      if (!indices.empty()) {
+        size_t count = subaddresses_of(wallet, account_idx).size();
+        for (uint32_t i : indices) if ((size_t) i >= count) throw bridge_failure("SUBADDRESS_NOT_FOUND");
+      }
+      check_destination_address(destination_addresses[0], wallet->get_network_type());
+      ZEPHYR_TS_TEST_THROW("error.sweep", address);
+      std::vector<built_description> described;
+      kept_tx synthetic;
+      if (keep && test_synthetic_kept(synthetic, 0)) { // test module only: a synthetic kept transaction, no build
+        built_description d = built_description();
+        d.hash = synthetic.hash;
+        d.source_asset = asset;
+        d.destination_asset = asset;
+        d.amount = 1000000000000;
+        d.fee = 1;
+        d.weight = 1;
+        d.inputs = 1;
+        d.outputs = 2;
+        d.ring_size = 16;
+        described.push_back(d);
+        kept.txs.push_back(std::move(synthetic));
+      } else {
+        test_throw_build("sweep.core", address); // test module only: the core's typed and sweep failures
+        // a necessary condition from the core's own balance of this asset in the selected outputs (no request); the test
+        // module can skip it (sweep.unchecked) so that the core's own refusal is reached without funds
+        if (!test_inject("sweep.unchecked")) {
+          uint64_t unlocked = 0, balance = 0;
+          if (indices.empty()) {
+            unlocked = wallet->get_unlocked_balance(asset, account_idx);
+            balance = wallet->get_balance(asset, account_idx);
+          } else {
+            for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(asset, account_idx, i); balance += wallet->get_balance(asset, account_idx, i); }
+          }
+          if (balance == 0) throw bridge_failure("NOT_ENOUGH_MONEY");
+          if (unlocked == 0) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
+        }
+        config.m_account_index = account_idx;
+        config.m_subaddress_indices = indices;
+        config.source_currency = asset;
+        config.destination_currency = asset;
+        config.m_priority = (monero_tx_priority) priority;
+        fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
+        std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
+        d->m_address = destination_addresses[0]; // no amount: the core sweeps everything unlocked
+        d->m_asset_type = asset;
+        config.m_destinations.push_back(d);
+        txs = wallet->sweep_unlocked(config);
+        test_barrier("sweep.after");
+        if (txs.empty() || txs.size() > 64) throw bridge_failure("UNEXPECTED_RESULT");
+        for (const auto& tx : txs) {
+          if (!tx) throw bridge_failure("UNEXPECTED_RESULT");
+          built_description b = describe_built_tx(*tx, asset);
+          if (b.source_asset != asset || b.destination_asset != asset || b.amount_burnt != 0 || b.amount_minted != 0 || b.pricing_record_height != 0 || b.amount == 0) throw bridge_failure("UNEXPECTED_RESULT");
+          // a same-asset sweep: no incoming transfer (a converting sweep carries the minted amount there), and its one
+          // destination is the requested address with the transaction's amount
+          const monero_outgoing_transfer& out = *tx->m_outgoing_transfer.get();
+          if (!tx->m_incoming_transfers.empty() || out.m_destinations.size() != 1 || !out.m_destinations[0] || !out.m_destinations[0]->m_address
+              || *out.m_destinations[0]->m_address != destination_addresses[0] || !out.m_destinations[0]->m_amount || *out.m_destinations[0]->m_amount != b.amount) throw bridge_failure("UNEXPECTED_RESULT");
+          described.push_back(b);
+        }
+        if (keep) {
+          for (size_t i = 0; i < txs.size(); i++) {
+            if (!txs[i]->m_metadata || txs[i]->m_metadata->empty()) throw bridge_failure("UNEXPECTED_RESULT");
+            kept_tx k;
+            k.hash = described[i].hash;
+            k.metadata = std::move(*txs[i]->m_metadata); // the serialized pending transaction stays in the module
+            kept.txs.push_back(std::move(k));
+          }
+        }
+      }
+      string build = sweep_json(described, destination_addresses[0]);
+      release_built(txs);
+      config.m_destinations.clear();
+      if (keep) {
+        kept.token = new_token();
+        kept.height = wallet->get_height();
+        kept.conversion = false;
+        result = prepared_json(kept.token, build);
+        KEPT_BUILDS[handle] = std::move(kept);
+      } else {
+        result = build;
+      }
+    } catch (...) {
+      const char* identifier = daemon_failure(handle, classify_current_exception(ERROR_CONTEXT_SWEEP));
+      release_built(txs);
+      config.m_destinations.clear();
+      for (auto& t : kept.txs) wipe_text(t.metadata);
+      result = bridge_error(identifier);
+    }
+    return result;
+  }
+
   // ---- relay of a kept build ----
 
   // The outcome of one commit, from whether the core's commit threw and from the transport's record of the one submit
@@ -2788,6 +2969,35 @@ void zephyr_wasm_bridge::prepare_conversion(int handle, const string& source_ass
     result = conversion_result(handle, source_asset, destination_asset, address, amount, account_idx, subaddress_indices, priority, true); // reports its own failures; this handler is a backstop
   } catch (...) {
     result = bridge_error(classify_current_exception(ERROR_CONTEXT_CONVERSION));
+  }
+  callback(result);
+}
+
+// {"txs":[{"hash","sourceAsset","destinationAsset","amount","fee","feeAsset","totalDebited","change","ringSize","inputs",
+// "outputs","weight","unlockTime","destinations":[{"address","amount"}]},..]}: the transactions the core built to sweep the
+// unlocked balance of asset (a V2 asset) in account_idx (and subaddress_indices "" for every subaddress with an unlocked
+// balance of it, or "i,j,...") to address in the same asset, with priority 0..3, discarded inside the module. Nothing is
+// relayed: m_relay is the constant false (fix_relay_false).
+void zephyr_wasm_bridge::build_sweep_unlocked(int handle, const string& asset, const string& address, uint32_t account_idx, const string& subaddress_indices, uint32_t priority,
+                                              emscripten::val callback) {
+  string result;
+  try {
+    result = sweep_result(handle, asset, address, account_idx, subaddress_indices, priority, false); // reports its own failures; this handler is a backstop
+  } catch (...) {
+    result = bridge_error(classify_current_exception(ERROR_CONTEXT_SWEEP));
+  }
+  callback(result);
+}
+
+// {"token":"<32 hex>","build":<the result of build_sweep_unlocked>}: as build_sweep_unlocked, but the built transactions are
+// kept in the wallet's one slot (replacing and voiding its previous kept build) for relay_prepared. Nothing is relayed here.
+void zephyr_wasm_bridge::prepare_sweep_unlocked(int handle, const string& asset, const string& address, uint32_t account_idx, const string& subaddress_indices, uint32_t priority,
+                                                emscripten::val callback) {
+  string result;
+  try {
+    result = sweep_result(handle, asset, address, account_idx, subaddress_indices, priority, true); // reports its own failures; this handler is a backstop
+  } catch (...) {
+    result = bridge_error(classify_current_exception(ERROR_CONTEXT_SWEEP));
   }
   callback(result);
 }

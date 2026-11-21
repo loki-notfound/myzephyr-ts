@@ -8,7 +8,8 @@ import * as WalletErrors from "./ZephyrWalletErrorMapping";
 import { isBridgeErrorIdentifier } from "./ZephyrWalletErrorMapping";
 import { Bad, TX_HASH, ZephyrTransferRequest, buildFromFields, fields, toBuildDto } from "./ZephyrTransferInternal";
 import { ZephyrConversionRequest, conversionFromFields, toConversionDto } from "./ZephyrConversionInternal";
-import type { ZephyrPreparedTransfer, ZephyrPreparedConversion, ZephyrRelayedTx, ZephyrRelayResult } from "./ZephyrRelay";
+import { ZephyrSweepRequest, sweepFromFields, toSweepDto } from "./ZephyrSweepInternal";
+import type { ZephyrPreparedTransfer, ZephyrPreparedConversion, ZephyrPreparedSweep, ZephyrRelayedTx, ZephyrRelayResult } from "./ZephyrRelay";
 
 export const RELAY_TOKEN = /^[0-9a-f]{32}$/;
 const OUTCOMES: readonly string[] = ["accepted", "rejected", "unknown", "notSent"];
@@ -64,6 +65,22 @@ export function toPreparedConversionDto(p: ZephyrPreparedConversion): unknown {
 export function fromPreparedConversionDto(value: unknown, request: ZephyrConversionRequest): ZephyrPreparedConversion {
   const p = preparedFields(value, malformed);
   return Object.freeze({ token: p.token, build: conversionFromFields(p.build, request, malformed) });
+}
+
+/** Bridge {"token","build":{"txs":[...]}} of prepare_sweep_unlocked for a request; the description is checked as buildSweepUnlocked's. */
+export function parseBridgePreparedSweep(json: unknown, request: ZephyrSweepRequest): ZephyrPreparedSweep {
+  const p = preparedFields(parseJson(json), unexpected);
+  return Object.freeze({ token: p.token, build: sweepFromFields(p.build, request, unexpected) });
+}
+
+export function toPreparedSweepDto(p: ZephyrPreparedSweep): unknown {
+  return { token: p.token, build: toSweepDto(p.build) };
+}
+
+/** Strict worker reply of prepareSweepUnlocked. */
+export function fromPreparedSweepDto(value: unknown, request: ZephyrSweepRequest): ZephyrPreparedSweep {
+  const p = preparedFields(value, malformed);
+  return Object.freeze({ token: p.token, build: sweepFromFields(p.build, request, malformed) });
 }
 
 /**

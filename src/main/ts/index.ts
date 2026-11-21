@@ -50,8 +50,11 @@
  * and discards them inside the module. buildConversion builds the one transaction of a conversion between
  * two V2 assets (the six pairs), describes it (hash, assets, amount burnt, amount minted as the transaction
  * states it, fee and fee asset, change, counts, weight, pricing record height) and discards it.
- * Relaying in two explicit steps: prepareTransfer and prepareConversion build and describe as the build
- * calls do, but keep the built transactions inside the module under an opaque token (one slot per wallet);
+ * Sweeping the unlocked balance of an account: buildSweepUnlocked builds the transactions that send everything unlocked
+ * of one V2 asset in one account (or in chosen subaddresses of it) to one address in the same asset, describes them
+ * (as buildTransfer's, with the total swept and the total fee) and discards them.
+ * Relaying in two explicit steps: prepareTransfer, prepareConversion and prepareSweepUnlocked build and describe as the
+ * build calls do, but keep the built transactions inside the module under an opaque token (one slot per wallet);
  * relayPrepared(token) relays exactly what was described, and discardPrepared(token) voids it.
  * The reserve and the oracle's prices: getReserveInfo and getCirculatingSupply on full wallets with a daemon,
  * and ZephyrDaemonRpc (the node's information, its height and block headers with their pricing record), with
@@ -60,7 +63,7 @@
  * Java port: sync(startHeight, listener), addListener, removeListener and getListeners with the six callbacks of
  * ZephyrWalletListener (common/ZephyrNotifications.ts), startSyncing and stopSyncing; callbacks never run inside the core,
  * and what they throw is dropped.
- * Not supported: outputs, sweeps, key images, rescans.
+ * Not supported: outputs, a converting sweep, sweeping one output or dust, key images, rescans.
  */
 export {
   ZephyrWallet,
@@ -90,7 +93,8 @@ export type { ZephyrAssetBalances, ZephyrAccountBalances } from "./common/Zephyr
 export type { ZephyrAccount, ZephyrSubaddress, ZephyrAddressIndex, ZephyrAccountOptions } from "./common/ZephyrAccounts";
 export type { ZephyrTransferConfig, ZephyrTransferDestinationInput, ZephyrTransferBuild, ZephyrBuiltTx, ZephyrTxPriority } from "./common/ZephyrTransfer";
 export type { ZephyrConversionConfig, ZephyrConversionDestinationInput, ZephyrConversionBuild } from "./common/ZephyrConversion";
-export type { ZephyrPreparedTransfer, ZephyrPreparedConversion, ZephyrRelayResult, ZephyrRelayedTx, ZephyrRelayOutcome } from "./common/ZephyrRelay";
+export type { ZephyrSweepUnlockedConfig, ZephyrSweepBuild } from "./common/ZephyrSweep";
+export type { ZephyrPreparedTransfer, ZephyrPreparedConversion, ZephyrPreparedSweep, ZephyrRelayResult, ZephyrRelayedTx, ZephyrRelayOutcome } from "./common/ZephyrRelay";
 export type { ZephyrReserveInfo } from "./common/ZephyrReserve";
 export type { ZephyrWalletListener, ZephyrWalletOutput } from "./common/ZephyrNotifications";
 export type { ZephyrWalletTx, ZephyrWalletTransfer, ZephyrTransferDestination, ZephyrTxConversion, ZephyrHistoryQuery, ZephyrTransferDirection, ZephyrHistoryStatus } from "./common/ZephyrHistory";

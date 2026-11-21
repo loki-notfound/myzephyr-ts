@@ -186,7 +186,9 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   // building transactions and conversions without relay
   "build_txs", "build_conversion",
   // prepare (build and keep), relay exactly what was prepared (the one relay binding), discard
-  "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared"
+  "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared",
+  // sweeping the unlocked balance of one asset in one account: build (and discard) or prepare (and keep)
+  "build_sweep_unlocked", "prepare_sweep_unlocked"
 ];
 
 /**
@@ -195,7 +197,8 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
  * inherited binding adapted to the fixed core.
  */
 export const SDK_ADDED_NATIVE_EXPORTS: readonly string[] = ["get_balance_asset", "get_unlocked_balance_asset", "set_restore_height_from_daemon", "refresh_pool", "build_txs", "build_conversion",
-  "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared", "get_reserve_info", "get_circulating_supply", "set_notifications"];
+  "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared", "get_reserve_info", "get_circulating_supply", "set_notifications", "build_sweep_unlocked",
+  "prepare_sweep_unlocked"];
 
 /**
  * Inherited monero-ts bridge exports at the base commit that the SDK does not build. If an
@@ -315,6 +318,10 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   // (common/ZephyrRelay.ts); the reply is the token with the description
   prepareTransfer: { scope: "wallet", kinds: FULL, args: [{ kind: "assetType" }, { kind: "txAddresses" }, { kind: "txAmounts" }, { kind: "uint32" }, { kind: "txSubaddressIndices" }, { kind: "txPriority" }], nativeExports: ["prepare_txs"], errorContext: "build" },
   prepareConversion: { scope: "wallet", kinds: FULL, args: [{ kind: "assetType" }, { kind: "assetType" }, { kind: "txAddress" }, { kind: "conversionAmount" }, { kind: "uint32" }, { kind: "txSubaddressIndices" }, { kind: "txPriority" }], nativeExports: ["prepare_conversion"], errorContext: "build" },
+  // build and discard, or prepare and keep, the sweep of the unlocked balance of one asset in one account (common/ZephyrSweep.ts):
+  // asset, the destination address, account index, subaddress indices (possibly empty), priority 0..3
+  buildSweepUnlocked: { scope: "wallet", kinds: FULL, args: [{ kind: "assetType" }, { kind: "txAddress" }, { kind: "uint32" }, { kind: "txSubaddressIndices" }, { kind: "txPriority" }], nativeExports: ["build_sweep_unlocked"], errorContext: "build" },
+  prepareSweepUnlocked: { scope: "wallet", kinds: FULL, args: [{ kind: "assetType" }, { kind: "txAddress" }, { kind: "uint32" }, { kind: "txSubaddressIndices" }, { kind: "txPriority" }], nativeExports: ["prepare_sweep_unlocked"], errorContext: "build" },
   // relay exactly the kept build a token names (the one way to relay), or discard it
   relayPrepared: { scope: "wallet", kinds: FULL, args: [{ kind: "relayToken" }], nativeExports: ["relay_prepared"], errorContext: "relay" },
   discardPrepared: { scope: "wallet", kinds: FULL, args: [{ kind: "relayToken" }], nativeExports: ["discard_prepared"], errorContext: "relay" },

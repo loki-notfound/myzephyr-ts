@@ -61,6 +61,9 @@ only.
 | `ZephyrConversionBuild` | type | [ZephyrConversionBuild](types.md#zephyrconversionbuild) |
 | `ZephyrPreparedTransfer` | type | [ZephyrPreparedTransfer](types.md#zephyrpreparedtransfer) |
 | `ZephyrPreparedConversion` | type | [ZephyrPreparedConversion](types.md#zephyrpreparedconversion) |
+| `ZephyrSweepUnlockedConfig` | type | [ZephyrSweepUnlockedConfig](types.md#zephyrsweepunlockedconfig) |
+| `ZephyrSweepBuild` | type | [ZephyrSweepBuild](types.md#zephyrsweepbuild) |
+| `ZephyrPreparedSweep` | type | [ZephyrPreparedSweep](types.md#zephyrpreparedsweep) |
 | `ZephyrRelayOutcome` | type | [ZephyrRelayOutcome](types.md#zephyrrelayoutcome) |
 | `ZephyrRelayedTx` | type | [ZephyrRelayedTx](types.md#zephyrrelayedtx) |
 | `ZephyrRelayResult` | type | [ZephyrRelayResult](types.md#zephyrrelayresult) |

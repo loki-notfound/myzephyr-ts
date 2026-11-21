@@ -135,10 +135,10 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `SAVE_ON_CLOSE` | `UNSUPPORTED_CAPABILITY` | saving on close |
 | `BALANCE` | `UNSUPPORTED_CAPABILITY` | the asset-less `getBalance(accountIdx, subaddressIdx)` |
 | `SYNC` | `UNSUPPORTED_CAPABILITY` | `sync` with more than two arguments |
-| `TRANSACTIONS` | `UNSUPPORTED_CAPABILITY` | the inherited transaction creation (`createTxs`) |
+| `TRANSACTIONS` | `UNSUPPORTED_CAPABILITY` | the inherited transaction creation (`createTxs`), `sweepOutput` and `sweepDust` |
 | `DAEMON_SETTINGS` | `UNSUPPORTED_CAPABILITY` | rescans and key image import |
 | `RESERVE_PROOF` | `UNSUPPORTED_CAPABILITY` | reserve proofs |
-| `CONVERSION` | `UNSUPPORTED_CAPABILITY` | a `destinationAsset` other than `asset` in a transfer |
+| `CONVERSION` | `UNSUPPORTED_CAPABILITY` | a `destinationAsset` other than `asset` in a transfer or a sweep |
 | `INTEGRATED_ADDRESS` | `UNSUPPORTED_CAPABILITY` | an integrated address as a destination |
 | `TERMINATE` | `UNSUPPORTED_CAPABILITY` | `terminate` of a direct-mode wallet |
 | `DAEMON_CREDENTIALS` | `UNSUPPORTED_CAPABILITY` | a user name or password for the daemon |
@@ -234,9 +234,9 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 
 | Diagnostic | Code | Meaning |
 |---|---|---|
-| `NOT_ENOUGH_UNLOCKED` | `TX_NOT_POSSIBLE` | the unlocked balance of the asset does not cover the amounts |
-| `NOT_ENOUGH_MONEY` | `TX_NOT_POSSIBLE` | even the balance with locked outputs does not cover the amounts |
-| `NOT_ENOUGH_FOR_FEE` | `TX_NOT_POSSIBLE` | the fee cannot be covered |
+| `NOT_ENOUGH_UNLOCKED` | `TX_NOT_POSSIBLE` | the unlocked balance of the asset does not cover the amounts; a sweep: nothing of the selected outputs is unlocked (or worth more than the fee of spending it) |
+| `NOT_ENOUGH_MONEY` | `TX_NOT_POSSIBLE` | even the balance with locked outputs does not cover the amounts; a sweep: the balance of the selected outputs is zero |
+| `NOT_ENOUGH_FOR_FEE` | `TX_NOT_POSSIBLE` | the fee cannot be covered; a sweep: the swept outputs cannot pay their own fee |
 | `NOT_ENOUGH_OUTS_TO_MIX` | `TX_NOT_POSSIBLE` | the chain has too few outputs for the rings |
 | `TX_TOO_LARGE` | `TX_NOT_POSSIBLE` | the transaction would be too large |
 | `RESERVE_RATIO` | `TX_NOT_POSSIBLE` | the reserve ratio does not allow the conversion pair |

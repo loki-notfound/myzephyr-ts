@@ -23,7 +23,8 @@ import { toAccountDto, toAddressIndexDto, toSubaddressDto } from "./ZephyrAccoun
 import { checkSelection, toTxDto } from "./ZephyrHistoryInternal";
 import { checkTransferRequest, toBuildDto } from "./ZephyrTransferInternal";
 import { checkConversionRequest, toConversionDto } from "./ZephyrConversionInternal";
-import { checkRelayToken, toPreparedConversionDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelayInternal";
+import { checkSweepRequest, toSweepDto } from "./ZephyrSweepInternal";
+import { checkRelayToken, toPreparedConversionDto, toPreparedSweepDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelayInternal";
 import { toReserveInfoDto, toSupplyDto } from "./ZephyrReserveInternal";
 import { NOTIFICATION_CALLBACK_ID, ZephyrNotification, toNotificationDto } from "./ZephyrNotificationsInternal";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
@@ -237,6 +238,11 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
     toPreparedTransferDto(await walletOf(walletId).prepareTransferChecked(checkTransferRequest(asset, addresses, amounts, accountIdx, indices, priority))),
   prepareConversion: async (walletId: string, sourceAsset: string, destinationAsset: string, address: string, amount: string, accountIdx: number, indices: number[], priority: number) =>
     toPreparedConversionDto(await walletOf(walletId).prepareConversionChecked(checkConversionRequest(sourceAsset, destinationAsset, address, amount, accountIdx, indices, priority))),
+  // build and discard, or prepare and keep, a sweep: the request was validated by the table and is checked again
+  buildSweepUnlocked: async (walletId: string, asset: string, address: string, accountIdx: number, indices: number[], priority: number) =>
+    toSweepDto(await walletOf(walletId).buildSweepChecked(checkSweepRequest(asset, address, accountIdx, indices, priority))),
+  prepareSweepUnlocked: async (walletId: string, asset: string, address: string, accountIdx: number, indices: number[], priority: number) =>
+    toPreparedSweepDto(await walletOf(walletId).prepareSweepChecked(checkSweepRequest(asset, address, accountIdx, indices, priority))),
   relayPrepared: async (walletId: string, token: string) => toRelayDto(await walletOf(walletId).relayPreparedChecked(checkRelayToken(token))),
   discardPrepared: async (walletId: string, token: string) => await walletOf(walletId).discardPreparedChecked(checkRelayToken(token)),
   isClosed: async (walletId: string) => walletOf(walletId).isClosed(),

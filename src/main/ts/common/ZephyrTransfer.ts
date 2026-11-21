@@ -43,7 +43,10 @@ export interface ZephyrBuiltTx {
   readonly sourceAsset: string;
   /** from its outputs; equal to sourceAsset in this version */
   readonly destinationAsset: string;
-  /** present only when the build needed one transaction (the core attributes destinations only then) */
+  /**
+   * transfers: present only when the build needed one transaction (the core attributes destinations only then); sweeps:
+   * on every transaction, the one address with that transaction's amount
+   */
   readonly destinations?: ReadonlyArray<{ readonly address: string; readonly amount: bigint }>;
   /** what this transaction sends to the destinations (change excluded) */
   readonly amount: bigint;

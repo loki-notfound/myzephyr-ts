@@ -568,6 +568,22 @@ Rejects with: the configuration rejections of `buildTransfer` as they apply, `IN
 `DAEMON_ERROR`; `NATIVE_ERROR`/`TX_BUILD_FAILED`. Guide:
 [What a conversion build describes](../08-conversions.md#what-a-conversion-build-describes).
 
+### `buildSweepUnlocked`
+
+```ts signature
+buildSweepUnlocked(config: ZephyrSweepUnlockedConfig): Promise<ZephyrSweepBuild>;
+```
+
+Builds the transactions that send everything unlocked of one V2 asset in one account (or in the given
+subaddresses of it) to one address in the same asset, describes them with their totals and discards them.
+Nothing is relayed or stored. The account index is required.
+
+Rejects with: the configuration rejections of `buildTransfer` as they apply (one `address` instead of
+`destinations`); `UNSUPPORTED_CAPABILITY`/`CONVERSION` (a destination asset other than the asset: a converting
+sweep); `TX_NOT_POSSIBLE` (`NOT_ENOUGH_MONEY` when the balance of the selected outputs is zero,
+`NOT_ENOUGH_UNLOCKED` when nothing of it is unlocked, and the build failures of `buildTransfer`);
+`DAEMON_ERROR`; `NATIVE_ERROR`/`TX_BUILD_FAILED`. Guide: [Sweeping](../07-sending.md#sweeping).
+
 ### `prepareTransfer`
 
 ```ts signature
@@ -586,6 +602,16 @@ prepareConversion(config: ZephyrConversionConfig): Promise<ZephyrPreparedConvers
 
 As `buildConversion`, but keeps the built transaction under a new token. Same rejections as
 `buildConversion`. Guide: [Relaying a conversion](../08-conversions.md#relaying-a-conversion).
+
+### `prepareSweepUnlocked`
+
+```ts signature
+prepareSweepUnlocked(config: ZephyrSweepUnlockedConfig): Promise<ZephyrPreparedSweep>;
+```
+
+As `buildSweepUnlocked`, but keeps the built transactions under a new token for `relayPrepared`; the previous
+kept build is voided, also when this prepare fails. Same rejections as `buildSweepUnlocked`. Guide:
+[Sweeping](../07-sending.md#sweeping).
 
 ### `relayPrepared`
 
@@ -690,6 +716,26 @@ createTxs(): Promise<never>;
 ```
 
 The inherited transaction creation. Rejects with `UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`.
+
+### `sweepOutput`
+
+```ts signature
+sweepOutput(): Promise<never>;
+```
+
+Sweeping one output by its key image, as in the Java port. Not offered: the core validates it with the V1 asset
+`ZEPH`, and the library exposes no key images. Rejects with `UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`. Guide:
+[Sweeping](../07-sending.md#sweeping).
+
+### `sweepDust`
+
+```ts signature
+sweepDust(): Promise<never>;
+```
+
+Sweeping outputs without RingCT, as in the Java port. Not offered: every output on Zephyr's chain has RingCT, so
+the core would find nothing to sweep. Rejects with `UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`. Guide:
+[Sweeping](../07-sending.md#sweeping).
 
 ### `getReserveProofWallet`
 

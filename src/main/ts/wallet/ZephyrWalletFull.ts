@@ -47,8 +47,11 @@ import { ZephyrTransferBuild } from "../common/ZephyrTransfer";
 import { MAX_DESTINATIONS, ZephyrTransferRequest, checkTransferRequest, fromBuildDto, parseBridgeBuild } from "../common/ZephyrTransferInternal";
 import { ZephyrConversionBuild } from "../common/ZephyrConversion";
 import { ZephyrConversionRequest, checkConversionRequest, fromConversionDto, parseBridgeConversion } from "../common/ZephyrConversionInternal";
-import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult } from "../common/ZephyrRelay";
-import { checkRelayToken, fromPreparedConversionDto, fromPreparedTransferDto, fromRelayDto, parseBridgeDiscard, parseBridgePreparedConversion, parseBridgePreparedTransfer, parseBridgeRelay } from "../common/ZephyrRelayInternal";
+import { ZephyrSweepBuild } from "../common/ZephyrSweep";
+import { ZephyrSweepRequest, checkSweepRequest, fromSweepDto, parseBridgeSweep } from "../common/ZephyrSweepInternal";
+import { ZephyrPreparedConversion, ZephyrPreparedSweep, ZephyrPreparedTransfer, ZephyrRelayResult } from "../common/ZephyrRelay";
+import { checkRelayToken, fromPreparedConversionDto, fromPreparedSweepDto, fromPreparedTransferDto, fromRelayDto, parseBridgeDiscard, parseBridgePreparedConversion, parseBridgePreparedSweep,
+  parseBridgePreparedTransfer, parseBridgeRelay } from "../common/ZephyrRelayInternal";
 import { ZephyrWalletTx } from "../common/ZephyrHistory";
 import { MAX_TRANSFERS_PER_CALL, MAX_TXS_PER_CALL, ZephyrHistorySelection, checkSelection, fromPoolRefreshDto, fromTxsDto, parseBridgeTxs, parsePoolRefresh } from "../common/ZephyrHistoryInternal";
 import { ZephyrAccount, ZephyrAddressIndex, ZephyrSubaddress } from "../common/ZephyrAccounts";
@@ -1177,6 +1180,38 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
       return new Promise<ZephyrPreparedConversion>((resolve, reject) => {
         this.module.prepare_conversion(this.cppAddress, r.sourceAsset, r.destinationAsset, r.address, r.amount, r.accountIndex, r.subaddressIndices.join(","), r.priority, (result: unknown) => {
           try { resolve(parseBridgePreparedConversion(WalletErrors.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /**
+   * Build, describe and discard the transactions that sweep the unlocked balance of one asset in one account (bridge
+   * build_sweep_unlocked; never relays, returns no byte of a built transaction). The request is checked again before the
+   * native call.
+   */
+  async buildSweepChecked(request: ZephyrSweepRequest): Promise<ZephyrSweepBuild> {
+    const r = checkSweepRequest(request?.asset, request?.address, request?.accountIndex, request?.subaddressIndices, request?.priority);
+    if (this.getWalletProxy()) return this.getWalletProxy().buildSweepChecked(r);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<ZephyrSweepBuild>((resolve, reject) => {
+        this.module.build_sweep_unlocked(this.cppAddress, r.asset, r.address, r.accountIndex, r.subaddressIndices.join(","), r.priority, (result: unknown) => {
+          try { resolve(parseBridgeSweep(WalletErrors.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /** As buildSweepChecked, but the built transactions stay in the wallet's one slot (bridge prepare_sweep_unlocked). */
+  async prepareSweepChecked(request: ZephyrSweepRequest): Promise<ZephyrPreparedSweep> {
+    const r = checkSweepRequest(request?.asset, request?.address, request?.accountIndex, request?.subaddressIndices, request?.priority);
+    if (this.getWalletProxy()) return this.getWalletProxy().prepareSweepChecked(r);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<ZephyrPreparedSweep>((resolve, reject) => {
+        this.module.prepare_sweep_unlocked(this.cppAddress, r.asset, r.address, r.accountIndex, r.subaddressIndices.join(","), r.priority, (result: unknown) => {
+          try { resolve(parseBridgePreparedSweep(WalletErrors.checkBridgeResult("build", result), r)); } catch (err) { reject(err); }
         });
       });
     });
@@ -2602,6 +2637,14 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   async prepareConversionChecked(request: ZephyrConversionRequest): Promise<ZephyrPreparedConversion> {
     return fromPreparedConversionDto(await this.invokeWorker("prepareConversion", [request.sourceAsset, request.destinationAsset, request.address, request.amount, request.accountIndex,
       request.subaddressIndices.slice(), request.priority]), request);
+  }
+
+  async buildSweepChecked(request: ZephyrSweepRequest): Promise<ZephyrSweepBuild> {
+    return fromSweepDto(await this.invokeWorker("buildSweepUnlocked", [request.asset, request.address, request.accountIndex, request.subaddressIndices.slice(), request.priority]), request);
+  }
+
+  async prepareSweepChecked(request: ZephyrSweepRequest): Promise<ZephyrPreparedSweep> {
+    return fromPreparedSweepDto(await this.invokeWorker("prepareSweepUnlocked", [request.asset, request.address, request.accountIndex, request.subaddressIndices.slice(), request.priority]), request);
   }
 
   async relayPreparedChecked(token: string, hashes?: readonly string[]): Promise<ZephyrRelayResult> {

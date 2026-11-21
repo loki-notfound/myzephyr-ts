@@ -1513,6 +1513,114 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await w.close();
   }, proxy);
 
+  await check("T30", "Sweeps in the test module (no request): the core's failures on the sweep path map to fixed pairs (failures injected as the core throws them: nothing unlocked in the account or the subaddresses, outputs that cannot pay their fee, a zero swept amount, a failed sanity check, the build's typed failures) without the address or core text; the core's own refusal of a sweep without funds (the bridge's balance check skipped) is NOT_ENOUGH_UNLOCKED; refused sweeps (by the bridge and by the core) and every injected failure leave the allocator unchanged; a prepared sweep keeps a token that relayPrepared and discardPrepared treat as a transfer's; the one slot's single-use and void rules hold with a sweep, a transfer and a conversion in turn; a discarded sweep is released completely; nothing is recorded", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    const own = await w.getPrimaryAddress();
+    const cfg: F.ZephyrSweepUnlockedConfig = { asset: "ZRS", address: own, accountIndex: 0 };
+    const pairs: Array<[number, string, string]> = [[38, "TX_NOT_POSSIBLE", "NOT_ENOUGH_UNLOCKED"], [39, "TX_NOT_POSSIBLE", "NOT_ENOUGH_UNLOCKED"], [40, "TX_NOT_POSSIBLE", "NOT_ENOUGH_FOR_FEE"],
+      [41, "TX_NOT_POSSIBLE", "NOT_ENOUGH_FOR_FEE"], [42, "NATIVE_ERROR", "TX_BUILD_FAILED"], [11, "TX_NOT_POSSIBLE", "NOT_ENOUGH_UNLOCKED"], [12, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"],
+      [13, "TX_NOT_POSSIBLE", "NOT_ENOUGH_FOR_FEE"], [14, "TX_NOT_POSSIBLE", "NOT_ENOUGH_OUTS_TO_MIX"], [15, "TX_NOT_POSSIBLE", "TX_TOO_LARGE"], [16, "DAEMON_ERROR", "DAEMON_RESPONSE"],
+      [17, "DAEMON_ERROR", "DAEMON_RESPONSE"], [18, "DAEMON_ERROR", "DAEMON_RESPONSE"], [19, "NATIVE_ERROR", "TX_BUILD_FAILED"], [36, "DAEMON_ERROR", "DAEMON_RESPONSE"], [37, "DAEMON_ERROR", "DAEMON_RESPONSE"],
+      [21, "NATIVE_ERROR", "TX_BUILD_FAILED"], [28, "NATIVE_ERROR", "TX_BUILD_FAILED"]];
+    for (const [kind, code, diag] of pairs) {
+      await hooks.resetCounters();
+      await hooks.arm({ fail: { "sweep.core": 1 }, kind: { "sweep.core": kind } });
+      const err = await expectCode(w.buildSweepUnlocked(cfg), code, "injected sweep failure kind " + kind, notes, diag);
+      const text = scanText(err) + scanText(toEnvelope(err));
+      expect(!text.includes(own.toLowerCase()) && !text.includes("injected") && !/unlocked balance|pay for itself|dest amount|sanity|satisfied/i.test(text), "kind " + kind + ": no address or core text in the error");
+      expect((await hooks.state()).events.includes("injected:sweep.core"), "kind " + kind + " fired");
+    }
+    await hooks.resetCounters();
+    await hooks.arm({ fail: { "error.sweep": 1 } });
+    const carried = await expectCode(w.prepareSweepUnlocked(cfg), "NATIVE_ERROR", "injected failure carrying the address", notes, "TX_BUILD_FAILED");
+    expect(!(scanText(carried) + scanText(toEnvelope(carried))).includes(own.toLowerCase()), "no address in the error");
+    await hooks.resetCounters();
+    // the core's own refusal: the bridge's balance check skipped, the core's sweep path runs to its check of the unlocked
+    // balance (wallet2::create_transactions_all, through monero_wallet_full::sweep_unlocked and sweep_account; the
+    // priority "unimportant" skips the backlog estimate, which would need a daemon)
+    const unchecked = async (c: F.ZephyrSweepUnlockedConfig): Promise<unknown> => { await hooks.arm({ fail: { "sweep.unchecked": 1 } }); try { return await w.buildSweepUnlocked(c); } finally { await hooks.resetCounters(); } };
+    const coreCfg: F.ZephyrSweepUnlockedConfig = { ...cfg, priority: "unimportant" };
+    for (const [label, c] of [["the account", coreCfg], ["subaddress 0", { ...coreCfg, subaddressIndices: [0] }], ["account 0 in ZPH", { ...coreCfg, asset: "ZPH" }]] as Array<[string, F.ZephyrSweepUnlockedConfig]>) {
+      await expectCode(unchecked(c), "TX_NOT_POSSIBLE", "the core's refusal of a sweep of " + label + " without funds", notes, "NOT_ENOUGH_UNLOCKED");
+    }
+    let defaultPriority = "";
+    try { await unchecked(cfg); defaultPriority = "built"; } catch (err) { defaultPriority = codeOf(err) + diagnosticOf(err); }
+    notes.push("the core's refusal at the default priority without a daemon: " + defaultPriority);
+    expect(/^(TX_NOT_POSSIBLE\/NOT_ENOUGH_UNLOCKED|DAEMON_ERROR\/DAEMON_(RESPONSE|UNREACHABLE|NOT_CONNECTED))$/.test(defaultPriority), "the default priority is refused by the core or by the missing daemon");
+    const heap = async () => (await hooks.state()).heapInUse;
+    const measure = async (label: string, fn: () => Promise<unknown>, rounds = 3): Promise<number[]> => {
+      await fn().catch(() => undefined); // warm-up
+      const deltas: number[] = [];
+      for (let i = 0; i < rounds; i++) { const h0 = await heap(); await fn().catch(() => undefined); deltas.push((await heap()) - h0); }
+      notes.push("allocator growth of " + label + ": " + deltas.join(","));
+      return deltas;
+    };
+    const growth: Record<string, number[]> = {};
+    growth["bridge refusal"] = await measure("sweeps the bridge refuses (no funds)", () => w.buildSweepUnlocked(cfg), 5);
+    growth["prepared bridge refusal"] = await measure("prepared sweeps the bridge refuses (no funds)", () => w.prepareSweepUnlocked({ ...cfg, subaddressIndices: [0] }), 5);
+    growth["core refusal"] = await measure("sweeps the core refuses (no funds, the bridge's check skipped)", () => unchecked(coreCfg));
+    growth["core refusal, subaddresses"] = await measure("sweeps of subaddresses the core refuses", () => unchecked({ ...coreCfg, subaddressIndices: [0] }));
+    for (const kind of [38, 39, 40, 41, 42, 11, 13, 15, 16, 19]) {
+      growth["injected " + kind] = await measure("injected sweep failure kind " + kind, async () => { await hooks.arm({ fail: { "sweep.core": 1 }, kind: { "sweep.core": kind } }); try { await w.buildSweepUnlocked(cfg); } finally { await hooks.resetCounters(); } });
+    }
+    const leaking = Object.entries(growth).filter(([, v]) => v.some((d) => d !== 0));
+    expect(leaking.length === 0, "no refused or failed sweep leaves anything in the allocator (" + leaking.map(([k, v]) => k + ":" + v.join(",")).join(" ") + ")");
+    // kept builds: a synthetic kept sweep (test module only), the slot shared with transfers and conversions
+    const tcfg: F.ZephyrTransferConfig = { asset: "ZPH", destinations: [{ address: own, amount: BigInt("100000000") }], accountIndex: 0 };
+    const ccfg: F.ZephyrConversionConfig = { sourceAsset: "ZPH", destinationAsset: "ZRS", destination: { address: own, amount: BigInt("100000000") }, accountIndex: 0 };
+    const synthetic = async <T>(fn: () => Promise<T>): Promise<T> => { await hooks.resetCounters(); await hooks.arm({ fail: { "prepare.synthetic": 1 } }); return fn(); };
+    const sweep = () => synthetic(() => w.prepareSweepUnlocked(cfg));
+    const voidCode = async (token: string, what: string) => expectCode(w.relayPrepared(token), "INVALID_CONFIG", what, notes, "RELAY_TOKEN_VOID");
+    const s1 = await sweep();
+    expect(/^[0-9a-f]{32}$/.test(s1.token) && s1.build.txs.length === 1 && s1.build.totalAmount === s1.build.txs[0].amount && s1.build.totalFee === s1.build.txs[0].fee
+      && s1.build.txs[0].destinations?.[0].address === own, "a prepared sweep: a token and the description with its totals");
+    await expectCode(w.relayPrepared(s1.token), "DAEMON_ERROR", "relay of a sweep without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    const t1 = await synthetic(() => w.prepareTransfer(tcfg));
+    await voidCode(s1.token, "a sweep's token after a prepared transfer");
+    const c1 = await synthetic(() => w.prepareConversion(ccfg));
+    await voidCode(t1.token, "a transfer's token after a prepared conversion");
+    const s2 = await sweep();
+    await voidCode(c1.token, "a conversion's token after a prepared sweep");
+    expect(new Set([s1.token, t1.token, c1.token, s2.token]).size === 4, "every prepare has a new token");
+    expect((await w.discardPrepared(s2.token)) === true, "discard of a kept sweep is true");
+    await voidCode(s2.token, "a sweep's token after its discard");
+    expect((await w.discardPrepared(s2.token)) === false, "a second discard is false");
+    const t2 = await synthetic(() => w.prepareTransfer(tcfg));
+    await hooks.resetCounters();
+    await expectCode(w.prepareSweepUnlocked(cfg), "TX_NOT_POSSIBLE", "a sweep prepare without funds", notes, "NOT_ENOUGH_MONEY");
+    await voidCode(t2.token, "a transfer's token after a refused sweep prepare");
+    const s3 = await sweep();
+    await hooks.resetCounters();
+    await expectCode(w.prepareTransfer(tcfg), "TX_NOT_POSSIBLE", "a transfer prepare without funds", notes, "NOT_ENOUGH_MONEY");
+    await voidCode(s3.token, "a sweep's token after a refused transfer prepare");
+    const s4 = await sweep();
+    for (let i = 0; i < 3; i++) await expectCode(w.relayPrepared(s4.token), "DAEMON_ERROR", "sweep relay call " + (i + 1) + " without a daemon", notes, "DAEMON_NOT_CONNECTED");
+    await voidCode(s4.token, "a fourth relay call of a sweep");
+    const s5 = await sweep();
+    await hooks.arm({ fail: { "relay.hash": 1 } });
+    await expectCode(w.relayPrepared(s5.token), "NATIVE_ERROR", "a kept sweep that is not the described one (injected)", notes, "RELAY_HASH_MISMATCH");
+    await voidCode(s5.token, "a sweep's token after a hash mismatch");
+    await hooks.resetCounters();
+    const s6 = await sweep();
+    await w.changePassword(pw, pw + "s");
+    await voidCode(s6.token, "a sweep's token after a password change");
+    await w.changePassword(pw + "s", pw);
+    // a discarded kept sweep is released completely; a kept sweep voided by a failure the same amount each time
+    for (let i = 0; i < 2; i++) { const p = await sweep(); await w.discardPrepared(p.token); }
+    const discarded: number[] = [];
+    for (let i = 0; i < 5; i++) { const h0 = await heap(); const p = await sweep(); await w.discardPrepared(p.token); discarded.push((await heap()) - h0); }
+    const replaced: number[] = [];
+    for (let i = 0; i < 3; i++) { const h0 = await heap(); await sweep(); await hooks.resetCounters(); await w.prepareSweepUnlocked(cfg).catch(() => undefined); replaced.push((await heap()) - h0); }
+    notes.push("allocator growth of 5 prepared sweeps with a discard: " + discarded.join(",") + "; of 3 prepared sweeps voided by a refused prepare: " + replaced.join(","));
+    expect(discarded.every((d) => d === 0), "a discarded kept sweep is released completely");
+    expect(replaced.every((d) => d === 0), "a kept sweep voided by the next (refused) prepare is released completely");
+    await hooks.resetCounters();
+    expect((await w.getTxs()).length === 0, "nothing recorded");
+    await w.close();
+    await expectCode(w.prepareSweepUnlocked(cfg), "WALLET_CLOSED", "prepareSweepUnlocked after close", notes);
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending

@@ -533,7 +533,8 @@ interface ZephyrBuiltTx {
 ```
 
 One built transaction as the core built it. `destinations` is present only when the build needed one
-transaction; `totalDebited` is `amount` plus `fee`, in the source asset; `outputs` includes the change.
+transaction, and on every transaction of a sweep (the one address with that transaction's amount);
+`totalDebited` is `amount` plus `fee`, in the source asset; `outputs` includes the change.
 Guide: [Building to inspect](../07-sending.md#building-to-inspect).
 
 ### `ZephyrTransferBuild`
@@ -546,6 +547,37 @@ interface ZephyrTransferBuild {
 ```
 
 The result of `buildTransfer`: the built transactions and whether more than one was needed.
+
+### `ZephyrSweepUnlockedConfig`
+
+```ts signature
+interface ZephyrSweepUnlockedConfig {
+    readonly asset: string;
+    readonly destinationAsset?: string;
+    readonly address: string;
+    readonly accountIndex: number;
+    readonly subaddressIndices?: ReadonlyArray<number>;
+    readonly priority?: ZephyrTxPriority;
+}
+```
+
+The configuration of `buildSweepUnlocked` and `prepareSweepUnlocked`: a V2 `asset` (an optional
+`destinationAsset` must equal it), the one destination `address`, the account to sweep (required),
+optionally the subaddresses to sweep and the priority. Guide: [Sweeping](../07-sending.md#sweeping).
+
+### `ZephyrSweepBuild`
+
+```ts signature
+interface ZephyrSweepBuild {
+    readonly txs: ReadonlyArray<ZephyrBuiltTx>;
+    readonly multipleTxs: boolean;
+    readonly totalAmount: bigint;
+    readonly totalFee: bigint;
+}
+```
+
+The result of `buildSweepUnlocked`: the built transactions (each with its one destination), whether more
+than one was needed, and the sums of their amounts and of their fees, in the asset.
 
 ### `ZephyrConversionDestinationInput`
 
@@ -629,6 +661,17 @@ interface ZephyrPreparedConversion {
 ```
 
 The result of `prepareConversion`. Guide: [Relaying a conversion](../08-conversions.md#relaying-a-conversion).
+
+### `ZephyrPreparedSweep`
+
+```ts signature
+interface ZephyrPreparedSweep {
+    readonly token: string;
+    readonly build: ZephyrSweepBuild;
+}
+```
+
+The result of `prepareSweepUnlocked`. Guide: [Sweeping](../07-sending.md#sweeping).
 
 ### `ZephyrRelayOutcome`
 

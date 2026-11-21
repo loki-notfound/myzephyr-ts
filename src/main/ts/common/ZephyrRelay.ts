@@ -1,12 +1,13 @@
 import type { ZephyrWalletErrorCode, ZephyrWalletErrorDiagnostic } from "./ZephyrWalletError";
 import type { ZephyrTransferBuild } from "./ZephyrTransfer";
 import type { ZephyrConversionBuild } from "./ZephyrConversion";
+import type { ZephyrSweepBuild } from "./ZephyrSweep";
 
 /**
- * Relaying a built transaction, in two explicit steps. prepareTransfer and prepareConversion build and describe
- * exactly as buildTransfer and buildConversion do, but keep what they built inside the module, in the wallet's one
- * slot, under a new opaque token; relayPrepared(token) relays exactly that kept build, and discardPrepared(token)
- * voids it. buildTransfer and buildConversion keep discarding what they build.
+ * Relaying a built transaction, in two explicit steps. prepareTransfer, prepareConversion and prepareSweepUnlocked build
+ * and describe exactly as buildTransfer, buildConversion and buildSweepUnlocked do, but keep what they built inside the
+ * module, in the wallet's one slot, under a new opaque token; relayPrepared(token) relays exactly that kept build, and
+ * discardPrepared(token) voids it. The build calls keep discarding what they build.
  *
  * A token is 32 lowercase hexadecimal characters; it names the slot and carries no information. A kept build is
  * void (wiped and released inside the module) after it was relayed completely, after the daemon refused it, after
@@ -29,6 +30,12 @@ export interface ZephyrPreparedTransfer {
 export interface ZephyrPreparedConversion {
   readonly token: string;
   readonly build: ZephyrConversionBuild;
+}
+
+/** A prepared sweep: the token of the kept build and its description (as buildSweepUnlocked's). */
+export interface ZephyrPreparedSweep {
+  readonly token: string;
+  readonly build: ZephyrSweepBuild;
 }
 
 /**

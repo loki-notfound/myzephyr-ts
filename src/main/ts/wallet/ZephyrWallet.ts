@@ -23,7 +23,9 @@ import { ZephyrTransferBuild, ZephyrTransferConfig } from "../common/ZephyrTrans
 import { checkTransferConfig } from "../common/ZephyrTransferInternal";
 import { ZephyrConversionBuild, ZephyrConversionConfig } from "../common/ZephyrConversion";
 import { checkConversionConfig } from "../common/ZephyrConversionInternal";
-import { ZephyrPreparedConversion, ZephyrPreparedTransfer, ZephyrRelayResult } from "../common/ZephyrRelay";
+import { ZephyrSweepBuild, ZephyrSweepUnlockedConfig } from "../common/ZephyrSweep";
+import { checkSweepConfig } from "../common/ZephyrSweepInternal";
+import { ZephyrPreparedConversion, ZephyrPreparedSweep, ZephyrPreparedTransfer, ZephyrRelayResult } from "../common/ZephyrRelay";
 import { checkRelayToken } from "../common/ZephyrRelayInternal";
 import { ZephyrHistoryQuery, ZephyrWalletTransfer, ZephyrWalletTx } from "../common/ZephyrHistory";
 import { ZephyrReserveInfo } from "../common/ZephyrReserve";
@@ -771,6 +773,44 @@ export class ZephyrWallet {
     return this.call("build", () => wallet.buildConversionChecked(request));
   }
 
+  // ------------------------- sweeping the unlocked balance of an account -------------------------
+
+  /**
+   * Build the transactions that send everything unlocked of one V2 asset in one account to one address, describe them and
+   * discard them (common/ZephyrSweep.ts; the Java port's sweepUnlocked without its relay flag). The account index is
+   * required; with subaddressIndices only the outputs of those subaddresses are swept, without them every subaddress of the
+   * account that has an unlocked balance of the asset. The core skips outputs worth less than the fee of spending them and
+   * splits the sweep into several transactions when it must. Nothing is relayed and nothing is stored, as for
+   * buildTransfer: to relay, prepare the same configuration with prepareSweepUnlocked and relay its token. The
+   * configuration is validated before the build is dispatched (as buildTransfer's, with one address); the address is then
+   * checked with the core's parser for the wallet's network. A wallet whose balance of the asset in the selected outputs is
+   * zero rejects with TX_NOT_POSSIBLE/NOT_ENOUGH_MONEY, one whose unlocked balance is zero with NOT_ENOUGH_UNLOCKED, both
+   * before any request; outputs that cannot pay their own fee with NOT_ENOUGH_FOR_FEE. A destination asset other than the
+   * asset (a converting sweep) rejects with UNSUPPORTED_CAPABILITY/CONVERSION before dispatch. Full wallets with spend keys
+   * only: keys-only wallets reject with UNSUPPORTED_CAPABILITY/KEYS_ONLY_TX, view-only ones with VIEW_ONLY_TX.
+   */
+  async buildSweepUnlocked(config: ZephyrSweepUnlockedConfig): Promise<ZephyrSweepBuild> {
+    const wallet = this.full("KEYS_ONLY_TX");
+    const request = checkSweepConfig(config);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("build", () => wallet.buildSweepChecked(request));
+  }
+
+  /**
+   * As buildSweepUnlocked (the same configuration, checks, requests and description), but the built transactions are kept
+   * in the wallet's one slot under a new token for relayPrepared (common/ZephyrRelay.ts); the previous kept build of this
+   * wallet is voided. Nothing is relayed here.
+   */
+  async prepareSweepUnlocked(config: ZephyrSweepUnlockedConfig): Promise<ZephyrPreparedSweep> {
+    const wallet = this.full("KEYS_ONLY_TX");
+    const request = checkSweepConfig(config);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    this.prepared = undefined;
+    const prepared = await this.call("build", () => wallet.prepareSweepChecked(request));
+    this.prepared = { token: prepared.token, hashes: Object.freeze(prepared.build.txs.map((t) => t.hash)) };
+    return prepared;
+  }
+
   // ------------------------- relaying a prepared build -------------------------
 
   /**
@@ -944,6 +984,10 @@ export class ZephyrWallet {
   // ----------------------- representative unsupported calls -----------------------
 
   async createTxs(): Promise<never> { throw WalletErrors.unsupported("TRANSACTIONS"); }
+  /** Not offered: the core validates it with the V1 asset ZEPH, and it needs a key image, which this library does not expose. */
+  async sweepOutput(): Promise<never> { throw WalletErrors.unsupported("TRANSACTIONS"); }
+  /** Not offered: the core sweeps only outputs without RingCT, in the V1 asset ZEPH with ring size 1; the chain has no use for it. */
+  async sweepDust(): Promise<never> { throw WalletErrors.unsupported("TRANSACTIONS"); }
   async getReserveProofWallet(): Promise<never> { throw WalletErrors.unsupported("RESERVE_PROOF"); }
   async rescanSpent(): Promise<never> { throw WalletErrors.unsupported("DAEMON_SETTINGS"); }
   async importKeyImages(): Promise<never> { throw WalletErrors.unsupported("DAEMON_SETTINGS"); }

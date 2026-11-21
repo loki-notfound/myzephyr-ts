@@ -19,6 +19,7 @@ import * as History from "../../main/ts/common/ZephyrHistoryInternal";
 import * as Transfer from "../../main/ts/common/ZephyrTransferInternal";
 import * as Conversion from "../../main/ts/common/ZephyrConversionInternal";
 import * as Relay from "../../main/ts/common/ZephyrRelayInternal";
+import * as Sweep from "../../main/ts/common/ZephyrSweepInternal";
 import * as Reserve from "../../main/ts/common/ZephyrReserveInternal";
 import { parseDaemonAddress } from "../../main/ts/common/ZephyrDaemonAddress";
 import * as Notifications from "../../main/ts/common/ZephyrNotificationsInternal";
@@ -2423,6 +2424,148 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
     await sleep(50);
     expect(seen.length === 0, "nothing delivered after close");
     notes.push("proxied: valid message delivered, malformed message reported to onSyncError and not delivered, nothing after close");
+  });
+
+  await check("C49", "Sweeping offline: buildSweepUnlocked and prepareSweepUnlocked reject every configuration outside the declared fields before any native call (the transfer configuration's errors; a converting sweep UNSUPPORTED_CAPABILITY/CONVERSION; no account index ADDRESS_INDEX_RANGE); the address is checked by the core's parser, the account and the subaddresses against the wallet's; a wallet without funds rejects in each V2 asset and with subaddresses without a request and keeps no token; keys-only and view-only wallets reject; sweepOutput and sweepDust reject UNSUPPORTED_CAPABILITY/TRANSACTIONS; closed wallets reject", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    const own = await w.getPrimaryAddress();
+    const base: F.ZephyrSweepUnlockedConfig = { asset: "ZPH", address: own, accountIndex: 0 };
+    let read = 0;
+    const getter = { asset: "ZPH", address: own } as Record<string, unknown>;
+    Object.defineProperty(getter, "accountIndex", { enumerable: true, get: () => { read++; return 0; } });
+    const symbolKey = { ...base } as Record<string | symbol, unknown>;
+    symbolKey[Symbol("x")] = 1;
+    const cases: Array<[string, unknown, string, string]> = [
+      ["a number", 5, "INVALID_CONFIG", "CONFIG_TYPE"], ["null", null, "INVALID_CONFIG", "CONFIG_TYPE"], ["an array", [], "INVALID_CONFIG", "CONFIG_TYPE"], ["a Date", new Date(0), "INVALID_CONFIG", "CONFIG_TYPE"],
+      ["a getter", getter, "INVALID_CONFIG", "CONFIG_TYPE"], ["a symbol key", symbolKey, "INVALID_CONFIG", "CONFIG_TYPE"],
+      ["a relay field", { ...base, relay: true }, "INVALID_CONFIG", "UNKNOWN_FIELD"], ["an amount", { ...base, amount: BigInt(1) }, "INVALID_CONFIG", "UNKNOWN_FIELD"],
+      ["destinations", { ...base, destinations: [{ address: own, amount: BigInt(1) }] }, "INVALID_CONFIG", "UNKNOWN_FIELD"], ["a key image", { ...base, keyImage: "00".repeat(32) }, "INVALID_CONFIG", "UNKNOWN_FIELD"],
+      ["sweepEachSubaddress", { ...base, sweepEachSubaddress: true }, "INVALID_CONFIG", "UNKNOWN_FIELD"], ["a below amount", { ...base, belowAmount: BigInt(1) }, "INVALID_CONFIG", "UNKNOWN_FIELD"],
+      ["a subaddress index field", { ...base, subaddressIndex: 0 }, "INVALID_CONFIG", "UNKNOWN_FIELD"], ["a fee field", { ...base, fee: BigInt(1) }, "INVALID_CONFIG", "UNKNOWN_FIELD"],
+      ["a source asset field", { ...base, sourceAsset: "ZPH" }, "INVALID_CONFIG", "UNKNOWN_FIELD"],
+      ["no asset", { address: own, accountIndex: 0 }, "INVALID_CONFIG", "ASSET_TYPE"], ["a lower-case asset", { ...base, asset: "zph" }, "INVALID_CONFIG", "ASSET_TYPE"],
+      ["an unknown asset", { ...base, asset: "XMR" }, "INVALID_CONFIG", "ASSET_TYPE"], ["a V1 asset", { ...base, asset: "ZEPH" }, "INVALID_CONFIG", "TX_ASSET"],
+      ["a converting sweep ZPH to ZRS", { ...base, destinationAsset: "ZRS" }, "UNSUPPORTED_CAPABILITY", "CONVERSION"],
+      ["a converting sweep ZSD to ZYS", { ...base, asset: "ZSD", destinationAsset: "ZYS" }, "UNSUPPORTED_CAPABILITY", "CONVERSION"],
+      ["a V1 destination asset", { ...base, destinationAsset: "ZEPH" }, "UNSUPPORTED_CAPABILITY", "CONVERSION"], ["a malformed destination asset", { ...base, destinationAsset: "z" }, "INVALID_CONFIG", "ASSET_TYPE"],
+      ["no address", { asset: "ZPH", accountIndex: 0 }, "INVALID_ADDRESS", "ADDRESS_TYPE"], ["an address that is not text", { ...base, address: 7 }, "INVALID_ADDRESS", "ADDRESS_TYPE"],
+      ["an address list", { ...base, address: [own] }, "INVALID_ADDRESS", "ADDRESS_TYPE"], ["a short address", { ...base, address: own.substring(0, 40) }, "INVALID_ADDRESS", "ADDRESS_TYPE"],
+      ["an address with a space", { ...base, address: own + " " }, "INVALID_ADDRESS", "ADDRESS_TYPE"],
+      ["no account index", { asset: "ZPH", address: own }, "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"], ["an undefined account index", { ...base, accountIndex: undefined }, "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"],
+      ["a negative account index", { ...base, accountIndex: -1 }, "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"], ["an account index of 2^32", { ...base, accountIndex: 4294967296 }, "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"],
+      ["an account index as text", { ...base, accountIndex: "0" }, "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"],
+      ["empty subaddress indices", { ...base, subaddressIndices: [] }, "INVALID_CONFIG", "SUBADDRESS_INDICES"], ["repeated subaddress indices", { ...base, subaddressIndices: [1, 1] }, "INVALID_CONFIG", "SUBADDRESS_INDICES"],
+      ["a fractional subaddress index", { ...base, subaddressIndices: [0.5] }, "INVALID_CONFIG", "ADDRESS_INDEX_RANGE"], ["subaddress indices not an array", { ...base, subaddressIndices: 0 }, "INVALID_CONFIG", "SUBADDRESS_INDICES"],
+      ["an unknown priority", { ...base, priority: "high" }, "INVALID_CONFIG", "TX_PRIORITY"], ["a numeric priority", { ...base, priority: 2 }, "INVALID_CONFIG", "TX_PRIORITY"]
+    ];
+    const untypedBuild = w.buildSweepUnlocked as (...a: unknown[]) => Promise<unknown>;
+    const untypedPrepare = w.prepareSweepUnlocked as (...a: unknown[]) => Promise<unknown>;
+    const native = await countNativeCalls(async () => {
+      for (const [label, cfg, code, diag] of cases) {
+        await expectCode(untypedBuild.call(w, cfg), code, "buildSweepUnlocked with " + label, notes, diag);
+        await expectCode(untypedPrepare.call(w, cfg), code, "prepareSweepUnlocked with " + label, notes, diag);
+      }
+      await expectCode(untypedBuild.call(w, base, {}), "INVALID_CONFIG", "buildSweepUnlocked with a second argument", notes, "FIELD_TYPE");
+      await expectCode(untypedPrepare.call(w, base, {}), "INVALID_CONFIG", "prepareSweepUnlocked with a second argument", notes, "FIELD_TYPE");
+      await expectCode(w.sweepOutput(), "UNSUPPORTED_CAPABILITY", "sweepOutput", notes, "TRANSACTIONS");
+      await expectCode(w.sweepDust(), "UNSUPPORTED_CAPABILITY", "sweepDust", notes, "TRANSACTIONS");
+      await expectCode((w.sweepOutput as (...a: unknown[]) => Promise<unknown>).call(w, { address: own, keyImage: "00".repeat(32) }), "UNSUPPORTED_CAPABILITY", "sweepOutput with a configuration", notes, "TRANSACTIONS");
+      await expectCode((w.sweepDust as (...a: unknown[]) => Promise<unknown>).call(w, true), "UNSUPPORTED_CAPABILITY", "sweepDust with relay", notes, "TRANSACTIONS");
+    });
+    if (!proxy) expect(native === 0, "no native export called by " + (cases.length * 2 + 6) + " rejections, got " + native);
+    expect(read === 0, "no accessor was invoked (" + read + ")");
+    // checks in the bridge: the core's address parser, the wallet's accounts and subaddresses, the wallet's own balance (no request)
+    const testnet = await F.createKeysWallet({ networkType: 1, proxyToWorker: proxy });
+    const foreign = await testnet.getPrimaryAddress();
+    await testnet.close();
+    await LibraryUtils.loadWasmModule();
+    const integrated = (JSON.parse(LibraryUtils.getWasmModule().get_integrated_address_util(0, own, "")) as { integratedAddress: string }).integratedAddress;
+    const lastChar = own.charAt(own.length - 1);
+    const bad = own.substring(0, own.length - 1) + (lastChar === "A" ? "B" : "A");
+    const sub = (await w.getSubaddresses(0)).length;
+    const bridged: Array<[string, F.ZephyrSweepUnlockedConfig, string, string]> = [
+      ["a testnet address", { ...base, address: foreign }, "INVALID_ADDRESS", "ADDRESS_NETWORK"],
+      ["an address with a wrong checksum", { ...base, address: bad }, "INVALID_ADDRESS", "CORE_INVALID_ADDRESS"],
+      ["an integrated address", { ...base, address: integrated }, "UNSUPPORTED_CAPABILITY", "INTEGRATED_ADDRESS"],
+      ["an account the wallet does not have", { ...base, accountIndex: 7 }, "INVALID_CONFIG", "ACCOUNT_NOT_FOUND"],
+      ["a subaddress the account does not have", { ...base, subaddressIndices: [sub + 3] }, "INVALID_CONFIG", "SUBADDRESS_NOT_FOUND"]
+    ];
+    for (const asset of ["ZPH", "ZSD", "ZRS", "ZYS"]) bridged.push(["no funds in " + asset, { asset, address: own, accountIndex: 0 }, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"]);
+    bridged.push(["no funds in subaddress 0 at the elevated priority", { asset: "ZYS", destinationAsset: "ZYS", address: own, accountIndex: 0, subaddressIndices: [0], priority: "elevated" }, "TX_NOT_POSSIBLE", "NOT_ENOUGH_MONEY"]);
+    for (const [label, cfg, code, diag] of bridged) {
+      await expectCode(w.buildSweepUnlocked(cfg), code, "buildSweepUnlocked with " + label, notes, diag);
+      await expectCode(w.prepareSweepUnlocked(cfg), code, "prepareSweepUnlocked with " + label, notes, diag);
+    }
+    const unknown = "0123456789abcdef0123456789abcdef";
+    await expectCode(w.relayPrepared(unknown), "INVALID_CONFIG", "relayPrepared after the refused prepares", notes, "RELAY_TOKEN_VOID");
+    // keys-only and view-only wallets
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy });
+    await expectCode(k.buildSweepUnlocked(base), "UNSUPPORTED_CAPABILITY", "keys-only buildSweepUnlocked", notes, "KEYS_ONLY_TX");
+    await expectCode(k.prepareSweepUnlocked(base), "UNSUPPORTED_CAPABILITY", "keys-only prepareSweepUnlocked", notes, "KEYS_ONLY_TX");
+    await k.close();
+    const v = await F.restoreWalletFromKeys({ networkType: 0, password: pw, primaryAddress: address, privateViewKey: privView, proxyToWorker: proxy });
+    await expectCode(v.buildSweepUnlocked({ ...base, address }), "UNSUPPORTED_CAPABILITY", "view-only buildSweepUnlocked", notes, "VIEW_ONLY_TX");
+    await expectCode(v.prepareSweepUnlocked({ ...base, address }), "UNSUPPORTED_CAPABILITY", "view-only prepareSweepUnlocked", notes, "VIEW_ONLY_TX");
+    await v.close();
+    expect((await w.getTxs()).length === 0, "nothing was recorded by the rejected sweeps");
+    await w.close();
+    await expectCode(w.buildSweepUnlocked(base), "WALLET_CLOSED", "buildSweepUnlocked after close", notes);
+    await expectCode(w.prepareSweepUnlocked(base), "WALLET_CLOSED", "prepareSweepUnlocked after close", notes);
+    notes.push(cases.length + " configuration rejections before dispatch (each by both calls), " + bridged.length + " in the bridge (each by both calls)");
+  });
+
+  await check("C50", "Sweep decoding: the bridge's sweep description, the prepared sweep and their worker DTOs are accepted exactly against the request (one destination per transaction with its amount, the totals summed), every deviation rejects with a fixed code; DTOs round-trip; the worker request is validated again", async (notes) => {
+    const addr = address;
+    const request = Sweep.checkSweepConfig({ asset: "ZRS", address: addr, accountIndex: 1, subaddressIndices: [0, 2] });
+    expect(request.asset === "ZRS" && request.address === addr && request.accountIndex === 1 && request.subaddressIndices.join(",") === "0,2" && request.priority === 0 && Object.isFrozen(request), "the normalized request");
+    const h = (n: number) => n.toString(16).padStart(64, "0");
+    const tx = { hash: h(1), sourceAsset: "ZRS", destinationAsset: "ZRS", amount: "149999554400000", fee: "445600000", feeAsset: "ZRS", totalDebited: "150000000000000", change: "0", ringSize: 16, inputs: 2,
+      outputs: 2, weight: "2228", unlockTime: "0", destinations: [{ address: addr, amount: "149999554400000" }] };
+    const one = Sweep.parseBridgeSweep(JSON.stringify({ txs: [tx] }), request);
+    expect(!one.multipleTxs && one.txs.length === 1 && Object.isFrozen(one) && Object.isFrozen(one.txs[0]) && Object.isFrozen(one.txs[0].destinations) && one.totalAmount === BigInt("149999554400000")
+      && one.totalFee === BigInt(445600000) && one.txs[0].destinations?.length === 1 && one.txs[0].destinations?.[0].amount === BigInt("149999554400000") && one.txs[0].weight === 2228, "one transaction decoded");
+    const big = "9000000000000000000";
+    const split = [{ ...tx, hash: h(2), amount: big, totalDebited: "9000000000445600000", destinations: [{ address: addr, amount: big }] },
+      { ...tx, hash: h(3), amount: "5", totalDebited: "445600005", destinations: [{ address: addr, amount: "5" }] }];
+    const two = Sweep.parseBridgeSweep(JSON.stringify({ txs: split }), request);
+    expect(two.multipleTxs && two.totalAmount === BigInt(big) + BigInt(5) && two.totalFee === BigInt(891200000) && two.txs.every((t) => t.destinations?.length === 1), "two transactions with their totals (above 2^53)");
+    const show = (v: unknown) => JSON.stringify(v, (k, x) => (typeof x === "bigint" ? "n" + x.toString() : x));
+    expect(show(Sweep.fromSweepDto(JSON.parse(JSON.stringify(Sweep.toSweepDto(one))), request)) === show(one) && show(Sweep.fromSweepDto(JSON.parse(JSON.stringify(Sweep.toSweepDto(two))), request)) === show(two), "DTO round trips");
+    const token = "00112233445566778899aabbccddeeff";
+    const prepared = Relay.parseBridgePreparedSweep(JSON.stringify({ token, build: { txs: split } }), request);
+    expect(Object.isFrozen(prepared) && prepared.token === token && prepared.build.txs.length === 2 && show(prepared.build) === show(two), "a prepared sweep decoded");
+    expect(show(Relay.fromPreparedSweepDto(JSON.parse(JSON.stringify(Relay.toPreparedSweepDto(prepared))), request)) === show(prepared), "prepared sweep DTO round trip");
+    const m = (fn: (t: Record<string, any>) => void, list: unknown[] = [tx]): unknown => { const c = JSON.parse(JSON.stringify(list)); fn(c[0]); return { txs: c }; };
+    const cases: Array<[string, unknown]> = [
+      ["extra field", m((t) => { t.hex = "00"; })], ["missing field", m((t) => { delete t.change; })], ["key image field", m((t) => { t.keyImages = []; })], ["upper-case hash", m((t) => { t.hash = "AB".repeat(32); })],
+      ["another source asset", m((t) => { t.sourceAsset = "ZPH"; })], ["another destination asset", m((t) => { t.destinationAsset = "ZPH"; })], ["another fee asset", m((t) => { t.feeAsset = "ZPH"; })],
+      ["total not amount plus fee", m((t) => { t.totalDebited = "1"; })], ["amount zero", m((t) => { t.amount = "0"; t.totalDebited = t.fee; t.destinations[0].amount = "0"; })],
+      ["amount as a number", m((t) => { t.amount = 12; })], ["fee above 2^64-1", m((t) => { t.fee = "18446744073709551616"; })], ["ring size zero", m((t) => { t.ringSize = 0; })],
+      ["17 outputs", m((t) => { t.outputs = 17; })], ["inputs zero", m((t) => { t.inputs = 0; })], ["weight zero", m((t) => { t.weight = "0"; })],
+      ["no destinations", m((t) => { delete t.destinations; })], ["empty destinations", m((t) => { t.destinations = []; })], ["two destinations", m((t) => { t.destinations.push(t.destinations[0]); })],
+      ["destination of another address", m((t) => { t.destinations[0].address = addr.substring(0, addr.length - 1) + (addr.endsWith("z") ? "y" : "z"); })],
+      ["destination amount not the transaction's", m((t) => { t.destinations[0].amount = "1"; })], ["destination with another field", m((t) => { t.destinations[0].asset = "ZRS"; })],
+      ["no transaction", { txs: [] }], ["txs not an array", { txs: {} }], ["duplicate hash", m((t) => { t.hash = h(3); }, split)],
+      ["totals above 2^64-1", { txs: split.map((t) => ({ ...t, amount: "10000000000000000000", totalDebited: "10000000000445600000", destinations: [{ address: addr, amount: "10000000000000000000" }] })) }],
+      ["more than 64 transactions", { txs: Array.from({ length: 65 }, (_, i) => ({ ...tx, hash: h(100 + i) })) }], ["extra top-level field", { txs: [tx], totalAmount: "1" }]
+    ];
+    let bridgeRejected = 0, dtoRejected = 0, preparedRejected = 0;
+    for (const [label, value] of cases) {
+      try { Sweep.parseBridgeSweep(JSON.stringify(value), request); notes.push("bridge accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") bridgeRejected++; else notes.push("bridge " + label + ": " + codeOf(err)); }
+      try { Sweep.fromSweepDto(value, request); notes.push("dto accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "MALFORMED_MESSAGE/MESSAGE_SHAPE") dtoRejected++; else notes.push("dto " + label + ": " + codeOf(err)); }
+      try { Relay.parseBridgePreparedSweep(JSON.stringify({ token, build: value }), request); notes.push("prepared accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") preparedRejected++; else notes.push("prepared " + label + ": " + codeOf(err)); }
+    }
+    expect(bridgeRejected === cases.length && dtoRejected === cases.length && preparedRejected === cases.length, "every deviation rejected (" + bridgeRejected + ", " + dtoRejected + " and " + preparedRejected + " of " + cases.length + ")");
+    for (const text of ["", "[]", "{bad", "{\"error\":\"X\"}x"]) { try { Sweep.parseBridgeSweep(text, request); expect(false, "text accepted"); } catch (err) { expect(codeOf(err) === "NATIVE_ERROR", "malformed text rejected"); } }
+    const other = Sweep.checkSweepConfig({ asset: "ZRS", address: addr, accountIndex: 0 });
+    try { Sweep.parseBridgeSweep(JSON.stringify({ txs: [tx] }), Sweep.checkSweepConfig({ asset: "ZPH", address: addr, accountIndex: 1 })); expect(false, "another asset accepted"); } catch (err) { expect(codeOf(err) === "NATIVE_ERROR", "a description of another asset rejected"); }
+    expect(Sweep.parseBridgeSweep(JSON.stringify({ txs: [tx] }), other).totalAmount === one.totalAmount, "the account is not part of the description");
+    // the worker request is validated again on the worker side
+    for (const [label, args] of [["priority 4", ["ZPH", addr, 0, [], 4]], ["a V1 asset", ["ZEPH", addr, 0, [], 0]], ["an address list", ["ZPH", [addr], 0, [], 0]],
+      ["an account index of 2^32", ["ZPH", addr, 4294967296, [], 0]], ["repeated indices", ["ZPH", addr, 0, [1, 1], 0]], ["a missing account index", ["ZPH", addr, undefined, [], 0]]] as Array<[string, unknown[]]>) {
+      try { (Sweep.checkSweepRequest as (...a: unknown[]) => unknown)(...args); notes.push("request accepted: " + label); expect(false, "request accepted"); } catch (err) { expect(codeOf(err) === "INVALID_CONFIG" || codeOf(err) === "INVALID_ADDRESS", "request " + label + " rejected"); }
+    }
+    notes.push(cases.length + " deviations rejected by the bridge parser, the worker DTO parser and the prepared parser");
   });
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close

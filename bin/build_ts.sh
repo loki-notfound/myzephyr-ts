@@ -9,7 +9,8 @@
 #                entry, an ES module (webpack.browser.js)
 #   dist/lifecycle-consumer/ browser test pages and the browser test worker (webpack.lifecycle-consumer.js)
 #   relay check  one way only: the built bridge assigns m_relay only to false, calls the core's commit
-#                (relay_txs) exactly once, inside relay_prepared, and no other submit, relay, sweep or sign
+#                (relay_txs) exactly once, inside relay_prepared, the core's sweep (sweep_unlocked) exactly
+#                once, after the relay flag was fixed to false, and no other submit, relay, sweep or sign
 #                function; relay_prepared is the only release binding that relays; the module's HTTP client
 #                passes a submit request only under the bridge's permit; the shipped transport carries the
 #                refusal of submit and relay requests and its scoped pass
@@ -88,15 +89,26 @@ if (relayAssignments.length !== 1 || !/^m_relay\s*=\s*false;$/.test(relayAssignm
 const commits = bridge.match(/\brelay_txs\(/g) || [];
 const relayFn = (bridge.match(/void zephyr_wasm_bridge::relay_prepared\([\s\S]*?\n\}\n/) || [""])[0];
 if (commits.length !== 1 || (relayFn.match(/\brelay_txs\(/g) || []).length !== 1) bad.push("the core's commit is not called exactly once, in relay_prepared (" + commits.length + " calls)");
-for (const call of ["relay_tx(", "commit_tx(", "submit_txs(", "sweep_unlocked(", "sweep_output(", "sweep_dust(", "sign_txs(", "submit_multisig_tx_hex(", "start_mining("]) {
+for (const call of ["relay_tx(", "commit_tx(", "submit_txs(", "sweep_output(", "sweep_dust(", "sign_txs(", "submit_multisig_tx_hex(", "start_mining("]) {
   if (bridge.includes(call)) bad.push("the built bridge calls " + call);
 }
-// the release bindings: exactly one relays (relay_prepared); none submits by hex, sweeps, signs or mines
+// the core's sweep (monero_wallet_full::sweep_unlocked) is called exactly once, inside sweep_result, after the relay flag
+// was fixed to false in the same function
+const sweeps = bridge.match(/->sweep_unlocked\(/g) || [];
+const sweepFn = (bridge.match(/\n  string sweep_result\([\s\S]*?\n  \}\n/) || [""])[0];
+const sweepCall = sweepFn.indexOf("->sweep_unlocked("), sweepFix = sweepFn.indexOf("fix_relay_false(config);");
+if (sweeps.length !== 1 || sweepCall < 0 || sweepFix < 0 || sweepFix > sweepCall) bad.push("the core's sweep is not called exactly once, in sweep_result after fix_relay_false (" + sweeps.length + " calls)");
+if ((bridge.replace(/zephyr_wasm_bridge::(build|prepare)_sweep_unlocked\(/g, "").replace(/->sweep_unlocked\(/g, "").match(/\bsweep_unlocked\(/g) || []).length !== 0) bad.push("the built bridge calls sweep_unlocked otherwise");
+// the release bindings: exactly one relays (relay_prepared); none submits by hex, signs or mines; the only sweeps are the
+// two that build (build_sweep_unlocked, prepare_sweep_unlocked), each bound to the bridge function of its name
 const FORBIDDEN = /relay|submit|sweep|commit|send_raw|sign_txs|create_txs|mining/;
-const bindings = (fs.readFileSync(indexFile, "utf8").replace(/#if defined\(ZEPHYR_TS_TEST_INSTRUMENTATION\)[\s\S]*?#endif/g, "").match(/^[ \t]*emscripten::function\("([A-Za-z0-9_]+)"/gm) || []).map((l) => l.replace(/^.*\("/, "").replace(/"$/, ""));
-const relaying = bindings.filter((b) => FORBIDDEN.test(b));
+const SWEEP_BUILDS = ["build_sweep_unlocked", "prepare_sweep_unlocked"];
+const indexText = fs.readFileSync(indexFile, "utf8");
+const bindings = (indexText.replace(/#if defined\(ZEPHYR_TS_TEST_INSTRUMENTATION\)[\s\S]*?#endif/g, "").match(/^[ \t]*emscripten::function\("([A-Za-z0-9_]+)"/gm) || []).map((l) => l.replace(/^.*\("/, "").replace(/"$/, ""));
+const relaying = bindings.filter((b) => FORBIDDEN.test(b) && !SWEEP_BUILDS.includes(b));
 if (relaying.length !== 1 || relaying[0] !== "relay_prepared") bad.push("release bindings that relay or submit: " + JSON.stringify(relaying));
-if (!/emscripten::function\("relay_prepared", &zephyr_wasm_bridge::relay_prepared\)/.test(fs.readFileSync(indexFile, "utf8"))) bad.push("relay_prepared is not bound to the bridge function relay_prepared");
+if (!/emscripten::function\("relay_prepared", &zephyr_wasm_bridge::relay_prepared\)/.test(indexText)) bad.push("relay_prepared is not bound to the bridge function relay_prepared");
+for (const b of SWEEP_BUILDS) if (bindings.includes(b) && !indexText.includes("emscripten::function(\"" + b + "\", &zephyr_wasm_bridge::" + b + ");")) bad.push(b + " is not bound to the bridge function " + b);
 if (!bindings.includes("build_txs")) bad.push("the binding check is not effective (build_txs not found)");
 // the module's registered names (NUL-terminated strings): none of the inherited submit or relay bindings
 const wasm = fs.readFileSync(wasmFile);
