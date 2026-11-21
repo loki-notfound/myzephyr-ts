@@ -42,7 +42,9 @@ export const BRIDGE_ERROR_IDENTIFIERS = [
   "LOW_RING_SIZE", "DOUBLE_SPEND", "INVALID_INPUT", "INVALID_OUTPUT", "TOO_BIG", "OVERSPEND", "FEE_TOO_LOW", "TOO_FEW_OUTPUTS",
   "TX_EXTRA_TOO_BIG", "SANITY_CHECK_FAILED", "NOT_RELAYED", "REJECTED", "DAEMON_BUSY", "NO_ANSWER", "HTTP_STATUS", "ANSWER_UNREADABLE",
   // the reserve info
-  "PRICING_RECORD_UNAVAILABLE"
+  "PRICING_RECORD_UNAVAILABLE",
+  // payment proofs and transaction keys
+  "KEYS_ONLY_PROOF", "VIEW_ONLY_PROOF", "PROOF_MESSAGE", "TX_FAILED", "TX_KEY_UNAVAILABLE", "ADDRESS_NOT_IN_TX", "TX_NOT_SENT", "PROOF_FAILED"
 ] as const;
 
 export type ZephyrBridgeErrorIdentifier = typeof BRIDGE_ERROR_IDENTIFIERS[number];
@@ -84,11 +86,11 @@ export interface ZephyrWalletErrorEnvelope {
 }
 
 /** Context of a native failure, used to choose a stable code. */
-export type ZephyrNativeErrorContext = "create" | "restore" | "open" | "changePassword" | "address" | "close" | "daemon" | "sync" | "build" | "relay" | "other";
+export type ZephyrNativeErrorContext = "create" | "restore" | "open" | "changePassword" | "address" | "close" | "daemon" | "sync" | "build" | "relay" | "proof" | "other";
 
 /** Bridge identifiers whose code does not depend on the call context. */
 const BRIDGE_UNSUPPORTED: ReadonlySet<string> = new Set(["KEYS_ONLY_RESTORE_HEIGHT", "KEYS_ONLY_LOOKAHEAD", "KEYS_ONLY_PASSWORD", "DAEMON_CONNECTION", "REGTEST", "LISTENER", "SAVE_ON_CLOSE", "KEYS_ONLY_ACCOUNTS", "KEYS_ONLY_HISTORY",
-  "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS"]);
+  "KEYS_ONLY_TX", "VIEW_ONLY_TX", "MULTISIG", "INTEGRATED_ADDRESS", "KEYS_ONLY_PROOF", "VIEW_ONLY_PROOF"]);
 /** Transaction builds the wallet's funds or the chain cannot satisfy */
 const BRIDGE_TX_NOT_POSSIBLE: ReadonlySet<string> = new Set(["NOT_ENOUGH_UNLOCKED", "NOT_ENOUGH_MONEY", "NOT_ENOUGH_FOR_FEE", "NOT_ENOUGH_OUTS_TO_MIX", "TX_TOO_LARGE",
   "RESERVE_RATIO", "PRICING_RECORD", "CONVERSION_SPLIT", "CONVERSION_AMOUNT", "PRICING_RECORD_AGE"]);
@@ -102,7 +104,8 @@ const BRIDGE_INVALID_RECOVERY: ReadonlySet<string> = new Set(["SEED_EMPTY", "KEY
 /** Daemon results keep DAEMON_ERROR and argument checks INVALID_CONFIG in every context */
 const BRIDGE_DAEMON: ReadonlySet<string> = new Set(["DAEMON_UNREACHABLE", "DAEMON_RESPONSE", "DAEMON_NOT_CONNECTED", "DAEMON_BUSY", "PRICING_RECORD_UNAVAILABLE"]);
 const BRIDGE_INVALID_ARGUMENT: ReadonlySet<string> = new Set(["DAEMON_ADDRESS", "SYNC_START_HEIGHT", "ASSET_TYPE", "ACCOUNT_NOT_FOUND", "SUBADDRESS_NOT_FOUND", "LISTING_LIMIT", "LABEL_LENGTH", "LABEL_CHARACTERS", "SUBADDRESS_INDICES", "TX_HASH", "HEIGHT_RANGE", "TX_NOT_FOUND",
-  "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE", "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RELAY_TOKEN", "RELAY_TOKEN_VOID"]);
+  "TX_ASSET", "TX_PRIORITY", "TOO_MANY_DESTINATIONS", "AMOUNT_ZERO", "AMOUNT_RANGE", "CONVERSION_PAIR", "CONVERSION_DESTINATIONS", "AMOUNT_PRECISION", "RELAY_TOKEN", "RELAY_TOKEN_VOID",
+  "PROOF_MESSAGE", "TX_FAILED", "TX_KEY_UNAVAILABLE", "ADDRESS_NOT_IN_TX", "TX_NOT_SENT"]);
 
 /** Typed rejection of a capability outside the supported surface; raised before any native call. */
 export function unsupported(diagnostic: ZephyrWalletErrorDiagnostic): ZephyrWalletError {
@@ -156,6 +159,7 @@ function contextError(context: ZephyrNativeErrorContext, diagnostic: ZephyrWalle
     case "restore": return new ZephyrWalletError("INVALID_RECOVERY_MATERIAL", diagnostic);
     case "address": return new ZephyrWalletError("INVALID_ADDRESS", diagnostic);
     case "build": return new ZephyrWalletError(diagnostic === "CORE_INVALID_ADDRESS" ? "INVALID_ADDRESS" : "NATIVE_ERROR", diagnostic);
+    case "proof": return new ZephyrWalletError(diagnostic === "CORE_INVALID_ADDRESS" ? "INVALID_ADDRESS" : "NATIVE_ERROR", diagnostic);
     case "close": return new ZephyrWalletError("NATIVE_ERROR", "CORE_CLOSE_FAILED");
     default: return new ZephyrWalletError("NATIVE_ERROR", diagnostic);
   }

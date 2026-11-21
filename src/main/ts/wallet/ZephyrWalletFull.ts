@@ -67,6 +67,8 @@ import ZephyrMessageSignatureResult from "./model/ZephyrMessageSignatureResult";
 import ZephyrVersion from "../daemon/model/ZephyrVersion";
 import fs from "fs";
 import ZephyrConnectionManager from "../common/ZephyrConnectionManager";
+import { ZephyrProofRequest, checkSpendProofRequest, checkTxProofRequest, fromSpendProofDto, fromTxKeyDto, fromTxProofDto, parseBridgeSpendProof, parseBridgeTxKey,
+  parseBridgeTxProof } from "../common/ZephyrProofInternal";
 
 /**
  * Implements a Zephyr wallet using client-side WebAssembly bindings to the pinned Zephyr wallet core
@@ -1218,6 +1220,51 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   }
 
   /**
+   * The secret key of a transaction the wallet sent (bridge get_tx_key: from the wallet's cache, no request); the form is
+   * checked before it is returned. The hash is checked again before the native call.
+   */
+  async getTxKeyChecked(txHash: string): Promise<string> {
+    const h = checkSpendProofRequest(txHash, undefined).txHash;
+    if (this.getWalletProxy()) return this.getWalletProxy().getTxKeyChecked(h);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<string>((resolve, reject) => {
+        this.module.get_tx_key(this.cppAddress, h, (result: unknown) => {
+          try { resolve(parseBridgeTxKey(WalletErrors.checkBridgeResult("proof", result))); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /** The proof that a transaction paid an address (bridge get_tx_proof, a daemon request); the request is checked again. */
+  async getTxProofChecked(request: ZephyrProofRequest): Promise<string> {
+    const r = checkTxProofRequest(request?.txHash, request?.address, request?.message);
+    if (this.getWalletProxy()) return this.getWalletProxy().getTxProofChecked(r);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<string>((resolve, reject) => {
+        this.module.get_tx_proof(this.cppAddress, r.txHash, r.address, r.message, (result: unknown) => {
+          try { resolve(parseBridgeTxProof(WalletErrors.checkBridgeResult("proof", result))); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /** The proof that the wallet spent in a transaction (bridge get_spend_proof, daemon requests); the request is checked again. */
+  async getSpendProofChecked(txHash: string, message: string): Promise<string> {
+    const r = checkSpendProofRequest(txHash, message);
+    if (this.getWalletProxy()) return this.getWalletProxy().getSpendProofChecked(r.txHash, r.message);
+    return this.module.queueTask(async () => {
+      this.assertNotClosed();
+      return new Promise<string>((resolve, reject) => {
+        this.module.get_spend_proof(this.cppAddress, r.txHash, r.message, (result: unknown) => {
+          try { resolve(parseBridgeSpendProof(WalletErrors.checkBridgeResult("proof", result))); } catch (err) { reject(err); }
+        });
+      });
+    });
+  }
+
+  /**
    * Relay exactly the kept build that token names (bridge relay_prepared, the one relay binding). hashes: the
    * prepared build's hashes when the caller knows them; the result must name exactly these.
    */
@@ -1579,79 +1626,35 @@ export default class ZephyrWalletFull extends ZephyrWalletKeys {
   }
   
   async getTxKey(txHash: string): Promise<string> {
-    if (this.getWalletProxy()) return this.getWalletProxy().getTxKey(txHash);
-    return this.module.queueTask(async () => {
-      this.assertNotClosed();
-      try { return this.module.get_tx_key(this.cppAddress, txHash); }
-      catch (err) { throw new ZephyrError(this.module.get_exception_message(err)); }
-    });
+    return this.getTxKeyChecked(txHash);
   }
+
   
   async checkTxKey(txHash: string, txKey: string, address: string): Promise<ZephyrCheckTx> {
-    if (this.getWalletProxy()) return this.getWalletProxy().checkTxKey(txHash, txKey, address);
-    return this.module.queueTask(async () => {
-      this.assertNotClosed(); 
-      return new Promise((resolve, reject) => {
-        this.module.check_tx_key(this.cppAddress, txHash, txKey, address, (respJsonStr) => {
-          if (respJsonStr.charAt(0) !== '{') reject(new ZephyrError(respJsonStr));
-          else resolve(new ZephyrCheckTx(JSON.parse(GenUtils.stringifyBigInts(respJsonStr))));
-        });
-      });
-    });
+    throw WalletErrors.unsupported("PROOF_CHECK"); // the core's check reports amount 0 (ZephyrWallet.checkTxKey)
   }
+
   
   async getTxProof(txHash: string, address: string, message?: string): Promise<string> {
-    if (this.getWalletProxy()) return this.getWalletProxy().getTxProof(txHash, address, message);
-    return this.module.queueTask(async () => {
-      this.assertNotClosed();
-      return new Promise((resolve, reject) => {
-        this.module.get_tx_proof(this.cppAddress, txHash || "", address || "", message || "", (signature) => {
-          let errorKey = "error: ";
-          if (signature.indexOf(errorKey) === 0) reject(new ZephyrError(signature.substring(errorKey.length)));
-          else resolve(signature);
-        });
-      });
-    });
+    return this.getTxProofChecked(checkTxProofRequest(txHash, address, message));
   }
+
   
   async checkTxProof(txHash: string, address: string, message: string | undefined, signature: string): Promise<ZephyrCheckTx> {
-    if (this.getWalletProxy()) return this.getWalletProxy().checkTxProof(txHash, address, message, signature);
-    return this.module.queueTask(async () => {
-      this.assertNotClosed(); 
-      return new Promise((resolve, reject) => {
-        this.module.check_tx_proof(this.cppAddress, txHash || "", address || "", message || "", signature || "", (respJsonStr) => {
-          if (respJsonStr.charAt(0) !== '{') reject(new ZephyrError(respJsonStr));
-          else resolve(new ZephyrCheckTx(JSON.parse(GenUtils.stringifyBigInts(respJsonStr))));
-        });
-      });
-    });
+    throw WalletErrors.unsupported("PROOF_CHECK");
   }
+
   
   async getSpendProof(txHash: string, message?: string): Promise<string> {
-    if (this.getWalletProxy()) return this.getWalletProxy().getSpendProof(txHash, message);
-    return this.module.queueTask(async () => {
-      this.assertNotClosed();
-      return new Promise((resolve, reject) => {
-        this.module.get_spend_proof(this.cppAddress, txHash || "", message || "", (signature) => {
-          let errorKey = "error: ";
-          if (signature.indexOf(errorKey) === 0) reject(new ZephyrError(signature.substring(errorKey.length)));
-          else resolve(signature);
-        });
-      });
-    });
+    const r = checkSpendProofRequest(txHash, message);
+    return this.getSpendProofChecked(r.txHash, r.message);
   }
+
   
   async checkSpendProof(txHash: string, message: string | undefined, signature: string): Promise<boolean> {
-    if (this.getWalletProxy()) return this.getWalletProxy().checkSpendProof(txHash, message, signature);
-    return this.module.queueTask(async () => {
-      this.assertNotClosed(); 
-      return new Promise((resolve, reject) => {
-        this.module.check_spend_proof(this.cppAddress, txHash || "", message || "", signature || "", (resp) => {
-          typeof resp === "string" ? reject(new ZephyrError(resp)) : resolve(resp);
-        });
-      });
-    });
+    throw WalletErrors.unsupported("PROOF_CHECK");
   }
+
   
   async getReserveProofWallet(message?: string): Promise<string> {
     if (this.getWalletProxy()) return this.getWalletProxy().getReserveProofWallet(message);
@@ -2647,6 +2650,18 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
     return fromPreparedSweepDto(await this.invokeWorker("prepareSweepUnlocked", [request.asset, request.address, request.accountIndex, request.subaddressIndices.slice(), request.priority]), request);
   }
 
+  async getTxKeyChecked(txHash: string): Promise<string> {
+    return fromTxKeyDto(await this.invokeWorker("getTxKey", [txHash]));
+  }
+
+  async getTxProofChecked(request: ZephyrProofRequest): Promise<string> {
+    return fromTxProofDto(await this.invokeWorker("getTxProof", [request.txHash, request.address, request.message]));
+  }
+
+  async getSpendProofChecked(txHash: string, message: string): Promise<string> {
+    return fromSpendProofDto(await this.invokeWorker("getSpendProof", [txHash, message]));
+  }
+
   async relayPreparedChecked(token: string, hashes?: readonly string[]): Promise<ZephyrRelayResult> {
     return fromRelayDto(await this.invokeWorker("relayPrepared", [token]), hashes);
   }
@@ -2761,7 +2776,7 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   }
   
   async getTxKey(txHash) {
-    return this.invokeWorker("getTxKey", Array.from(arguments));
+    return this.getTxKeyChecked(checkSpendProofRequest(txHash, undefined).txHash);
   }
   
   async checkTxKey(txHash, txKey, address) {
@@ -2769,7 +2784,7 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   }
   
   async getTxProof(txHash, address, message) {
-    return this.invokeWorker("getTxProof", Array.from(arguments));
+    return this.getTxProofChecked(checkTxProofRequest(txHash, address, message));
   }
   
   async checkTxProof(txHash, address, message, signature) {
@@ -2777,7 +2792,8 @@ class ZephyrWalletFullProxy extends ZephyrWalletKeysProxy {
   }
   
   async getSpendProof(txHash, message) {
-    return this.invokeWorker("getSpendProof", Array.from(arguments));
+    const r = checkSpendProofRequest(txHash, message);
+    return this.getSpendProofChecked(r.txHash, r.message);
   }
   
   async checkSpendProof(txHash, message, signature) {

@@ -1,6 +1,7 @@
 import ZephyrWalletError, { ZephyrWalletErrorDiagnostic, ZephyrWalletErrorCode } from "./ZephyrWalletError";
 import type { ZephyrNativeErrorContext } from "./ZephyrWalletErrorMapping";
-import { checkTxHashes } from "./ZephyrHistoryInternal";
+import { checkTxHash, checkTxHashes } from "./ZephyrHistoryInternal";
+import { checkProofMessage } from "./ZephyrProofInternal";
 
 /**
  * Central capability and argument specification of the supported wallet surface.
@@ -188,7 +189,9 @@ export const LIFECYCLE_NATIVE_EXPORTS: readonly string[] = [
   // prepare (build and keep), relay exactly what was prepared (the one relay binding), discard
   "prepare_txs", "prepare_conversion", "relay_prepared", "discard_prepared",
   // sweeping the unlocked balance of one asset in one account: build (and discard) or prepare (and keep)
-  "build_sweep_unlocked", "prepare_sweep_unlocked"
+  "build_sweep_unlocked", "prepare_sweep_unlocked",
+  // payment proofs and transaction keys (inherited bindings adapted to the fixed core)
+  "get_tx_key", "get_tx_proof", "get_spend_proof"
 ];
 
 /**
@@ -212,8 +215,8 @@ export const UNBUILT_BRIDGE_EXPORTS: readonly string[] = ["get_exception_message
   "get_balance_subaddress", "get_unlocked_balance_subaddress",
   "get_transfers", "get_outputs", "export_outputs", "import_outputs", "export_key_images", "import_key_images", "freeze_output",
   "thaw_output", "is_output_frozen", "get_default_fee_priority", "create_txs", "sweep_output", "sweep_unlocked", "sweep_dust",
-  "relay_txs", "describe_tx_set", "sign_txs", "submit_txs", "sign_message", "verify_message", "get_tx_key", "check_tx_key",
-  "get_tx_proof", "check_tx_proof", "get_spend_proof", "check_spend_proof", "get_reserve_proof_wallet", "get_reserve_proof_account",
+  "relay_txs", "describe_tx_set", "sign_txs", "submit_txs", "sign_message", "verify_message", "check_tx_key",
+  "check_tx_proof", "check_spend_proof", "get_reserve_proof_wallet", "get_reserve_proof_account",
   "check_reserve_proof", "get_tx_notes", "set_tx_notes", "get_address_book_entries", "add_address_book_entry",
   "edit_address_book_entry", "delete_address_book_entry", "tag_accounts", "untag_accounts", "get_account_tags",
   "set_account_tag_label", "get_payment_uri", "parse_payment_uri", "get_attribute", "set_attribute", "is_multisig_import_needed",
@@ -231,7 +234,7 @@ export interface LifecycleArgSpec {
     | "keysBytes" | "optionalBytes" | "emptyPath" | "absent" | "falseFlag" | "createConfig" | "keysConfig"
     | "boolean" | "daemonUri" | "height" | "assetType" | "label" | "subaddressIndices" | "historyStatus" | "historyHeight" | "txHashes"
     | "txAddresses" | "txAmounts" | "txSubaddressIndices" | "txPriority" | "txAddress" | "conversionAmount" | "relayToken"
-    | "syncTag" | "syncPeriod";
+    | "syncTag" | "syncPeriod" | "txHash" | "proofMessage";
   readonly optional?: boolean;
 }
 
@@ -325,6 +328,12 @@ export const LIFECYCLE_WORKER_METHODS: Readonly<Record<string, LifecycleWorkerMe
   // relay exactly the kept build a token names (the one way to relay), or discard it
   relayPrepared: { scope: "wallet", kinds: FULL, args: [{ kind: "relayToken" }], nativeExports: ["relay_prepared"], errorContext: "relay" },
   discardPrepared: { scope: "wallet", kinds: FULL, args: [{ kind: "relayToken" }], nativeExports: ["discard_prepared"], errorContext: "relay" },
+  // payment proofs and transaction keys of full wallets: the key of a transaction the wallet sent (no request), the proof that
+  // a transaction paid an address (hash, address, message) and the proof that the wallet spent in it (hash, message); the
+  // replies are the strings, checked for the core's form on both sides (common/ZephyrProofInternal.ts)
+  getTxKey: { scope: "wallet", kinds: FULL, args: [{ kind: "txHash" }], nativeExports: ["get_tx_key"], errorContext: "proof" },
+  getTxProof: { scope: "wallet", kinds: FULL, args: [{ kind: "txHash" }, { kind: "txAddress" }, { kind: "proofMessage" }], nativeExports: ["get_tx_proof"], errorContext: "proof" },
+  getSpendProof: { scope: "wallet", kinds: FULL, args: [{ kind: "txHash" }, { kind: "proofMessage" }], nativeExports: ["get_spend_proof"], errorContext: "proof" },
   isClosed: { scope: "wallet", kinds: BOTH, args: [], nativeExports: [], errorContext: "other" },
   prepareClose: { scope: "wallet", kinds: FULL, args: [], nativeExports: [], errorContext: "close" },
   close: { scope: "wallet", kinds: BOTH, args: [{ kind: "falseFlag", optional: true }], nativeExports: ["close"], errorContext: "close" }
@@ -388,6 +397,8 @@ export function validateWorkerArgs(method: LifecycleWorkerMethod, args: readonly
       case "relayToken": if (typeof value !== "string" || !/^[0-9a-f]{32}$/.test(value)) fail("INVALID_CONFIG", "RELAY_TOKEN"); break;
       case "syncTag": if (!isWorkerId(value)) fail("MALFORMED_MESSAGE", "ARGUMENT_TYPE"); break;
       case "syncPeriod": if (!isSyncPeriod(value)) fail("INVALID_CONFIG", "SYNC_PERIOD"); break;
+      case "txHash": checkTxHash(value); break;
+      case "proofMessage": if (typeof value !== "string") fail("INVALID_CONFIG", "PROOF_MESSAGE"); checkProofMessage(value); break;
       case "createConfig":
       case "keysConfig": if (value === null || typeof value !== "object" || Array.isArray(value)) fail("INVALID_CONFIG", "CONFIG_TYPE"); break;
     }

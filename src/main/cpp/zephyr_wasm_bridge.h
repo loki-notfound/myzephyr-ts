@@ -24,7 +24,7 @@ namespace zephyr_wasm_bridge
 
   // Retained bindings report failures with the fixed error protocol of zephyr_wasm_bridge.cpp
   // ({"error":"<IDENTIFIER>"} or -1); no native exception text reaches JavaScript.
-  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC, ERROR_CONTEXT_ADDRESS_INDEX, ERROR_CONTEXT_BUILD, ERROR_CONTEXT_CONVERSION, ERROR_CONTEXT_RELAY, ERROR_CONTEXT_SWEEP };
+  enum error_context { ERROR_CONTEXT_CREATE = 1, ERROR_CONTEXT_OPEN, ERROR_CONTEXT_CHANGE_PASSWORD, ERROR_CONTEXT_CLOSE, ERROR_CONTEXT_ADDRESS, ERROR_CONTEXT_GETTER, ERROR_CONTEXT_BUFFER, ERROR_CONTEXT_UTILITY, ERROR_CONTEXT_DAEMON, ERROR_CONTEXT_SYNC, ERROR_CONTEXT_ADDRESS_INDEX, ERROR_CONTEXT_BUILD, ERROR_CONTEXT_CONVERSION, ERROR_CONTEXT_RELAY, ERROR_CONTEXT_SWEEP, ERROR_CONTEXT_PROOF };
   const char* classify_current_exception(int context); // only inside a catch handler
   const char* probe_password_state(int handle, const string& old_password, const string& new_password);
 
@@ -110,6 +110,12 @@ namespace zephyr_wasm_bridge
   // byte of a built transaction; prepare_sweep_unlocked keeps them in the wallet's one slot as prepare_txs does
   void build_sweep_unlocked(int handle, const string& asset, const string& address, uint32_t account_idx, const string& subaddress_indices, uint32_t priority, emscripten::val callback);
   void prepare_sweep_unlocked(int handle, const string& asset, const string& address, uint32_t account_idx, const string& subaddress_indices, uint32_t priority, emscripten::val callback);
+  // payment proofs and transaction keys of a full wallet: the secret key of a transaction the wallet sent (no request), the
+  // proof that a transaction paid an address and the proof that the wallet spent in a transaction (daemon requests); each
+  // result is checked to have the core's form and is wiped after the callback
+  void get_tx_key(int handle, const string& tx_hash, emscripten::val callback);
+  void get_tx_proof(int handle, const string& tx_hash, const string& address, const string& message, emscripten::val callback);
+  void get_spend_proof(int handle, const string& tx_hash, const string& message, emscripten::val callback);
   // the one way to relay: exactly the kept build that token names (the only caller of the core's commit); and its discard
   void relay_prepared(int handle, const string& token, emscripten::val callback);
   void discard_prepared(int handle, const string& token, emscripten::val callback);
@@ -165,11 +171,8 @@ namespace zephyr_wasm_bridge
   void submit_txs(int handle, const string& signed_tx_hex, emscripten::val callback);
   string sign_message(int handle, const string& msg, uint32_t signature_type_num, uint32_t account_idx, uint32_t subaddress_idx);
   string verify_message(int handle, const string& msg, const string& address, const string& signature);
-  string get_tx_key(int handle, const string& tx_hash);
   void check_tx_key(int handle, const string& tx_hash, const string& tx_key, const string& address, emscripten::val callback);
-  void get_tx_proof(int handle, const string& tx_hash, const string& address, const string& message, emscripten::val callback);
   void check_tx_proof(int handle, const string& tx_hash, const string& address, const string& message, const string& signature, emscripten::val callback);
-  void get_spend_proof(int handle, const string& tx_hash, const string& message, emscripten::val callback);
   void check_spend_proof(int handle, const string& tx_hash, const string& message, const string& signature, emscripten::val callback);
   void get_reserve_proof_wallet(int handle, const string& message, emscripten::val callback);
   void get_reserve_proof_account(int handle, uint32_t account_idx, const string& amount_str, const string& message, emscripten::val callback);

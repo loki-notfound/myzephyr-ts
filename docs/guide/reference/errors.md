@@ -139,7 +139,10 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `DAEMON_SETTINGS` | `UNSUPPORTED_CAPABILITY` | rescans and key image import |
 | `RESERVE_PROOF` | `UNSUPPORTED_CAPABILITY` | reserve proofs |
 | `CONVERSION` | `UNSUPPORTED_CAPABILITY` | a `destinationAsset` other than `asset` in a transfer or a sweep |
-| `INTEGRATED_ADDRESS` | `UNSUPPORTED_CAPABILITY` | an integrated address as a destination |
+| `KEYS_ONLY_PROOF` | `UNSUPPORTED_CAPABILITY` | a proof or transaction key call of a keys-only wallet |
+| `VIEW_ONLY_PROOF` | `UNSUPPORTED_CAPABILITY` | `getSpendProof` of a view-only wallet |
+| `PROOF_CHECK` | `UNSUPPORTED_CAPABILITY` | `checkTxKey`, `checkTxProof` and `checkSpendProof`: the core's check reports amount 0 |
+| `INTEGRATED_ADDRESS` | `UNSUPPORTED_CAPABILITY` | an integrated address as a destination or as the address of a transaction proof |
 | `TERMINATE` | `UNSUPPORTED_CAPABILITY` | `terminate` of a direct-mode wallet |
 | `DAEMON_CREDENTIALS` | `UNSUPPORTED_CAPABILITY` | a user name or password for the daemon |
 | `DAEMON_PROXY` | `UNSUPPORTED_CAPABILITY` | a proxy for the daemon |
@@ -216,7 +219,7 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `CORE_INVALID_PASSWORD` | `WRONG_PASSWORD` | a password the core rejected |
 | `ADDRESS_TYPE` | `INVALID_ADDRESS` | an address that is not a non-empty string of the expected form |
 | `CORE_INVALID_ADDRESS` | `INVALID_ADDRESS` | an address the core's parser rejects, or of another network |
-| `ADDRESS_NETWORK` | `INVALID_ADDRESS` | a valid address of another network as a destination |
+| `ADDRESS_NETWORK` | `INVALID_ADDRESS` | a valid address of another network as a destination or as the address of a transaction proof |
 | `ADDRESS_NOT_IN_WALLET` | `INVALID_ADDRESS` | an address of another wallet |
 
 ### Daemon
@@ -229,6 +232,17 @@ instead: `INVALID_WALLET_DATA` when opening bytes, `INVALID_RECOVERY_MATERIAL` w
 | `DAEMON_BUSY` | `DAEMON_ERROR` | at relay, the daemon did not process the transaction; for `ZephyrDaemonRpc`, the daemon answered with the status BUSY |
 | `PRICING_RECORD_UNAVAILABLE` | `DAEMON_ERROR` | `getReserveInfo`: the core could not read a usable pricing record of the daemon's top block and computed nothing |
 | `SYNC_FAILED` | `NATIVE_ERROR` | another failure of a sync |
+
+### Proofs and transaction keys
+
+| Diagnostic | Code | Meaning |
+|---|---|---|
+| `PROOF_MESSAGE` | `INVALID_CONFIG` | a proof message that is not a string of at most 1,024 UTF-8 bytes without U+0000 or an unpaired surrogate |
+| `TX_FAILED` | `INVALID_CONFIG` | a proof of a transaction the wallet holds as failed (no daemon has it) |
+| `TX_KEY_UNAVAILABLE` | `INVALID_CONFIG` | the wallet holds no secret key for the transaction: it did not send it, or it was restored from its seed or from bytes saved before the send |
+| `ADDRESS_NOT_IN_TX` | `INVALID_CONFIG` | `getTxProof`: the address received nothing in the transaction |
+| `TX_NOT_SENT` | `INVALID_CONFIG` | `getSpendProof`: the wallet spent nothing in the transaction |
+| `PROOF_FAILED` | `NATIVE_ERROR` | another failure of the core's proof |
 
 ### Building, conversions and relay
 

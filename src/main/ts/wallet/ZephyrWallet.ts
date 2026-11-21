@@ -32,6 +32,7 @@ import { ZephyrReserveInfo } from "../common/ZephyrReserve";
 import { ZephyrWalletListener } from "../common/ZephyrNotifications";
 import { ZephyrNotification, checkListener, checkSyncPeriod, deliverNotification } from "../common/ZephyrNotificationsInternal";
 import { checkHistoryQuery, checkTxHash, filterTransfers, filterTxs, selectionOf } from "../common/ZephyrHistoryInternal";
+import { checkSpendProofRequest, checkTxProofRequest } from "../common/ZephyrProofInternal";
 
 
 /** Network types; numeric values match the core. */
@@ -943,6 +944,65 @@ export class ZephyrWallet {
     await this.call("sync", () => wallet.stopSyncingChecked());
   }
 
+  // ------------------------- payment proofs and transaction keys -------------------------
+  //
+  // Full wallets, direct and proxied, with the names of the Java port; keys-only wallets reject with
+  // UNSUPPORTED_CAPABILITY/KEYS_ONLY_PROOF. The transaction hash is 64 lowercase hexadecimal characters (else
+  // INVALID_CONFIG/TX_HASH); a message is optional (none is the empty message) and at most 1,024 UTF-8 bytes without U+0000
+  // or an unpaired surrogate (else INVALID_CONFIG/PROOF_MESSAGE); all before any native or worker call. Then the wallet's own
+  // records decide, before any request: a transaction the wallet does not hold rejects with INVALID_CONFIG/TX_NOT_FOUND (as
+  // getTx), one it holds as failed with TX_FAILED. Keys and proofs come from the wallet's cache and keys: a wallet restored
+  // from its seed has no transaction keys. Results are strings; they never appear in an error. The library makes proofs and
+  // does not check them (see checkTxProof).
+
+  /**
+   * The secret key of a transaction this wallet sent (the key, then its additional keys if the transaction has them, 64
+   * lowercase hexadecimal characters each), from the wallet's cache; no request. A transaction the wallet holds no key for
+   * (it did not send it, or the wallet was restored from its seed or lost its cache) rejects with
+   * INVALID_CONFIG/TX_KEY_UNAVAILABLE. The key is a secret like the private keys: anyone who has it and the transaction can
+   * see what it paid to an address. Prefer getTxProof for showing a payment.
+   */
+  async getTxKey(txHash: string): Promise<string> {
+    const wallet = this.full("KEYS_ONLY_PROOF");
+    const h = checkTxHash(txHash);
+    if (arguments.length > 1) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("proof", () => wallet.getTxKeyChecked(h));
+  }
+
+  /**
+   * A proof that the transaction paid the address, signed over the optional message: "OutProofV2..." when the address is not
+   * one of this wallet's (the sender proves a payment; made with the transaction's key, so only the wallet that sent the
+   * transaction and kept its cache can make it), "InProofV2..." when it is one of this wallet's (the receiver proves receipt,
+   * made with the view key; also for a payment this wallet sent to itself). The address is checked with the core's parser
+   * for the wallet's network (INVALID_ADDRESS/CORE_INVALID_ADDRESS, ADDRESS_NETWORK; an integrated address rejects with
+   * UNSUPPORTED_CAPABILITY/INTEGRATED_ADDRESS: give its standard address). Before any request: an address that received
+   * nothing in the transaction rejects with INVALID_CONFIG/ADDRESS_NOT_IN_TX (from the wallet's records: an output or an
+   * incoming transfer of the wallet at that address, or a destination of its outgoing transfer), an outbound proof without
+   * the transaction's key with TX_KEY_UNAVAILABLE. Then the core asks the daemon for the transaction (/gettransactions);
+   * failures reject with DAEMON_ERROR. A checker verifies the proof with the transaction hash, the address and the same
+   * message; the proof shows which outputs went to the address, not who controls it.
+   */
+  async getTxProof(txHash: string, address: string, message?: string): Promise<string> {
+    const wallet = this.full("KEYS_ONLY_PROOF");
+    const request = checkTxProofRequest(txHash, address, message);
+    if (arguments.length > 3) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("proof", () => wallet.getTxProofChecked(request));
+  }
+
+  /**
+   * A proof that this wallet spent in the transaction ("SpendProofV1...", one signature per ring member of each input), signed
+   * over the optional message; it needs no address. Made with the spend key: a view-only wallet rejects with
+   * UNSUPPORTED_CAPABILITY/VIEW_ONLY_PROOF, a transaction the wallet spent nothing in with INVALID_CONFIG/TX_NOT_SENT, both
+   * before any request; a wallet restored from its seed can make it. The core asks the daemon for the transaction and for
+   * the ring members of its inputs (/gettransactions, /get_outs.bin); failures reject with DAEMON_ERROR.
+   */
+  async getSpendProof(txHash: string, message?: string): Promise<string> {
+    const wallet = this.full("KEYS_ONLY_PROOF");
+    const request = checkSpendProofRequest(txHash, message);
+    if (arguments.length > 2) throw new ZephyrWalletError("INVALID_CONFIG", "FIELD_TYPE");
+    return this.call("proof", () => wallet.getSpendProofChecked(request.txHash, request.message));
+  }
+
   /**
    * Have the inner wallet pass its notifications to this facade (once; in a proxied wallet a callback on its worker
    * channel, removed with the worker's other callbacks at close). Wallets that never use notifications register nothing.
@@ -989,6 +1049,17 @@ export class ZephyrWallet {
   /** Not offered: the core sweeps only outputs without RingCT, in the V1 asset ZEPH with ring size 1; the chain has no use for it. */
   async sweepDust(): Promise<never> { throw WalletErrors.unsupported("TRANSACTIONS"); }
   async getReserveProofWallet(): Promise<never> { throw WalletErrors.unsupported("RESERVE_PROOF"); }
+  /**
+   * Not offered (UNSUPPORTED_CAPABILITY/PROOF_CHECK): the core's check reports a received amount of 0 for every current
+   * transaction (it reads the amount of the V1 asset ZEPH only, which no output has carried since hard fork 11), and its
+   * result is good whenever the call does not fail, also when the transaction paid nothing to the address. Read a payment
+   * from the history instead, or check a proof with a separate checker.
+   */
+  async checkTxKey(): Promise<never> { throw WalletErrors.unsupported("PROOF_CHECK"); }
+  /** Not offered (UNSUPPORTED_CAPABILITY/PROOF_CHECK): the core's check reports a received amount of 0 (see checkTxKey). */
+  async checkTxProof(): Promise<never> { throw WalletErrors.unsupported("PROOF_CHECK"); }
+  /** Not offered (UNSUPPORTED_CAPABILITY/PROOF_CHECK): proofs are checked by a separate checker, not by the wallet. */
+  async checkSpendProof(): Promise<never> { throw WalletErrors.unsupported("PROOF_CHECK"); }
   async rescanSpent(): Promise<never> { throw WalletErrors.unsupported("DAEMON_SETTINGS"); }
   async importKeyImages(): Promise<never> { throw WalletErrors.unsupported("DAEMON_SETTINGS"); }
 }

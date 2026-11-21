@@ -8,7 +8,8 @@
 EMSCRIPTEN_BINDINGS(module)
 {
   // Supported wallet lifecycle, read-only daemon access with the core's wallet notifications, accounts and subaddresses,
-  // read-only history, the explicit pool refresh, building transactions and sweeps and relaying a prepared build: only the bindings
+  // read-only history, the explicit pool refresh, building transactions and sweeps, relaying a prepared build, payment
+  // proofs and transaction keys: only the bindings
   // below are exported. Every other inherited monero-ts binding is excluded together with its
   // definition in zephyr_wasm_bridge.cpp (ZEPHYR_WASM_BRIDGE_UNPORTED) until it is adapted to the
   // fixed core.
@@ -98,6 +99,11 @@ EMSCRIPTEN_BINDINGS(module)
   emscripten::function("prepare_sweep_unlocked", &zephyr_wasm_bridge::prepare_sweep_unlocked);
   emscripten::function("relay_prepared", &zephyr_wasm_bridge::relay_prepared);
   emscripten::function("discard_prepared", &zephyr_wasm_bridge::discard_prepared);
+  // payment proofs and transaction keys (full wallets): the key of a transaction the wallet sent, the proof that a
+  // transaction paid an address and the proof that the wallet spent in a transaction; nothing is checked or relayed
+  emscripten::function("get_tx_key", &zephyr_wasm_bridge::get_tx_key);
+  emscripten::function("get_tx_proof", &zephyr_wasm_bridge::get_tx_proof);
+  emscripten::function("get_spend_proof", &zephyr_wasm_bridge::get_spend_proof);
   emscripten::function("close", &zephyr_wasm_bridge::close);
 
 #if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)

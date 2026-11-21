@@ -703,6 +703,54 @@ finished (it is not ended); resolves at once when no loop runs.
 
 Rejects with: `INVALID_CONFIG`/`FIELD_TYPE` (an argument).
 
+## Payment proofs and transaction keys
+
+Full wallets only; keys-only wallets reject with `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_PROOF`. The hash is 64 lowercase
+hexadecimal characters (`INVALID_CONFIG`/`TX_HASH`); a message is optional, at most 1,024 UTF-8 bytes, without U+0000 or an
+unpaired surrogate (`INVALID_CONFIG`/`PROOF_MESSAGE`); an extra argument rejects with `INVALID_CONFIG`/`FIELD_TYPE`. Before
+any request the wallet's records decide: `INVALID_CONFIG`/`TX_NOT_FOUND` for a transaction the wallet does not hold,
+`INVALID_CONFIG`/`TX_FAILED` for one it holds as failed. Results are strings and never appear in an error; the library makes
+proofs and does not check them. Guide: [Proofs and transaction keys](../06-history.md#proofs-and-transaction-keys).
+
+### `getTxKey`
+
+```ts signature
+getTxKey(txHash: string): Promise<string>;
+```
+
+The secret key of a transaction the wallet sent, with its additional keys if it has them (64 lowercase hexadecimal
+characters each), from the wallet's cache. No request. A secret: prefer `getTxProof`.
+
+Rejects with: the common rejections above, `INVALID_CONFIG`/`TX_KEY_UNAVAILABLE` (the wallet holds no key for the
+transaction: it did not send it, or it was restored from its seed or from bytes saved before the send).
+
+### `getTxProof`
+
+```ts signature
+getTxProof(txHash: string, address: string, message?: string): Promise<string>;
+```
+
+A proof that the transaction paid the address: `"OutProofV2..."` for an address of another wallet (made with the
+transaction's key), `"InProofV2..."` for an address of this wallet (made with the view key; also for a payment the wallet
+sent to itself). One daemon request (`/gettransactions`).
+
+Rejects with: the common rejections above, `INVALID_ADDRESS`/`ADDRESS_TYPE` (not a string of 90 to 140 base58 characters),
+`CORE_INVALID_ADDRESS`, `ADDRESS_NETWORK`, `UNSUPPORTED_CAPABILITY`/`INTEGRATED_ADDRESS`, `INVALID_CONFIG`/`ADDRESS_NOT_IN_TX`
+(the address received nothing in the transaction), `INVALID_CONFIG`/`TX_KEY_UNAVAILABLE` (an outbound proof without the
+transaction's key), `DAEMON_ERROR`, `NATIVE_ERROR`/`PROOF_FAILED`.
+
+### `getSpendProof`
+
+```ts signature
+getSpendProof(txHash: string, message?: string): Promise<string>;
+```
+
+A proof that the wallet spent in the transaction: `"SpendProofV1..."`, one signature per ring member of each input. Daemon
+requests (`/gettransactions`, `/get_outs.bin`).
+
+Rejects with: the common rejections above, `UNSUPPORTED_CAPABILITY`/`VIEW_ONLY_PROOF` (a view-only wallet),
+`INVALID_CONFIG`/`TX_NOT_SENT` (the wallet spent nothing in the transaction), `DAEMON_ERROR`, `NATIVE_ERROR`/`PROOF_FAILED`.
+
 ## Unsupported inherited calls
 
 These names remain from monero-ts so that a port finds them. Each rejects with
@@ -744,6 +792,34 @@ getReserveProofWallet(): Promise<never>;
 ```
 
 Reserve proofs. Rejects with `UNSUPPORTED_CAPABILITY`/`RESERVE_PROOF`.
+
+### `checkTxKey`
+
+```ts signature
+checkTxKey(): Promise<never>;
+```
+
+Checking a transaction with its key. Not offered: the core reports a received amount of 0 for every current transaction
+(it reads the amount of the V1 asset `ZEPH` only) and a good result whenever the call does not fail. Rejects with
+`UNSUPPORTED_CAPABILITY`/`PROOF_CHECK`. Guide: [Proofs and transaction keys](../06-history.md#why-the-library-does-not-check-proofs).
+
+### `checkTxProof`
+
+```ts signature
+checkTxProof(): Promise<never>;
+```
+
+Checking a transaction proof. Not offered: the core reports a received amount of 0, as for `checkTxKey`. Rejects with
+`UNSUPPORTED_CAPABILITY`/`PROOF_CHECK`.
+
+### `checkSpendProof`
+
+```ts signature
+checkSpendProof(): Promise<never>;
+```
+
+Checking a spend proof. Not offered: proofs are checked by a separate checker. Rejects with
+`UNSUPPORTED_CAPABILITY`/`PROOF_CHECK`.
 
 ### `rescanSpent`
 

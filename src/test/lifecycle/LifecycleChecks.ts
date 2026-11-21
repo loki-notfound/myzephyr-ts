@@ -20,6 +20,8 @@ import * as Transfer from "../../main/ts/common/ZephyrTransferInternal";
 import * as Conversion from "../../main/ts/common/ZephyrConversionInternal";
 import * as Relay from "../../main/ts/common/ZephyrRelayInternal";
 import * as Sweep from "../../main/ts/common/ZephyrSweepInternal";
+import * as Proof from "../../main/ts/common/ZephyrProofInternal";
+import { lifecycleWorkerMethod, validateWorkerArgs } from "../../main/ts/common/ZephyrLifecycleContract";
 import * as Reserve from "../../main/ts/common/ZephyrReserveInternal";
 import { parseDaemonAddress } from "../../main/ts/common/ZephyrDaemonAddress";
 import * as Notifications from "../../main/ts/common/ZephyrNotificationsInternal";
@@ -2566,6 +2568,136 @@ export async function runLifecycleChecks(opts: LifecycleCheckOptions): Promise<L
       try { (Sweep.checkSweepRequest as (...a: unknown[]) => unknown)(...args); notes.push("request accepted: " + label); expect(false, "request accepted"); } catch (err) { expect(codeOf(err) === "INVALID_CONFIG" || codeOf(err) === "INVALID_ADDRESS", "request " + label + " rejected"); }
     }
     notes.push(cases.length + " deviations rejected by the bridge parser, the worker DTO parser and the prepared parser");
+  });
+
+  await check("C51", "Payment proofs and transaction keys offline (no request): getTxKey, getTxProof and getSpendProof reject malformed hashes (INVALID_CONFIG/TX_HASH), addresses (INVALID_ADDRESS/ADDRESS_TYPE) and messages (INVALID_CONFIG/PROOF_MESSAGE: not a string, U+0000, an unpaired surrogate, more than 1,024 UTF-8 bytes) and extra arguments before any native call; the core's parser refuses an address of another network, a wrong checksum and an integrated address; a transaction the wallet does not hold rejects with INVALID_CONFIG/TX_NOT_FOUND for each call and each kind of address, also at the message bound; keys-only wallets reject UNSUPPORTED_CAPABILITY/KEYS_ONLY_PROOF, a view-only spend proof VIEW_ONLY_PROOF; checkTxKey, checkTxProof and checkSpendProof reject UNSUPPORTED_CAPABILITY/PROOF_CHECK before any native call; no message or address text in an error; closed wallets reject", async (notes) => {
+    const w = await F.openWalletData({ networkType: 0, password: pw, keysData: copyBytes(savedKeys), cacheData: copyBytes(savedCache), proxyToWorker: proxy });
+    const own = await w.getPrimaryAddress();
+    const other = await F.createKeysWallet({ networkType: 0, proxyToWorker: proxy });
+    const foreign = await other.getPrimaryAddress();
+    await other.close();
+    const hash = "ab".repeat(32);
+    const marker = "MARKERproofmessage";
+    const key = w.getTxKey as (...a: unknown[]) => Promise<unknown>;
+    const proof = w.getTxProof as (...a: unknown[]) => Promise<unknown>;
+    const spend = w.getSpendProof as (...a: unknown[]) => Promise<unknown>;
+    const badHashes: Array<[string, unknown]> = [["no hash", undefined], ["a number", 5], ["upper case", "AB".repeat(32)], ["63 characters", "a".repeat(63)], ["65 characters", "a".repeat(65)],
+      ["a space", "a".repeat(63) + " "], ["a hash list", [hash]], ["a 0x prefix", "0x" + "a".repeat(62)]];
+    const badAddresses: Array<[string, unknown]> = [["no address", undefined], ["a number", 7], ["empty", ""], ["a short address", own.substring(0, 40)], ["a space", own + " "], ["an address list", [own]],
+      ["a character outside base58", own.substring(0, own.length - 1) + "0"]];
+    const badMessages: Array<[string, unknown]> = [["a number", 1], ["null", null], ["an object", {}], ["U+0000", marker + "\u0000"], ["an unpaired high surrogate", marker + "\ud800"],
+      ["an unpaired low surrogate", "\udc00" + marker], ["1,025 bytes", "m".repeat(1025)], ["1,026 bytes in three-byte characters", "\u20ac".repeat(342)], ["1,028 bytes with a surrogate pair", "m".repeat(1024) + "\ud83d\ude00"]];
+    let rejections = 0;
+    const native = await countNativeCalls(async () => {
+      for (const [label, h] of badHashes) {
+        await expectCode(key.call(w, h), "INVALID_CONFIG", "getTxKey with " + label, notes, "TX_HASH");
+        await expectCode(proof.call(w, h, own), "INVALID_CONFIG", "getTxProof with " + label, notes, "TX_HASH");
+        await expectCode(spend.call(w, h), "INVALID_CONFIG", "getSpendProof with " + label, notes, "TX_HASH");
+        rejections += 3;
+      }
+      for (const [label, a] of badAddresses) { await expectCode(proof.call(w, hash, a), "INVALID_ADDRESS", "getTxProof with " + label, notes, "ADDRESS_TYPE"); rejections++; }
+      for (const [label, m] of badMessages) {
+        const e1 = await expectCode(proof.call(w, hash, own, m), "INVALID_CONFIG", "getTxProof with a message of " + label, notes, "PROOF_MESSAGE");
+        const e2 = await expectCode(spend.call(w, hash, m), "INVALID_CONFIG", "getSpendProof with a message of " + label, notes, "PROOF_MESSAGE");
+        expect(!scanText(e1).includes(marker) && !scanText(e2).includes(marker), "no message text in the error (" + label + ")");
+        rejections += 2;
+      }
+      await expectCode(key.call(w, hash, {}), "INVALID_CONFIG", "getTxKey with a second argument", notes, "FIELD_TYPE");
+      await expectCode(proof.call(w, hash, own, "", {}), "INVALID_CONFIG", "getTxProof with a fourth argument", notes, "FIELD_TYPE");
+      await expectCode(spend.call(w, hash, "", {}), "INVALID_CONFIG", "getSpendProof with a third argument", notes, "FIELD_TYPE");
+      for (const [label, fn] of [["checkTxKey", () => w.checkTxKey()], ["checkTxProof", () => w.checkTxProof()], ["checkSpendProof", () => w.checkSpendProof()],
+        ["checkTxKey with arguments", () => (w.checkTxKey as (...a: unknown[]) => Promise<unknown>).call(w, hash, "00".repeat(32), own)],
+        ["checkTxProof with arguments", () => (w.checkTxProof as (...a: unknown[]) => Promise<unknown>).call(w, hash, own, "", "InProofV2")],
+        ["checkSpendProof with arguments", () => (w.checkSpendProof as (...a: unknown[]) => Promise<unknown>).call(w, hash, "", "SpendProofV1")]] as Array<[string, () => Promise<unknown>]>) {
+        await expectCode(fn(), "UNSUPPORTED_CAPABILITY", label, notes, "PROOF_CHECK");
+        rejections++;
+      }
+    });
+    if (!proxy) expect(native === 0, "no native export called by " + (rejections + 3) + " rejections, got " + native);
+    // in the bridge: the core's address parser, then the wallet's records (no request; the wallet holds no transaction)
+    const testnet = await F.createKeysWallet({ networkType: 1, proxyToWorker: proxy });
+    const testnetAddress = await testnet.getPrimaryAddress();
+    await testnet.close();
+    await LibraryUtils.loadWasmModule();
+    const integrated = (JSON.parse(LibraryUtils.getWasmModule().get_integrated_address_util(0, own, "")) as { integratedAddress: string }).integratedAddress;
+    const lastChar = own.charAt(own.length - 1);
+    const badChecksum = own.substring(0, own.length - 1) + (lastChar === "A" ? "B" : "A");
+    await expectCode(w.getTxProof(hash, testnetAddress), "INVALID_ADDRESS", "getTxProof with a testnet address", notes, "ADDRESS_NETWORK");
+    await expectCode(w.getTxProof(hash, badChecksum), "INVALID_ADDRESS", "getTxProof with a wrong checksum", notes, "CORE_INVALID_ADDRESS");
+    await expectCode(w.getTxProof(hash, integrated), "UNSUPPORTED_CAPABILITY", "getTxProof with an integrated address", notes, "INTEGRATED_ADDRESS");
+    const sub = await w.createSubaddress(0);
+    const atBound = "\u20ac".repeat(341) + "m";
+    for (const [label, fn] of [["getTxKey", () => w.getTxKey(hash)], ["getTxProof to the primary address", () => w.getTxProof(hash, own)],
+      ["getTxProof to a subaddress of the wallet", () => w.getTxProof(hash, sub.address, marker)], ["getTxProof to another wallet's address", () => w.getTxProof(hash, foreign, marker)],
+      ["getTxProof with a message of 1,024 bytes", () => w.getTxProof(hash, own, atBound)], ["getTxProof with an emoji message", () => w.getTxProof(hash, own, "\ud83d\ude00 " + marker)],
+      ["getSpendProof", () => w.getSpendProof(hash)], ["getSpendProof with a message", () => w.getSpendProof(hash, marker)], ["getSpendProof with a message of 1,024 bytes", () => w.getSpendProof(hash, atBound)]] as Array<[string, () => Promise<unknown>]>) {
+      const err = await expectCode(fn(), "INVALID_CONFIG", label + " of a transaction the wallet does not hold", notes, "TX_NOT_FOUND");
+      const text = scanText(err);
+      expect(!text.includes(marker) && !text.includes(own) && !text.includes(foreign) && !text.includes(hash), label + ": no message, address or hash text in the error");
+    }
+    // keys-only and view-only wallets
+    const k = await F.createKeysWallet({ networkType: 0, seed, proxyToWorker: proxy });
+    for (const [label, fn] of [["getTxKey", () => k.getTxKey(hash)], ["getTxProof", () => k.getTxProof(hash, own)], ["getSpendProof", () => k.getSpendProof(hash)]] as Array<[string, () => Promise<unknown>]>) {
+      await expectCode(fn(), "UNSUPPORTED_CAPABILITY", "keys-only " + label, notes, "KEYS_ONLY_PROOF");
+    }
+    await expectCode(k.checkTxProof(), "UNSUPPORTED_CAPABILITY", "keys-only checkTxProof", notes, "PROOF_CHECK");
+    await k.close();
+    const v = await F.restoreWalletFromKeys({ networkType: 0, password: pw, primaryAddress: address, privateViewKey: privView, proxyToWorker: proxy });
+    await expectCode(v.getSpendProof(hash), "UNSUPPORTED_CAPABILITY", "view-only getSpendProof", notes, "VIEW_ONLY_PROOF");
+    await expectCode(v.getTxKey(hash), "INVALID_CONFIG", "view-only getTxKey of a transaction it does not hold", notes, "TX_NOT_FOUND");
+    await expectCode(v.getTxProof(hash, address), "INVALID_CONFIG", "view-only getTxProof of a transaction it does not hold", notes, "TX_NOT_FOUND");
+    await v.close();
+    expect((await w.getTxs()).length === 0, "nothing was recorded");
+    await w.close();
+    for (const [label, fn] of [["getTxKey", () => w.getTxKey(hash)], ["getTxProof", () => w.getTxProof(hash, own)], ["getSpendProof", () => w.getSpendProof(hash)]] as Array<[string, () => Promise<unknown>]>) {
+      await expectCode(fn(), "WALLET_CLOSED", label + " after close", notes);
+    }
+    notes.push(rejections + " rejections before dispatch, 3 by the core's address parser, 9 TX_NOT_FOUND in the bridge, 3 keys-only, 3 view-only");
+  });
+
+  await check("C52", "Proof and key decoding: the bridge's results {\"txKey\"}, {\"proof\"} and the worker's strings are accepted only in the forms the core writes (a key of 64 to 1,088 lowercase hexadecimal characters in whole keys; OutProofV2 or InProofV2 with 1 to 17 pairs of 44 and 88 base58 characters; SpendProofV1 with whole 88-character signatures); every deviation rejects with NATIVE_ERROR/UNEXPECTED_RESULT; the worker table validates the arguments again", async (notes) => {
+    const pair = "2".repeat(44) + "a".repeat(88);
+    const keyOk = ["c".repeat(64), "0123456789abcdef".repeat(8), "d".repeat(64 * 17)];
+    const txOk = ["InProofV2" + pair, "OutProofV2" + pair, "OutProofV2" + pair.repeat(17), "InProofV2" + pair.repeat(3)];
+    const spendOk = ["SpendProofV1" + "b".repeat(88), "SpendProofV1" + "Z".repeat(88 * 16)];
+    for (const k of keyOk) expect(Proof.parseBridgeTxKey(JSON.stringify({ txKey: k })) === k && Proof.fromTxKeyDto(k) === k, "a key of " + k.length + " characters accepted");
+    for (const p of txOk) expect(Proof.parseBridgeTxProof(JSON.stringify({ proof: p })) === p && Proof.fromTxProofDto(p) === p, "a transaction proof of " + p.length + " characters accepted");
+    for (const p of spendOk) expect(Proof.parseBridgeSpendProof(JSON.stringify({ proof: p })) === p && Proof.fromSpendProofDto(p) === p, "a spend proof of " + p.length + " characters accepted");
+    const keyBad = ["", "c".repeat(63), "c".repeat(65), "C".repeat(64), "g".repeat(64), "c".repeat(64 * 18), " " + "c".repeat(64)];
+    const txBad = ["", "InProofV2", "InProofV1" + pair, "OutProofV1" + pair, "inproofv2" + pair, "InProofV2" + pair + "a", "InProofV2" + pair.substring(1), "InProofV2" + pair.repeat(18),
+      "InProofV2" + "0".repeat(44) + "a".repeat(88), "InProofV2" + "O".repeat(44) + "a".repeat(88), "SpendProofV1" + "b".repeat(132), "InProofV2 " + pair.substring(1)];
+    const spendBad = ["", "SpendProofV1", "SpendProofV1" + "b".repeat(87), "SpendProofV1" + "b".repeat(89), "SpendProofV2" + "b".repeat(88), "InProofV2" + pair, "SpendProofV1" + "l".repeat(88)];
+    let rejected = 0, total = 0;
+    const rejects = (fn: () => unknown, what: string) => {
+      total++;
+      try { fn(); notes.push("accepted: " + what); } catch (err) { if (codeOf(err) + diagnosticOf(err) === "NATIVE_ERROR/UNEXPECTED_RESULT") rejected++; else notes.push(what + ": " + codeOf(err) + diagnosticOf(err)); }
+    };
+    for (const k of keyBad) { rejects(() => Proof.parseBridgeTxKey(JSON.stringify({ txKey: k })), "bridge key of " + k.length); rejects(() => Proof.fromTxKeyDto(k), "worker key of " + k.length); }
+    for (const p of txBad) { rejects(() => Proof.parseBridgeTxProof(JSON.stringify({ proof: p })), "bridge proof of " + p.length); rejects(() => Proof.fromTxProofDto(p), "worker proof of " + p.length); }
+    for (const p of spendBad) { rejects(() => Proof.parseBridgeSpendProof(JSON.stringify({ proof: p })), "bridge spend proof of " + p.length); rejects(() => Proof.fromSpendProofDto(p), "worker spend proof of " + p.length); }
+    for (const text of ["{\"txKey\":\"" + keyOk[0] + "\",\"x\":1}", "{\"proof\":\"" + txOk[0] + "\"} ", "[\"" + txOk[0] + "\"]", "{\"error\":\"TX_NOT_FOUND\"}", "{\"proof\":" + JSON.stringify(txOk[0]) + ",\"txKey\":\"\"}"]) {
+      rejects(() => Proof.parseBridgeTxKey(text), "bridge key text"); rejects(() => Proof.parseBridgeTxProof(text), "bridge proof text"); rejects(() => Proof.parseBridgeSpendProof(text), "bridge spend proof text");
+    }
+    for (const dto of [undefined, null, 5, {}, [txOk[0]]]) { rejects(() => Proof.fromTxKeyDto(dto), "worker key " + typeof dto); rejects(() => Proof.fromTxProofDto(dto), "worker proof " + typeof dto); rejects(() => Proof.fromSpendProofDto(dto), "worker spend proof " + typeof dto); }
+    expect(rejected === total, "every deviation rejected (" + rejected + " of " + total + ")");
+    // the worker table validates the arguments again
+    const getTxProof = lifecycleWorkerMethod("getTxProof"), getSpendProof = lifecycleWorkerMethod("getSpendProof"), getTxKey = lifecycleWorkerMethod("getTxKey");
+    expect(getTxProof !== undefined && getSpendProof !== undefined && getTxKey !== undefined && lifecycleWorkerMethod("checkTxProof") === undefined && lifecycleWorkerMethod("checkTxKey") === undefined
+      && lifecycleWorkerMethod("checkSpendProof") === undefined, "the worker table has the three calls and none of the checks");
+    const h = "ab".repeat(32), a = address;
+    let tableRejected = 0;
+    const table: Array<[string, NonNullable<ReturnType<typeof lifecycleWorkerMethod>>, unknown[], string]> = [
+      ["getTxKey without a hash", getTxKey!, [], "MALFORMED_MESSAGE/ARGUMENT_COUNT"], ["getTxKey with an upper-case hash", getTxKey!, ["AB".repeat(32)], "INVALID_CONFIG/TX_HASH"],
+      ["getTxProof without a message", getTxProof!, [h, a], "MALFORMED_MESSAGE/ARGUMENT_COUNT"], ["getTxProof with a number as message", getTxProof!, [h, a, 1], "INVALID_CONFIG/PROOF_MESSAGE"],
+      ["getTxProof with 1,025 bytes", getTxProof!, [h, a, "m".repeat(1025)], "INVALID_CONFIG/PROOF_MESSAGE"], ["getTxProof with a short address", getTxProof!, [h, "abc", ""], "INVALID_ADDRESS/ADDRESS_TYPE"],
+      ["getSpendProof with U+0000", getSpendProof!, [h, "\u0000"], "INVALID_CONFIG/PROOF_MESSAGE"], ["getSpendProof with a short hash", getSpendProof!, ["ab", ""], "INVALID_CONFIG/TX_HASH"]];
+    for (const [label, method, args, expected] of table) {
+      try { validateWorkerArgs(method, args); notes.push("table accepted: " + label); } catch (err) { if (codeOf(err) + diagnosticOf(err) === expected) tableRejected++; else notes.push("table " + label + ": " + codeOf(err) + diagnosticOf(err)); }
+    }
+    validateWorkerArgs(getTxProof!, [h, a, ""]);
+    validateWorkerArgs(getSpendProof!, [h, "\u20ac".repeat(341) + "m"]);
+    expect(tableRejected === table.length, "the worker table rejects every malformed argument (" + tableRejected + " of " + table.length + ")");
+    notes.push(total + " deviations rejected by the bridge and worker parsers; " + table.length + " malformed worker arguments rejected by the table");
   });
 
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close

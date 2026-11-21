@@ -9,7 +9,9 @@
 #             (the only connections the monitor lets through), in the main thread and in a worker;
 #             the relay checks (S03) against the same servers' constructed sink daemons, with the test
 #             module in the main thread (a synthetic kept transaction: nothing leaves the machine), and the
-#             allocator around relay failures (S04) in the main thread and in a wallet worker
+#             allocator around relay failures (S04) in the main thread and in a wallet worker; the core's fee
+#             tier fallback (V03) against a constructed daemon started by its runner, with the test module in
+#             the main thread
 #   Chromium  lifecycle and instrumented suites in a wallet worker under a same-origin
 #             Content-Security-Policy, the module loading cases, and the redirect checks in the page
 #             and in a wallet worker (headless, network contained)
@@ -107,6 +109,18 @@ relay_node() { # direct|worker: the relay checks against constructed daemons (te
   ! grep -q '"kind":"\(connect\|dns\|fetch\|write\)"' "$run/monitor.jsonl" || die "Node relay checks ($1): the monitor recorded a connection other than to the loopback servers, or an unexpected write"
 }
 
+priority_node() { # the core's fee tier fallback against a constructed daemon (test module, V03, main thread)
+  local run=$OUT/node-priority rc=0
+  mkdir -p "$run"
+  log "Node fee tier check against a constructed daemon"
+  ( cd "$run" && LIFECYCLE_MONITOR_LOG=$run/monitor.jsonl LIFECYCLE_MONITOR_ALLOW_WRITE=$run/report.json:$run/monitor.jsonl \
+      timeout 900 node "${MON[@]}" "$ROOT/dist/src/test/transport/runPriorityNode.js" --test-module "$ROOT/dist/zephyr.test.js" --out "$run/report.json" ) \
+      > "$run/stdout.txt" 2> "$run/stderr.txt" || rc=$?
+  grep -E '^checks:' "$run/stdout.txt" || true
+  [ "$rc" = 0 ] || { tail -n 8 "$run/stdout.txt"; tail -n 5 "$run/stderr.txt"; die "Node fee tier check failed"; }
+  ! grep -q '"kind":"\(connect\|dns\|fetch\|write\)"' "$run/monitor.jsonl" || die "Node fee tier check: the monitor recorded a connection other than to the loopback daemon, or an unexpected write"
+}
+
 browser_root() { # dir consumer-bundle worker-bundle [wasm...]
   local dir=$1; shift
   rm -rf "$dir"; mkdir -p "$dir"
@@ -164,6 +178,7 @@ redirect_node direct
 redirect_node worker
 relay_node direct
 relay_node worker
+priority_node
 if [ "${SKIP_BROWSER:-0}" != 1 ]; then
   command -v "$CHROMIUM" >/dev/null || die "$CHROMIUM not found; set CHROMIUM or SKIP_BROWSER=1"
   browser_suite release

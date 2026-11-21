@@ -26,6 +26,7 @@ import { checkConversionRequest, toConversionDto } from "./ZephyrConversionInter
 import { checkSweepRequest, toSweepDto } from "./ZephyrSweepInternal";
 import { checkRelayToken, toPreparedConversionDto, toPreparedSweepDto, toPreparedTransferDto, toRelayDto } from "./ZephyrRelayInternal";
 import { toReserveInfoDto, toSupplyDto } from "./ZephyrReserveInternal";
+import { checkSpendProofRequest, checkTxProofRequest } from "./ZephyrProofInternal";
 import { NOTIFICATION_CALLBACK_ID, ZephyrNotification, toNotificationDto } from "./ZephyrNotificationsInternal";
 import ZephyrWalletFull from "../wallet/ZephyrWalletFull";
 
@@ -245,6 +246,14 @@ const LIFECYCLE_IMPL: Readonly<Record<string, LifecycleImpl>> = Object.freeze(Ob
     toPreparedSweepDto(await walletOf(walletId).prepareSweepChecked(checkSweepRequest(asset, address, accountIdx, indices, priority))),
   relayPrepared: async (walletId: string, token: string) => toRelayDto(await walletOf(walletId).relayPreparedChecked(checkRelayToken(token))),
   discardPrepared: async (walletId: string, token: string) => await walletOf(walletId).discardPreparedChecked(checkRelayToken(token)),
+  // payment proofs and transaction keys: the arguments were validated by the table and are checked again; the replies are
+  // the strings the wallet checked for the core's form
+  getTxKey: async (walletId: string, txHash: string) => await walletOf(walletId).getTxKeyChecked(checkSpendProofRequest(txHash, undefined).txHash),
+  getTxProof: async (walletId: string, txHash: string, address: string, message: string) => await walletOf(walletId).getTxProofChecked(checkTxProofRequest(txHash, address, message)),
+  getSpendProof: async (walletId: string, txHash: string, message: string) => {
+    const r = checkSpendProofRequest(txHash, message);
+    return await walletOf(walletId).getSpendProofChecked(r.txHash, r.message);
+  },
   isClosed: async (walletId: string) => walletOf(walletId).isClosed(),
   prepareClose: async (walletId: string) => walletOf(walletId).prepareClose(),
   close: async (walletId: string) => {

@@ -142,7 +142,18 @@ const ZEPHYR_WALLET_ERROR_DIAGNOSTICS = [
   // INVALID_CONFIG/LISTENER for a listener that is not an object or whose callback is not a function,
   // INVALID_CONFIG/LISTENER_NOT_REGISTERED for removeListener with a listener that is not registered,
   // INVALID_CONFIG/SYNC_PERIOD for a startSyncing period outside 1,000 to 86,400,000 milliseconds
-  "LISTENER_NOT_REGISTERED", "SYNC_PERIOD"
+  "LISTENER_NOT_REGISTERED", "SYNC_PERIOD",
+  // payment proofs and transaction keys of full wallets (getTxKey, getTxProof, getSpendProof). Before any native call:
+  // INVALID_CONFIG/TX_HASH, INVALID_ADDRESS/ADDRESS_TYPE, INVALID_CONFIG/PROOF_MESSAGE for a message that is not a string of
+  // at most 1,024 UTF-8 bytes without U+0000 or an unpaired surrogate; keys-only wallets UNSUPPORTED_CAPABILITY/KEYS_ONLY_PROOF.
+  // From the wallet's records, before any request: INVALID_CONFIG/TX_NOT_FOUND (a transaction the wallet does not hold),
+  // TX_FAILED (one the wallet holds as failed: no daemon has it), TX_KEY_UNAVAILABLE (the wallet holds no secret key for it:
+  // it did not send it, or it was restored from its seed), ADDRESS_NOT_IN_TX (the address received nothing in it),
+  // TX_NOT_SENT (a spend proof of a transaction the wallet spent nothing in); UNSUPPORTED_CAPABILITY/VIEW_ONLY_PROOF (a spend
+  // proof of a view-only wallet). NATIVE_ERROR/PROOF_FAILED for any other failure of the core's proof. The proof checks
+  // (checkTxKey, checkTxProof, checkSpendProof) reject with UNSUPPORTED_CAPABILITY/PROOF_CHECK: the core reports amount 0
+  "KEYS_ONLY_PROOF", "VIEW_ONLY_PROOF", "PROOF_MESSAGE", "TX_FAILED", "TX_KEY_UNAVAILABLE", "ADDRESS_NOT_IN_TX", "TX_NOT_SENT",
+  "PROOF_FAILED", "PROOF_CHECK"
 ] as const;
 
 export type ZephyrWalletErrorDiagnostic = typeof ZEPHYR_WALLET_ERROR_DIAGNOSTICS[number];

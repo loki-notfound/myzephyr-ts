@@ -63,7 +63,10 @@
  * Java port: sync(startHeight, listener), addListener, removeListener and getListeners with the six callbacks of
  * ZephyrWalletListener (common/ZephyrNotifications.ts), startSyncing and stopSyncing; callbacks never run inside the core,
  * and what they throw is dropped.
- * Not supported: outputs, a converting sweep, sweeping one output or dust, key images, rescans.
+ * Payment proofs and transaction keys of full wallets, with the names of the Java port: getTxKey (the secret key of a
+ * transaction the wallet sent), getTxProof (an OutProofV2 for an address of another wallet, an InProofV2 for one of this
+ * wallet) and getSpendProof; proofs are made, not checked (checkTxKey, checkTxProof and checkSpendProof reject).
+ * Not supported: outputs, a converting sweep, sweeping one output or dust, key images, rescans, checking proofs.
  */
 export {
   ZephyrWallet,
