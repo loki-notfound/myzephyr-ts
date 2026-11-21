@@ -2728,6 +2728,70 @@ namespace {
     return result;
   }
 
+  // The transfer objects of one transaction the core's sweep returned (monero_wallet_full::sweep_account), checked against the
+  // request: exactly one destination, the requested address with the transaction's amount; and the incoming transfers. The
+  // wrapper adds an incoming transfer (the destination amount, the destination currency) to every result transaction whose type
+  // is not TRANSFER, STABLE_TRANSFER or RESERVE_TRANSFER; its list lacks YIELD_TRANSFER, the type of a same-asset sweep of ZYS
+  // (cryptonote::get_tx_type), so such a sweep carries one, whose destination amount is the amount sent (create_transactions_from
+  // sets dest_amount = amount for a same-asset destination). It is accepted only in exactly that form: for YIELD_TRANSFER, exactly
+  // one incoming transfer, of this transaction, of the asset, with the transaction's amount and nothing else set (no account or
+  // subaddress index, address or suggested confirmations). It changes nothing that is described; every other incoming transfer is
+  // UNEXPECTED_RESULT (a converting sweep would carry the minted amount there).
+  void check_sweep_transfers(const monero_tx_wallet& tx, const string& asset, const string& address, uint64_t amount) {
+    if (tx.m_outgoing_transfer == boost::none || !tx.m_outgoing_transfer.get()) throw bridge_failure("UNEXPECTED_RESULT");
+    const monero_outgoing_transfer& out = *tx.m_outgoing_transfer.get();
+    if (out.m_destinations.size() != 1 || !out.m_destinations[0] || !out.m_destinations[0]->m_address || *out.m_destinations[0]->m_address != address
+        || !out.m_destinations[0]->m_amount || *out.m_destinations[0]->m_amount != amount) throw bridge_failure("UNEXPECTED_RESULT");
+    using tt = cryptonote::transaction_type;
+    tt type;
+    if (!cryptonote::get_tx_type(asset, asset, type)) throw bridge_failure("UNEXPECTED_RESULT");
+    if (type != tt::YIELD_TRANSFER) {
+      if (!tx.m_incoming_transfers.empty()) throw bridge_failure("UNEXPECTED_RESULT");
+      return;
+    }
+    if (tx.m_incoming_transfers.size() != 1 || !tx.m_incoming_transfers[0]) throw bridge_failure("UNEXPECTED_RESULT");
+    const monero_incoming_transfer& in = *tx.m_incoming_transfers[0];
+    if (in.m_tx.get() != &tx || !in.m_amount || *in.m_amount != amount || in.m_asset_type != asset || in.m_account_index || in.m_subaddress_index || in.m_address
+        || in.m_num_suggested_confirmations) throw bridge_failure("UNEXPECTED_RESULT");
+  }
+
+#if defined(ZEPHYR_TS_TEST_INSTRUMENTATION)
+  // test-only: the result objects the core's sweep wrapper (monero_wallet_full::sweep_account) builds for one transaction, without
+  // the transaction (hook sweep.wrapper), so that the bridge's checks of them run offline: an outgoing transfer of the asset with
+  // its one destination and amount, and, by the wrapper's own rule, an incoming transfer of the destination amount and asset
+  // unless the transaction type is TRANSFER, STABLE_TRANSFER or RESERVE_TRANSFER. Kinds: 1 the wrapper's shape, 2 the incoming
+  // transfer in another asset, 3 with another amount, 4 two of them, 5 with a subaddress index, 21 an incoming transfer also where
+  // the wrapper adds none. Inlined into the binding; absent from the release module.
+  __attribute__((always_inline)) inline bool test_wrapper_result(std::vector<std::shared_ptr<monero_tx_wallet>>& txs, const string& asset, const string& address, uint64_t amount) {
+    int shape = zephyr_ts_test_inject("sweep.wrapper");
+    if (shape == 0) return false;
+    std::shared_ptr<monero_tx_wallet> tx = std::make_shared<monero_tx_wallet>();
+    std::shared_ptr<monero_outgoing_transfer> out = std::make_shared<monero_outgoing_transfer>();
+    tx->m_outgoing_transfer = out;
+    out->m_amount = amount;
+    out->m_asset_type = asset;
+    out->m_destinations.push_back(std::make_shared<monero_destination>(address, amount));
+    using tt = cryptonote::transaction_type;
+    tt type;
+    if (!cryptonote::get_tx_type(asset, asset, type)) throw bridge_failure("UNEXPECTED_RESULT");
+    bool wrapper_adds = type != tt::TRANSFER && type != tt::STABLE_TRANSFER && type != tt::RESERVE_TRANSFER;
+    if (wrapper_adds || shape == 21) {
+      for (int i = 0; i < (shape == 4 ? 2 : 1); i++) {
+        std::shared_ptr<monero_incoming_transfer> in = std::make_shared<monero_incoming_transfer>();
+        in->m_tx = tx;
+        in->m_amount = shape == 3 ? amount + 1 : amount;
+        in->m_asset_type = shape == 2 ? (asset == "ZYS" ? "ZSD" : "ZYS") : asset;
+        if (shape == 5) in->m_subaddress_index = 0;
+        tx->m_incoming_transfers.push_back(in);
+      }
+    }
+    txs.push_back(tx);
+    return true;
+  }
+#else
+  inline bool test_wrapper_result(std::vector<std::shared_ptr<monero_tx_wallet>>&, const string&, const string&, uint64_t) { return false; }
+#endif
+
   // the JSON of a sweep's descriptions ({"txs":[...]}, the result of build_sweep_unlocked): as transfer_json, with the one
   // destination on every transaction (the core attributes each sweep transaction's amount to the destination)
   string sweep_json(const std::vector<built_description>& described, const std::string& address) {
@@ -2813,50 +2877,63 @@ namespace {
         kept.txs.push_back(std::move(synthetic));
       } else {
         test_throw_build("sweep.core", address); // test module only: the core's typed and sweep failures
-        // a necessary condition from the core's own balance of this asset in the selected outputs (no request); the test
-        // module can skip it (sweep.unchecked) so that the core's own refusal is reached without funds
-        if (!test_inject("sweep.unchecked")) {
-          uint64_t unlocked = 0, balance = 0;
-          if (indices.empty()) {
-            unlocked = wallet->get_unlocked_balance(asset, account_idx);
-            balance = wallet->get_balance(asset, account_idx);
-          } else {
-            for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(asset, account_idx, i); balance += wallet->get_balance(asset, account_idx, i); }
-          }
-          if (balance == 0) throw bridge_failure("NOT_ENOUGH_MONEY");
-          if (unlocked == 0) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
-        }
-        config.m_account_index = account_idx;
-        config.m_subaddress_indices = indices;
-        config.source_currency = asset;
-        config.destination_currency = asset;
-        config.m_priority = (monero_tx_priority) priority;
-        fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
-        std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
-        d->m_address = destination_addresses[0]; // no amount: the core sweeps everything unlocked
-        d->m_asset_type = asset;
-        config.m_destinations.push_back(d);
-        txs = wallet->sweep_unlocked(config);
-        test_barrier("sweep.after");
-        if (txs.empty() || txs.size() > 64) throw bridge_failure("UNEXPECTED_RESULT");
-        for (const auto& tx : txs) {
-          if (!tx) throw bridge_failure("UNEXPECTED_RESULT");
-          built_description b = describe_built_tx(*tx, asset);
-          if (b.source_asset != asset || b.destination_asset != asset || b.amount_burnt != 0 || b.amount_minted != 0 || b.pricing_record_height != 0 || b.amount == 0) throw bridge_failure("UNEXPECTED_RESULT");
-          // a same-asset sweep: no incoming transfer (a converting sweep carries the minted amount there), and its one
-          // destination is the requested address with the transaction's amount
-          const monero_outgoing_transfer& out = *tx->m_outgoing_transfer.get();
-          if (!tx->m_incoming_transfers.empty() || out.m_destinations.size() != 1 || !out.m_destinations[0] || !out.m_destinations[0]->m_address
-              || *out.m_destinations[0]->m_address != destination_addresses[0] || !out.m_destinations[0]->m_amount || *out.m_destinations[0]->m_amount != b.amount) throw bridge_failure("UNEXPECTED_RESULT");
-          described.push_back(b);
-        }
-        if (keep) {
+        if (!keep && test_wrapper_result(txs, asset, destination_addresses[0], 99691200000)) { // test module only: the wrapper's objects, no transaction
           for (size_t i = 0; i < txs.size(); i++) {
-            if (!txs[i]->m_metadata || txs[i]->m_metadata->empty()) throw bridge_failure("UNEXPECTED_RESULT");
-            kept_tx k;
-            k.hash = described[i].hash;
-            k.metadata = std::move(*txs[i]->m_metadata); // the serialized pending transaction stays in the module
-            kept.txs.push_back(std::move(k));
+            check_sweep_transfers(*txs[i], asset, destination_addresses[0], 99691200000);
+            built_description d = built_description();
+            d.hash = string(63, 'a') + (char) ('0' + i);
+            d.source_asset = asset;
+            d.destination_asset = asset;
+            d.amount = 99691200000;
+            d.fee = 308800000;
+            d.weight = 1;
+            d.inputs = 1;
+            d.outputs = 2;
+            d.ring_size = 16;
+            described.push_back(d);
+          }
+        } else {
+          // a necessary condition from the core's own balance of this asset in the selected outputs (no request); the test
+          // module can skip it (sweep.unchecked) so that the core's own refusal is reached without funds
+          if (!test_inject("sweep.unchecked")) {
+            uint64_t unlocked = 0, balance = 0;
+            if (indices.empty()) {
+              unlocked = wallet->get_unlocked_balance(asset, account_idx);
+              balance = wallet->get_balance(asset, account_idx);
+            } else {
+              for (uint32_t i : indices) { unlocked += wallet->get_unlocked_balance(asset, account_idx, i); balance += wallet->get_balance(asset, account_idx, i); }
+            }
+            if (balance == 0) throw bridge_failure("NOT_ENOUGH_MONEY");
+            if (unlocked == 0) throw bridge_failure("NOT_ENOUGH_UNLOCKED");
+          }
+          config.m_account_index = account_idx;
+          config.m_subaddress_indices = indices;
+          config.source_currency = asset;
+          config.destination_currency = asset;
+          config.m_priority = (monero_tx_priority) priority;
+          fix_relay_false(config); // the only value this binding ever passes: the core does not commit or relay
+          std::shared_ptr<monero_destination> d = std::make_shared<monero_destination>();
+          d->m_address = destination_addresses[0]; // no amount: the core sweeps everything unlocked
+          d->m_asset_type = asset;
+          config.m_destinations.push_back(d);
+          txs = wallet->sweep_unlocked(config);
+          test_barrier("sweep.after");
+          if (txs.empty() || txs.size() > 64) throw bridge_failure("UNEXPECTED_RESULT");
+          for (const auto& tx : txs) {
+            if (!tx) throw bridge_failure("UNEXPECTED_RESULT");
+            built_description b = describe_built_tx(*tx, asset);
+            if (b.source_asset != asset || b.destination_asset != asset || b.amount_burnt != 0 || b.amount_minted != 0 || b.pricing_record_height != 0 || b.amount == 0) throw bridge_failure("UNEXPECTED_RESULT");
+            check_sweep_transfers(*tx, asset, destination_addresses[0], b.amount);
+            described.push_back(b);
+          }
+          if (keep) {
+            for (size_t i = 0; i < txs.size(); i++) {
+              if (!txs[i]->m_metadata || txs[i]->m_metadata->empty()) throw bridge_failure("UNEXPECTED_RESULT");
+              kept_tx k;
+              k.hash = described[i].hash;
+              k.metadata = std::move(*txs[i]->m_metadata); // the serialized pending transaction stays in the module
+              kept.txs.push_back(std::move(k));
+            }
           }
         }
       }

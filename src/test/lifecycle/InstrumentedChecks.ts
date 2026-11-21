@@ -1621,6 +1621,46 @@ export async function runInstrumentedChecks(opts: LifecycleCheckOptions): Promis
     await expectCode(w.prepareSweepUnlocked(cfg), "WALLET_CLOSED", "prepareSweepUnlocked after close", notes);
   });
 
+  await check("T31", "The objects the core's sweep wrapper returns, per asset (test module: the wrapper's result objects without a transaction, no request): the wrapper adds an incoming transfer of the destination amount to every transaction whose type is not TRANSFER, STABLE_TRANSFER or RESERVE_TRANSFER, so a same-asset sweep of ZYS (YIELD_TRANSFER) carries one; each of the four V2 assets builds with the description of a same-asset sweep; an incoming transfer in any other form (another asset, another amount, two of them, a subaddress index, one where the wrapper adds none) rejects with NATIVE_ERROR/UNEXPECTED_RESULT; nothing stays in the allocator", async (notes) => {
+    const w = await open();
+    await hooks.target(w);
+    const own = await w.getPrimaryAddress();
+    const shaped = async (asset: string, kind: number): Promise<F.ZephyrSweepBuild> => {
+      await hooks.resetCounters();
+      await hooks.arm({ fail: { "sweep.wrapper": 1 }, kind: { "sweep.wrapper": kind } });
+      try { return await w.buildSweepUnlocked({ asset, address: own, accountIndex: 0 }); } finally {
+        expect((await hooks.state()).events.includes("injected:sweep.wrapper"), asset + " kind " + kind + " fired");
+        await hooks.resetCounters();
+      }
+    };
+    for (const asset of ["ZPH", "ZSD", "ZRS", "ZYS"]) {
+      let outcome = "built";
+      try {
+        const b = await shaped(asset, 1);
+        const t = b.txs[0];
+        expect(b.txs.length === 1 && !b.multipleTxs && t.sourceAsset === asset && t.destinationAsset === asset && t.feeAsset === asset && t.amount === BigInt(99691200000)
+          && b.totalAmount === t.amount && b.totalFee === t.fee && t.change === BigInt(0) && t.destinations?.length === 1 && t.destinations?.[0].address === own
+          && !("amountMinted" in t) && !("amountBurnt" in t) && !("pricingRecordHeight" in t), asset + ": the description of a same-asset sweep");
+      } catch (err) { outcome = codeOf(err) + diagnosticOf(err); }
+      notes.push("the wrapper's objects of a " + asset + " sweep" + (asset === "ZYS" ? " (with its incoming transfer)" : "") + " -> " + outcome);
+      expect(outcome === "built", asset + ": built, got " + outcome);
+    }
+    const others: Array<[string, number, string]> = [["ZYS", 2, "an incoming transfer in another asset"], ["ZYS", 3, "an incoming transfer with another amount"], ["ZYS", 4, "two incoming transfers"],
+      ["ZYS", 5, "an incoming transfer with a subaddress index"], ["ZPH", 21, "an incoming transfer where the wrapper adds none (ZPH)"], ["ZSD", 21, "an incoming transfer where the wrapper adds none (ZSD)"],
+      ["ZRS", 21, "an incoming transfer where the wrapper adds none (ZRS)"]];
+    for (const [asset, kind, label] of others) await expectCode(shaped(asset, kind), "NATIVE_ERROR", label, notes, "UNEXPECTED_RESULT");
+    const heap = async () => (await hooks.state()).heapInUse;
+    const deltas: number[] = [], refused: number[] = [];
+    await shaped("ZYS", 1);
+    for (let i = 0; i < 3; i++) { const h0 = await heap(); await shaped("ZYS", 1); deltas.push((await heap()) - h0); }
+    await shaped("ZYS", 4).catch(() => undefined);
+    for (let i = 0; i < 3; i++) { const h0 = await heap(); await shaped("ZYS", 4).catch(() => undefined); refused.push((await heap()) - h0); }
+    notes.push("allocator growth of 3 ZYS sweeps of the wrapper's shape: " + deltas.join(",") + "; of 3 refused shapes: " + refused.join(","));
+    expect(deltas.every((d) => d === 0) && refused.every((d) => d === 0), "nothing stays in the allocator");
+    expect((await w.getTxs()).length === 0, "nothing recorded");
+    await w.close();
+  });
+
   report.networkGuard = combinedGuard(await Internal.getNetworkGuardReport()); // open workers now plus the test layer's reads before each close
   report.workerAccounting = acc();
   report.workerMonitor = await waitWorkerMonitor(acc().utilityWorkers, 10000); // exit events of the last closed workers may still be pending
