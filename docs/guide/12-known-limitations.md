@@ -28,7 +28,8 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
 
 - a refusal by a daemon on real data; the refusal and failure paths of relay are proven against a
   local sink that answers as the daemon does;
-- a transfer the core splits into several transactions;
+- a transfer or a sweep the core splits into several transactions;
+- a sweep relayed to the network;
 - a conversion whose pricing record aged before inclusion;
 - the conversions ZPH to ZSD and ZRS to ZPH;
 - relay from a browser or from a wallet in a worker (`proxyToWorker`);
@@ -90,8 +91,11 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
 
 ## Building, conversions and relay
 
-- Same-asset transfers in the four V2 assets and the six conversions only; no sweeps, integrated
+- Same-asset transfers in the four V2 assets, the six conversions and the sweep of the unlocked balance
+  of one asset in one account only; no converting sweep, no sweep of one output or of dust, no integrated
   addresses, payment identifiers, unlock times or "subtract the fee from a destination".
+- A sweep always names its account (the Java port's `sweepUnlocked` without one sweeps every account) and
+  leaves outputs worth less than the fee of spending them where they are.
 - With the default priority the core chooses the fee tier and may take the second tier.
 - The library computes no conversion rate. The reserve ratio decides at build time which pairs are
   possible, and the chain checks it again at inclusion; a pricing record older than 10 blocks at

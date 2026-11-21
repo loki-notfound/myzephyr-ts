@@ -9,9 +9,23 @@ Not released yet: the package version in the repository is still `2.3.0-sec.2-ts
 of that name does not contain these changes. They make the shipped declarations say what the library
 does, remove internal members and names from them, remove the unsupported wallet RPC client from the
 package, and add the reserve, the circulating supply, a supported daemon client, the progress of a sync,
-listeners and background synchronization with the names of the Java port; apart from the additions, the
-diagnostics and the keys-only `server: ""` below, the library behaves as before. `zephyr.wasm` changes (two
-bindings for the reserve, one for the core's wallet notifications).
+listeners and background synchronization with the names of the Java port, and sweeping the unlocked balance of
+an account; apart from the additions, the diagnostics and the keys-only `server: ""` below, the library behaves
+as before. `zephyr.wasm` changes (two bindings for the reserve, one for the core's wallet notifications, two for
+sweeps).
+
+### Sweeping the unlocked balance of an account
+
+New on `ZephyrWallet`, for full wallets with spend keys: `buildSweepUnlocked(config)` (build, describe, discard)
+and `prepareSweepUnlocked(config)` (build, describe, keep under a token for `relayPrepared`), the Java port's
+`sweepUnlocked` in two explicit steps. New types `ZephyrSweepUnlockedConfig` (`asset`, optional `destinationAsset`
+equal to it, `address`, `accountIndex`, optional `subaddressIndices` and `priority`), `ZephyrSweepBuild` (`txs`,
+`multipleTxs`, `totalAmount`, `totalFee`) and `ZephyrPreparedSweep`. The account index is required (the Java
+port's core sweeps every account without it); a converting sweep rejects with `UNSUPPORTED_CAPABILITY`/
+`CONVERSION`. The sweep's refusals use the existing diagnostics: `NOT_ENOUGH_MONEY`, `NOT_ENOUGH_UNLOCKED`,
+`NOT_ENOUGH_FOR_FEE` and the other build failures. New rejecting members `sweepOutput()` and `sweepDust()`
+(`UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`), so that a port from the Java port finds them. `ZephyrBuiltTx` is
+unchanged; its `destinations` is present on every transaction of a sweep. Guide chapter 7, "Sweeping".
 
 ### Progress of a sync, listeners and background synchronization
 

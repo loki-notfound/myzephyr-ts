@@ -27,10 +27,10 @@ are type-checked against the package and the offline ones are run (`bin/check_gu
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
 the read-only history of transactions and transfers, an explicit pool refresh, building same-asset
 transactions and conversions to inspect them, relaying a prepared transaction or conversion in two
-explicit steps, the reserve, the circulating supply and the oracle's pricing record, and the progress of a sync,
+explicit steps, sweeping the unlocked balance of one asset in one account, the reserve, the circulating supply and the oracle's pricing record, and the progress of a sync,
 listeners and background synchronization, with the names of the Java port (below). Relay was proven on mainnet on 2026-11-15 for transfers in the four V2 assets
 and four of the six conversions; its failure paths are proven against a local sink only.
-Sweeps are not supported. Read
+Sweeps are new in this version and checked offline only; a sweep has not been relayed on mainnet. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 Which systems, runtimes and browsers are tested, automatically or by hand, is in
 [docs/PLATFORMS.md](docs/PLATFORMS.md).
@@ -95,12 +95,13 @@ The package entry (`src/main/ts/index.ts`) exports:
   `getSubaddresses`, `getSubaddress`, `createSubaddress`, `setSubaddressLabel` and
   `getAddressIndex`; results are read-only plain objects with the balance maps by asset (see
   below);
-* building and relaying for full wallets: `buildTransfer` and `buildConversion` (build, describe, discard),
-  `prepareTransfer` and `prepareConversion` (build, describe, keep under a token), `relayPrepared` and
-  `discardPrepared`, with the types `ZephyrTransferConfig`, `ZephyrTransferDestinationInput`,
-  `ZephyrTxPriority`, `ZephyrTransferBuild`, `ZephyrBuiltTx`, `ZephyrConversionConfig`,
-  `ZephyrConversionDestinationInput`, `ZephyrConversionBuild`, `ZephyrPreparedTransfer`,
-  `ZephyrPreparedConversion`, `ZephyrRelayResult`, `ZephyrRelayedTx` and `ZephyrRelayOutcome` (below);
+* building and relaying for full wallets: `buildTransfer`, `buildConversion` and `buildSweepUnlocked` (build,
+  describe, discard), `prepareTransfer`, `prepareConversion` and `prepareSweepUnlocked` (build, describe, keep
+  under a token), `relayPrepared` and `discardPrepared`, with the types `ZephyrTransferConfig`,
+  `ZephyrTransferDestinationInput`, `ZephyrTxPriority`, `ZephyrTransferBuild`, `ZephyrBuiltTx`,
+  `ZephyrConversionConfig`, `ZephyrConversionDestinationInput`, `ZephyrConversionBuild`,
+  `ZephyrSweepUnlockedConfig`, `ZephyrSweepBuild`, `ZephyrPreparedTransfer`, `ZephyrPreparedConversion`,
+  `ZephyrPreparedSweep`, `ZephyrRelayResult`, `ZephyrRelayedTx` and `ZephyrRelayOutcome` (below);
 * the reserve for full wallets with a daemon: `getReserveInfo` (`ZephyrReserveInfo`: the reserve as the core
   computes it, amounts `bigint`, the two ratios as decimal text) and `getCirculatingSupply` (the supply per label
   as the daemon reports it); a failed read of the pricing record rejects with
@@ -399,15 +400,53 @@ const c = await wallet.buildConversion({ sourceAsset: "ZPH", destinationAsset: "
 console.log(c.amountBurnt, c.amountMinted, c.fee, c.feeAsset, c.pricingRecordHeight);
 ```
 
+### Sweeping the unlocked balance of an account
+
+`buildSweepUnlocked(config)` builds the transactions that send everything unlocked of one V2 asset in one
+account (or in chosen subaddresses of it) to one address in the same asset, describes them and discards
+them, as `buildTransfer` does (the relay flag fixed to `false`, no byte of a built transaction leaves the
+module); `prepareSweepUnlocked(config)` keeps them for `relayPrepared` (below). The name is the Java port's
+`sweepUnlocked`; the two steps replace its relay flag. The configuration (`ZephyrSweepUnlockedConfig`) has the
+transfer's fields with one `address` instead of `destinations` and no amount: `asset`, `destinationAsset`
+(optional, equal to `asset`: a converting sweep rejects with `UNSUPPORTED_CAPABILITY`/`CONVERSION`),
+`address`, `accountIndex` (required, unlike the Java port, whose core sweeps every account with an unlocked
+balance when it is missing: `INVALID_CONFIG`/`ADDRESS_INDEX_RANGE`), `subaddressIndices` (optional: only
+these subaddresses; without them every subaddress of the account with an unlocked balance of the asset) and
+`priority`; every other field rejects with `UNKNOWN_FIELD`, and each value is checked as for a transfer.
+
+The core sweeps every unlocked output of the asset in the selected subaddresses except outputs worth less
+than the fee of spending them (wallet2 ignores those), and splits the sweep into several transactions when
+the outputs do not fit into one. The description (`ZephyrSweepBuild`) is `{ txs, multipleTxs, totalAmount,
+totalFee }`: each transaction as `buildTransfer` describes it, with its one destination (the address and its
+amount) and no change; the totals in the asset. A balance of zero in the selected outputs rejects with
+`TX_NOT_POSSIBLE`/`NOT_ENOUGH_MONEY` and nothing unlocked with `NOT_ENOUGH_UNLOCKED`, both before any request;
+the core's own refusals are `NOT_ENOUGH_UNLOCKED` (also when every unlocked output is worth less than its
+fee), `NOT_ENOUGH_FOR_FEE` and the build failures of a transfer. Its requests are a transfer's (read in the
+core's code). `sweepOutput` and `sweepDust` reject with
+`UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`: the core's sweep of one output validates with the V1 asset `ZEPH`
+and needs a key image, which the library does not expose, and its dust sweep spends only outputs without
+RingCT, of which Zephyr's chain has none.
+
+```typescript
+const p = await wallet.prepareSweepUnlocked({ asset: "ZRS", address: await wallet.getAddress(1, 0), accountIndex: 0 });
+console.log(p.build.totalAmount, p.build.totalFee);            // inspect, then relay exactly this
+const r = await wallet.relayPrepared(p.token);                 // every transaction, or which were accepted
+```
+
+Checked offline only (every rejection, a wallet without funds, the one kept build with transfers and
+conversions, nothing left in the module after a refused or discarded sweep); a sweep has not been relayed on
+mainnet.
+
 ### Relaying a prepared transaction
 
-Relay is two explicit steps. `prepareTransfer(config)` and `prepareConversion(config)` take the
-configurations of `buildTransfer` and `buildConversion`, run the same checks and requests and return the
-same description, but keep the built transactions inside the WebAssembly module instead of discarding
-them, together with an opaque `token` (32 lowercase hexadecimal characters):
-`{ token, build }` (`ZephyrPreparedTransfer`, `ZephyrPreparedConversion`). `relayPrepared(token)` then
-relays exactly what that token names, as it was described; `discardPrepared(token)` voids it (`true`, or
-`false` when the token named nothing). `buildTransfer` and `buildConversion` keep discarding what they build.
+Relay is two explicit steps. `prepareTransfer(config)`, `prepareConversion(config)` and
+`prepareSweepUnlocked(config)` take the configurations of `buildTransfer`, `buildConversion` and
+`buildSweepUnlocked`, run the same checks and requests and return the same description, but keep the built
+transactions inside the WebAssembly module instead of discarding them, together with an opaque `token` (32
+lowercase hexadecimal characters): `{ token, build }` (`ZephyrPreparedTransfer`, `ZephyrPreparedConversion`,
+`ZephyrPreparedSweep`). `relayPrepared(token)` then relays exactly what that token names, as it was described;
+`discardPrepared(token)` voids it (`true`, or `false` when the token named nothing). The build calls keep
+discarding what they build.
 
 * One kept build per wallet. It is void, wiped and released inside the module, after it was relayed
   completely, after the daemon refused it, after `discardPrepared`, `close`, a password change, a newer
@@ -498,7 +537,7 @@ Everything else inherited from monero-ts stays in the source as unported classes
 `src/main/ts/` and is not exported by the package: the
 connection manager, the inherited listener classes and their native glue (listeners are supported through
 the facade's own path), the inherited query-based history,
-the inherited transaction creation, its relay and sweeps, outputs, key images, rescans, proofs, multisig and file-system wallets (the inherited models under `src/main/ts/daemon/model/`,
+the inherited transaction creation, its relay and sweeps (sweeping an account is `buildSweepUnlocked`), outputs, key images, rescans, proofs, multisig and file-system wallets (the inherited models under `src/main/ts/daemon/model/`,
 most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
 inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and

@@ -2,7 +2,8 @@
 
 This chapter covers same-asset transfers: building one to inspect it, preparing and relaying it in
 two explicit steps, what to show the user, fees and priorities, the life of a kept build, every
-outcome of a relay, and saving afterwards. Conversions follow in [chapter 8](08-conversions.md).
+outcome of a relay, saving afterwards, and sweeping the unlocked balance of an account. Conversions
+follow in [chapter 8](08-conversions.md).
 
 Building and relaying need a full wallet with spend keys and a daemon. Keys-only wallets reject with
 `UNSUPPORTED_CAPABILITY`/`KEYS_ONLY_TX`, view-only wallets with `VIEW_ONLY_TX`.
@@ -36,8 +37,9 @@ transaction key) ever reaches your JavaScript.
 | `subaddressIndices` | optional; spend only from these subaddresses of the account | `SUBADDRESS_INDICES`, `SUBADDRESS_NOT_FOUND` |
 | `priority` | optional; `"default"`, `"unimportant"`, `"normal"` or `"elevated"` | `TX_PRIORITY` |
 
-Rejections without another code are `INVALID_CONFIG`. Sweeps, payment identifiers, an unlock time and
-"subtract the fee from a destination" are not supported.
+Rejections without another code are `INVALID_CONFIG`. Payment identifiers, an unlock time and
+"subtract the fee from a destination" are not supported. Sending everything has its own calls
+([Sweeping](#sweeping)).
 
 ## Building to inspect
 
@@ -282,6 +284,113 @@ account back into that account's balance.
 This record lives in the wallet's cache. Save the wallet bytes (`getData`) right after
 `relayPrepared` resolves. Bytes saved before reopen without the record, with the outputs unspent,
 until a sync sees the transaction in a block; a build from them would spend the same outputs again.
+
+## Sweeping
+
+`buildSweepUnlocked` and `prepareSweepUnlocked` send everything unlocked of one asset in one account (or
+in chosen subaddresses of it) to one address, in the same asset: to empty an account, to move funds to
+another wallet, or to leave no small remainder behind. The name is the Java port's `sweepUnlocked`; as
+for transfers there are two explicit steps instead of its relay flag:
+
+```ts
+const prepared = await wallet.prepareSweepUnlocked({
+  asset: "ZRS",
+  address: await wallet.getAddress(1, 0), // the wallet's own second account
+  accountIndex: 0                          // always required
+});
+const sweep = prepared.build;
+console.log(sweep.txs.length, sweep.totalAmount, sweep.totalFee); // show these; on confirmation:
+const result = await wallet.relayPrepared(prepared.token);
+console.log(result.complete, (await wallet.getData()).keys.length); // save the wallet bytes afterwards
+```
+
+`ZephyrSweepUnlockedConfig` takes the fields of a transfer, with one `address` instead of
+`destinations` and no amount; any other field (an amount, destinations, a key image, a relay flag,
+`sweepEachSubaddress`, a threshold) rejects with `INVALID_CONFIG`/`UNKNOWN_FIELD`.
+
+| Field | Meaning | Rejections |
+|---|---|---|
+| `asset` | `"ZPH"`, `"ZSD"`, `"ZRS"` or `"ZYS"` | `ASSET_TYPE`; a V1 name `TX_ASSET` |
+| `destinationAsset` | optional; equal to `asset` | another asset (a converting sweep): `UNSUPPORTED_CAPABILITY`/`CONVERSION` |
+| `address` | the one destination, an address of the wallet's network | `INVALID_ADDRESS`: `ADDRESS_TYPE`, `CORE_INVALID_ADDRESS`, `ADDRESS_NETWORK`; integrated addresses `UNSUPPORTED_CAPABILITY`/`INTEGRATED_ADDRESS` |
+| `accountIndex` | required: the account to sweep | `ADDRESS_INDEX_RANGE` (also when it is missing), `ACCOUNT_NOT_FOUND` |
+| `subaddressIndices` | optional; sweep only these subaddresses of the account | `SUBADDRESS_INDICES`, `SUBADDRESS_NOT_FOUND` |
+| `priority` | optional, as for a transfer | `TX_PRIORITY` |
+
+**The account index is required.** The Java port's `sweepUnlocked` without an account index sweeps every
+account that has an unlocked balance of the asset, one sweep per account; this library always names one
+account and rejects a configuration without one. With an account index and no subaddress list the core
+sweeps every subaddress of the account that has an unlocked balance of the asset. With
+`subaddressIndices` it sweeps the outputs of exactly those subaddresses; a listed subaddress without
+funds adds nothing.
+
+**What is swept.** Every unlocked output of the asset in the selected subaddresses, except outputs worth
+less than the fee of spending them, which the core leaves where they are; locked outputs stay too. The
+description (`ZephyrSweepBuild`) lists the transactions as `buildTransfer` describes them, each with its
+one destination (the address and that transaction's amount) and no change, and the totals
+`totalAmount` (what the address receives) and `totalFee`, both in the asset. Their sum is the unlocked
+balance of the swept outputs. The core puts as many outputs into one transaction as fit and builds
+another when they do not; `multipleTxs` is then `true`, `relayPrepared` relays the transactions in order
+and reports each one, and `complete` is `true` only when every one was accepted
+([Outcomes of a relay](#outcomes-of-a-relay)). A sweep is kept, voided and relayed exactly as a
+transfer ([The life of a kept build](#the-life-of-a-kept-build)).
+
+**Refusals.** Before any request: `TX_NOT_POSSIBLE`/`NOT_ENOUGH_MONEY` when the balance of the asset
+in the selected outputs is zero, `NOT_ENOUGH_UNLOCKED` when nothing of it is unlocked. From the core:
+`NOT_ENOUGH_UNLOCKED` also when every unlocked output is worth less than its fee, `NOT_ENOUGH_FOR_FEE`
+when the swept outputs cannot pay their own fee, and the build failures of a transfer
+(`NOT_ENOUGH_OUTS_TO_MIX`, `TX_TOO_LARGE`, `DAEMON_ERROR`, `NATIVE_ERROR`/`TX_BUILD_FAILED`).
+
+```ts run
+import { createRandomWallet, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
+import type { ZephyrSweepUnlockedConfig } from "@loki-notfound/zephyr-ts";
+
+const wallet = await createRandomWallet({ networkType: "mainnet", password: "a long passphrase" });
+const address = await wallet.getAddress(0, 1);
+
+async function trySweep(label: string, config: unknown): Promise<void> {
+  try {
+    await wallet.buildSweepUnlocked(config as ZephyrSweepUnlockedConfig);
+    throw new Error(label + ": built");
+  } catch (err) {
+    if (!(err instanceof ZephyrWalletError)) throw err;
+    console.log(label, err.code, err.diagnostic);
+  }
+}
+await trySweep("no account index:", { asset: "ZPH", address });
+await trySweep("an amount:", { asset: "ZPH", address, accountIndex: 0, amount: 1n });
+await trySweep("converting:", { asset: "ZPH", destinationAsset: "ZRS", address, accountIndex: 0 });
+// a new wallet has no funds: rejected by the balance check, before any daemon request
+await trySweep("no funds:", { asset: "ZPH", address, accountIndex: 0 });
+await trySweep("no funds in subaddress 0:", { asset: "ZSD", address, accountIndex: 0, subaddressIndices: [0] });
+for (const call of [() => wallet.sweepOutput(), () => wallet.sweepDust()]) {
+  await call().catch((err: ZephyrWalletError) => console.log("not offered:", err.code, err.diagnostic));
+}
+await wallet.close();
+```
+
+**Requests.** As for a transfer (read in the core's code): heights and fork rules, the fee estimate and
+the pool's backlog, recent block headers, the circulating supply and the pricing record history (read for
+every transaction the core constructs), the output distribution and the ring members. The node learns
+that the wallet builds a transaction and in which asset, and, when it is relayed, what the chain shows.
+
+**Listeners.** When a prepared sweep is relayed, the core notifies the added listeners as for a relayed
+transfer (read in the core's code): `onBalancesChanged` for the asset, with the wallet's new balances,
+and `onOutputSpent` once per relayed transaction with its amount plus its fee, the asset and the swept
+account ([chapter 4](04-syncing-and-listeners.md)).
+
+**Not offered.** A converting sweep (a `destinationAsset` other than `asset`): the core would convert
+everything in one transaction and add what lies below the fourth decimal to the fee; it rejects with
+`UNSUPPORTED_CAPABILITY`/`CONVERSION`. Convert with `buildConversion` and an amount rounded down to
+four decimals ([chapter 8](08-conversions.md)). `sweepOutput` and `sweepDust` reject with
+`UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`: the core's `sweepOutput` validates with the V1 asset `ZEPH`
+(as the Java port found) and needs a key image, which this library does not expose; `sweepDust` spends
+only outputs without RingCT, and every output on Zephyr's chain has RingCT, so it would find nothing
+(what it would build, in `ZEPH` with a ring size of one, the chain refuses).
+
+**What is proven.** Sweeps are checked offline (every rejection, a wallet without funds, the kept build
+shared with transfers and conversions, nothing left in the module after a refused or discarded sweep).
+A sweep has not been relayed on mainnet ([chapter 12](12-known-limitations.md)).
 
 ## What is proven
 

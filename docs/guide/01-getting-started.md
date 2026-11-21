@@ -20,10 +20,10 @@ What it does:
 - reads from a Zephyr daemon: heights, synchronization with its progress, listeners and background
   synchronization, balances per asset;
 - lists accounts and subaddresses, and reads the history of transactions and transfers per asset;
-- builds same-asset transfers in the four V2 assets and the six conversions between them, to
-  inspect them, and relays a prepared build in two explicit steps.
+- builds same-asset transfers in the four V2 assets, the six conversions between them and the sweep of
+  the unlocked balance of an account, to inspect them, and relays a prepared build in two explicit steps.
 
-What it does not do: sweeps, outputs, key images,
+What it does not do: a converting sweep, sweeping one output or dust, outputs, key images,
 rescans, proofs, multisig, wallet files on disk, the daemon and wallet RPC clients, and
 transactions in the V1 assets. A call outside the supported surface rejects with
 `UNSUPPORTED_CAPABILITY` before any native code runs. Read

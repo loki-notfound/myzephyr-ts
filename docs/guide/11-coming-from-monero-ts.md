@@ -52,6 +52,7 @@ reshaped, and what is not ported.
 | `sync(listener?, startHeight?)` | `sync()`, `sync(listener)`, `sync(startHeight)`, `sync(startHeight, listener)` (the Java port's order); the listener is any object with some of the callbacks |
 | `MoneroWalletListener` (a class to extend) | `ZephyrWalletListener` (an interface, each callback optional), `onBalancesChanged` names the asset; `onSyncError` reports background failures |
 | `createTx(config)` and `relayTx(...)` | `buildTransfer(config)` to inspect; `prepareTransfer(config)` and `relayPrepared(token)` to send |
+| `sweepUnlocked(config)` | `buildSweepUnlocked(config)` to inspect; `prepareSweepUnlocked(config)` and `relayPrepared(token)` to send; the account index is required, the asset the same on both sides |
 | `getDaemonConnection()`: a connection object | `getDaemonConnection()`: `{ uri, trusted: true }`, without a request |
 | one shared worker for all wallets | one worker per wallet, with `terminate()` for one wallet |
 
@@ -87,7 +88,8 @@ is not exported by the package:
   `new ZephyrDaemonRpc(address)` (there is no `connectToDaemonRpc`), and offers the node's information, its height
   and block headers with their pricing record ([ZephyrDaemonRpc](reference/daemon.md)); its other inherited calls
   reject with `UNSUPPORTED_CAPABILITY`/`DAEMON_RPC_METHOD`;
-- the inherited query-based history model, transaction creation, its relay and sweeps;
+- the inherited query-based history model, transaction creation, its relay, and the inherited sweeps
+  (sweeping the unlocked balance of an account is `buildSweepUnlocked` and `prepareSweepUnlocked`);
 - outputs, key images, rescans, proofs and multisig;
 - file-system wallets.
 
@@ -96,7 +98,8 @@ source or the package: a port that used it talks to a wallet RPC server directly
 `ZephyrWallet`.
 
 A few inherited method names remain on `ZephyrWallet` and reject with `UNSUPPORTED_CAPABILITY`, so
-that a port finds them: `createTxs`, `getReserveProofWallet`, `rescanSpent` and `importKeyImages`.
+that a port finds them: `createTxs`, `sweepOutput`, `sweepDust`, `getReserveProofWallet`, `rescanSpent` and
+`importKeyImages`.
 
 ```ts run
 import { createRandomWallet, ZephyrWalletError } from "@loki-notfound/zephyr-ts";

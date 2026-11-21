@@ -16,7 +16,7 @@ describes version `2.3.0-sec.2-ts.1`.
 | [4. Syncing and listeners](04-syncing-and-listeners.md) | the four forms of a sync, its progress, listeners and their callbacks, where they run and what a throwing one does, background synchronization, closing a wallet that syncs |
 | [5. Assets, accounts and balances](05-assets-and-balances.md) | the four assets, amounts in atomic units, balance maps, accounts and subaddresses, labels |
 | [6. History](06-history.md) | transactions and transfers per asset, the query, paging, the pool refresh, conversions in the history |
-| [7. Sending](07-sending.md) | building to inspect, preparing and relaying, what to show, fees and priorities, every relay outcome, saving |
+| [7. Sending](07-sending.md) | building to inspect, preparing and relaying, what to show, fees and priorities, every relay outcome, saving, sweeping |
 | [8. Conversions](08-conversions.md) | the six pairs, the reserve ratio, the reserve info, the supply and the pricing record, burnt and minted amounts, the pricing record and its age |
 | [9. Errors](09-errors.md) | the error class, codes and diagnostics, the codes a wallet must handle |
 | [10. Deploying a web wallet](10-deploying-a-web-wallet.md) | the Content-Security-Policy of page and worker, `zephyr.wasm`, Vite, webpack, Electron, the daemon proxy |

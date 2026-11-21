@@ -172,9 +172,9 @@ that wallet's worker.
   submit and relay requests (`/sendrawtransaction`, `/send_raw_transaction`, JSON-RPC `relay_tx`,
   `submit_block`) before sending, also if the core itself tried, except the one submit request of a
   relay call (see "Relaying a prepared transaction" below). The public build and the tests check this.
-* Same-asset transfers in the four V2 assets only. Conversions (see `buildConversion`), sweeps,
-  integrated addresses and payment identifiers, an unlock time and "subtract the fee from a destination"
-  (the core's wrapper does not pass it) are not supported.
+* Same-asset transfers in the four V2 assets only. Conversions (see `buildConversion`), sweeps (see
+  `buildSweepUnlocked` below), integrated addresses and payment identifiers, an unlock time and "subtract the
+  fee from a destination" (the core's wrapper does not pass it) are not supported.
 * The fee is the core's, in the source asset: the transaction's weight times a per-byte fee of the
   daemon's fee estimate, rounded up to the estimate's quantization (zephyr `wallet2.cpp`,
   `wallet2::create_transactions_2` with `calculate_fee_from_weight`). For a same-asset transfer the core
@@ -204,6 +204,40 @@ that wallet's worker.
 * Proven on real data (a funded test wallet, copies only, nothing relayed): one build per V2 asset
   to the wallet's own second account, one from that account back, two destinations, a repeated
   build, direct and proxied. What the network accepted is under "Relaying a prepared transaction".
+
+## Sweeping the unlocked balance of an account
+
+* `buildSweepUnlocked` and `prepareSweepUnlocked` sweep one V2 asset in one account to one address in the same
+  asset, through the core's `monero_wallet_full::sweep_unlocked` with the relay flag fixed to `false` (zephyr-cpp
+  `3a2ee602`, which goes on to `wallet2::create_transactions_all` and `create_transactions_from` of zephyr
+  `8c6a1202`). The library always passes the account index: without one the core sweeps every account that has
+  an unlocked balance of the asset, as the Java port's `sweepUnlocked` does.
+* What the core sweeps: every unlocked output of the asset in the account (with `subaddressIndices`, in those
+  subaddresses; without them, in every subaddress with an unlocked balance of the asset) except outputs worth
+  less than the fee of spending them (wallet2's `ignore-fractional-outputs`, on by default, compares an output
+  with the per-byte fee times the weight one more input adds); they stay in the wallet, and a sweep of only such
+  outputs is refused with `NOT_ENOUGH_UNLOCKED`. Locked outputs stay. Read in the code; on real data only the
+  refusal of a wallet without funds is run in this version.
+* The core's list of subaddresses without an account index tests one iterator and uses another (as the Java port
+  documents): it lists every subaddress of a funded account. The library never reaches that branch (the
+  account index is required); read in the code, the extra subaddresses would not change what is swept, because
+  only unlocked outputs of the asset are spent.
+* A sweep the core splits is described as several transactions, each relayed in order by `relayPrepared`, with the
+  outcome contract of a transfer. The core puts as many outputs into one transaction as fit its weight target; a
+  sweep that needs more than 64 transactions is refused with `NATIVE_ERROR`/`UNEXPECTED_RESULT` (sweep fewer
+  subaddresses at a time).
+* Requests: a transfer's reads (heights and fork rules, the fee estimate and backlog, recent block headers, the
+  circulating supply and the pricing record history, which wallet2 reads for every transaction it constructs, the
+  output distribution and ring members; read in the code).
+* Not offered: a converting sweep (the core would convert everything in one transaction, refuse to split it, and
+  add the remainder below the fourth decimal to the fee; `UNSUPPORTED_CAPABILITY`/`CONVERSION`); `sweepOutput`
+  (the core validates the destination with the V1 asset `ZEPH` and builds without the output's asset, and the
+  library exposes no key images) and `sweepDust` (the core selects only outputs without RingCT, which Zephyr's
+  chain does not have: every transaction since its genesis has version 2 or 3; the core would build nothing after
+  one `get_output_histogram` request, and what it would build, in `ZEPH` with ring size 1, the chain refuses):
+  both reject with `UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`.
+* Not proven: a sweep relayed to the network, a sweep the core splits, the refusals for outputs that cannot pay
+  their fee (tested with injected failures).
 
 ## Building conversions without relay
 
