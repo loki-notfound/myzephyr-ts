@@ -203,7 +203,7 @@ in the redirect runners' main thread and page) shows that the transport refuses 
 relay request before sending it outside a relay call, `S02` and `S03` the one way a relay passes.
 
 Relay is tested against a local sink only; this suite relays nothing to the network. What the network
-accepted was shown separately, by a funded test on mainnet on 2026-11-15 (docs/LIMITATIONS.md). Before the runs,
+accepted was shown separately, by funded tests on mainnet on 2026-11-15 and 2026-11-22 (docs/LIMITATIONS.md). Before the runs,
 `src/test/network/sinkSelfTest.cjs` starts the forwarder against a counting loopback upstream and
 sends every submit and relay form to every mount: the plain mounts refuse them, the `/sink/<mode>`
 mounts answer them, and the upstream must receive none of them. `N27` (Node.js direct, after `N26`,

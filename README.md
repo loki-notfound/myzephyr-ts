@@ -29,9 +29,10 @@ the read-only history of transactions and transfers, an explicit pool refresh, b
 transactions and conversions to inspect them, relaying a prepared transaction or conversion in two
 explicit steps, sweeping the unlocked balance of one asset in one account, the reserve, the circulating supply and the oracle's pricing record, the progress of a sync,
 listeners and background synchronization, and payment proofs and transaction keys, with the names of the Java port (below). Relay was proven on mainnet on 2026-11-15 for transfers in the four V2 assets
-and four of the six conversions; its failure paths are proven against a local sink only.
-Sweeps are new in this version and checked offline only; a sweep has not been relayed on mainnet. Payment proofs are new as well: the library makes
-them and does not check them, and an outbound proof of a real transaction is not proven yet. Read
+and four of the six conversions, and on 2026-11-22 for transfers to another wallet and sweeps of ZPH
+and ZSD; its failure paths are proven against a local sink only. The library makes payment proofs and
+does not check them; on 2026-11-22 outbound and inbound proofs, spend proofs and transaction keys of real
+transactions were checked good by the core's own check functions. Read
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 Which systems, runtimes and browsers are tested, automatically or by hand, is in
 [docs/PLATFORMS.md](docs/PLATFORMS.md).
@@ -185,8 +186,9 @@ const where = await wallet.getAddressIndex(sub.address);               // { acco
 ```
 
 Balances other than zero are tested with a funded test wallet: incoming transfers in four assets
-and two accounts, and the nine transactions it relayed on mainnet on 2026-11-15 (see "Relaying a
-prepared transaction"); see [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what is not proven yet.
+and two accounts, the nine transactions it relayed on mainnet on 2026-11-15, and its two transfers to
+another wallet and the two sweeps back of 2026-11-22 (see "Relaying a prepared transaction"); see
+[docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what is not proven yet.
 
 ### History
 
@@ -332,7 +334,8 @@ reject with `INVALID_CONFIG`/`UNKNOWN_FIELD`):
   (in 2.3.0-sec.2-ts.1 such a failed read rejected the build with `DAEMON_ERROR`). A wallet whose keys
   file turns the automatic low priority off or stores a default priority gets the first tier (the stored
   priority is not applied on this path). So `"default"` is not always the cheapest tier: on mainnet on
-  2026-11-15 it took the second tier once in nine transactions.
+  2026-11-15 it took the second tier once in nine transactions; on 2026-11-22 it took the first tier in all
+  four.
 
 Every value is checked before the build is dispatched; then the wallet's unlocked balance of the
 asset in the selected account or subaddresses must cover the amounts, or the build rejects with
@@ -437,9 +440,12 @@ console.log(p.build.totalAmount, p.build.totalFee);            // inspect, then 
 const r = await wallet.relayPrepared(p.token);                 // every transaction, or which were accepted
 ```
 
-Checked offline only (every rejection, a wallet without funds, the one kept build with transfers and
-conversions, nothing left in the module after a refused or discarded sweep); a sweep has not been relayed on
-mainnet.
+Checked offline: every rejection, a wallet without funds, the one kept build with transfers and conversions,
+nothing left in the module after a refused or discarded sweep. Relayed on mainnet on 2026-11-22: a sweep of
+ZPH and one of ZSD from account 0 of a new wallet that had received them in the same test, each one
+transaction without change whose swept amount plus fee equalled the account's unlocked balance of the asset,
+accepted, mined and after ten confirmations equal to its description. Not proven: a sweep of ZRS or ZYS
+relayed, a sweep the core splits, a sweep from chosen subaddresses relayed.
 
 ### Payment proofs and transaction keys
 
@@ -482,9 +488,13 @@ const proof = await wallet.getTxProof(txHash, shopAddress, "order 1234");   // "
 const spent = await wallet.getSpendProof(txHash, "order 1234");             // "SpendProofV1..."
 ```
 
-Tested offline (every refusal, the forms, failures injected as the core throws them). Proofs of real
-transactions are made and checked on copies of the funded test wallet; its transactions all paid its own
-addresses, so they give inbound proofs, and an outbound proof of a real transaction is not proven yet.
+Tested offline (every refusal, the forms, failures injected as the core throws them). On mainnet on
+2026-11-22 the funded test wallet sent 0.1 ZPH and 0.1 ZSD to a new wallet; for both transactions the
+sending wallet's transaction keys, its outbound proofs to the receiving address without and with a message
+and its spend proofs, and the receiving wallet's inbound proofs, were each checked good by the core's own
+check functions (which confirm a proof, not its amount), and the refusals `ADDRESS_NOT_IN_TX`,
+`TX_KEY_UNAVAILABLE` and `TX_NOT_SENT` came as described. Not proven: a proof checked by an independent
+checker.
 
 ### Relaying a prepared transaction
 
@@ -574,11 +584,18 @@ priority, 0.1 or 0.05 of the source asset to the wallet's own addresses): one tr
 transfer with two destinations, and the conversions ZSD to ZPH, ZPH to ZRS, ZSD to ZYS and ZYS to ZSD were
 accepted by the daemon, mined, and after ten confirmations equal to their descriptions: the fee charged,
 the change and the balances and unlocked balances per asset in both accounts, and for a conversion the
-minted amount received. ZPH to ZSD and ZRS to ZPH were refused at build time by the reserve ratio. Not
-proven: a refusal by a daemon on real data, a transfer the core splits, a conversion whose pricing record
-aged before the relay, the two pairs the ratio refused, relay from a browser or from a wallet in a worker,
-and other platforms (docs/LIMITATIONS.md). The failure paths of relay are proven against a local sink that
-plays the daemon.
+minted amount received. ZPH to ZSD and ZRS to ZPH were refused at build time by the reserve ratio.
+
+Proven on mainnet on 2026-11-22 (wallets in the Node.js main thread, the default priority): the funded test
+wallet sent 0.1 ZPH and 0.1 ZSD to the primary address of a new wallet, and that wallet swept its unlocked
+ZPH and ZSD back with `prepareSweepUnlocked`. The four transactions paid the first tier of the daemon's fee
+estimate, were accepted by the daemon, mined, and after ten confirmations equal to their descriptions in
+both wallets: the fee charged, the balances per asset and the amount received.
+
+Not proven: a refusal by a daemon on real data, a transfer or a sweep the core splits, a sweep of ZRS or ZYS
+or from chosen subaddresses, a conversion whose pricing record aged before the relay, the two pairs the
+ratio refused, relay from a browser or from a wallet in a worker, and other platforms
+(docs/LIMITATIONS.md). The failure paths of relay are proven against a local sink that plays the daemon.
 
 ## Not ported
 

@@ -76,7 +76,8 @@ not the wallet's creation height. Restores from a seed or keys use the `restoreH
 * Proven on real data: the progress of incremental syncs and background synchronization against the permitted daemon,
   in Node.js direct and in a worker. The output and balance notifications of real transactions are compared with the
   funded test wallet's history by a private runner outside the public checks; offline, a synthetic sync of the test
-  module covers every notification kind.
+  module covers every notification kind. On mainnet on 2026-11-22 a listener added before each of two relayed
+  sweeps received one spent summary and one balance change per sweep.
 
 ## No cancellation of a running request
 
@@ -189,7 +190,10 @@ that wallet's worker.
   units per byte of weight, about 0.000307 to 0.000309 in each of ZPH, ZSD, ZRS and ZYS (built on
   2026-11-13; charged on 2026-11-15 in ZPH, ZSD and ZRS), 0.000427 with two destinations (built) and
   0.0005628 with two destinations and two inputs (charged). Once in the nine relayed transactions of 2026-11-15 the default
-  priority took the second tier, 790,000 per byte: 0.00121581 ZYS for a ZYS transfer of the same shape.
+  priority took the second tier, 790,000 per byte: 0.00121581 ZYS for a ZYS transfer of the same shape. On
+  2026-11-22 all four relayed transactions at the default priority (two transfers to another wallet and two
+  sweeps) paid the first tier, 200,000 per byte rounded up to the estimate's quantization: 0.000308 ZPH,
+  0.0004446 ZSD (two inputs), 0.0003088 ZPH and 0.0003094 ZSD.
   Fees vary with the daemon's fee estimate and with the transaction's weight, which changes by a few bytes
   between two builds of the same transfer (the ring members are chosen anew).
 * The bridge first checks the wallet's own unlocked balance of the asset in the selected account or
@@ -242,9 +246,15 @@ that wallet's worker.
   944 bytes plus about 104 for the hash until the page, the process or the wallet's worker ends. The proofs' own
   failure paths leave nothing (measured in the test module).
 * Tested offline: every refusal, every form, the core's failures injected as it throws them, the allocator
-  unchanged by every refusal. On real data proofs are made and checked on copies of the funded test wallet; its
-  transactions all paid its own addresses, so an outbound proof of a real transaction is not proven yet, nor is
-  a failed daemon request of a proof (injected only).
+  unchanged by every refusal. On mainnet on 2026-11-22, for the two transactions the funded test wallet sent to
+  a new wallet (0.1 ZPH, 0.1 ZSD): in the sending wallet the transaction keys, the outbound proofs
+  (`OutProofV2`) to the receiving address without and with a message and the spend proofs (`SpendProofV1`), and
+  in the receiving wallet the inbound proofs (`InProofV2`), each checked good by the core's own check functions
+  in the test module (they confirm a proof, not its amount: see above); the refusals for a new subaddress of the
+  sender and another wallet's address (`ADDRESS_NOT_IN_TX`) and for a key and a spend proof of a transaction the
+  wallet did not send (`TX_KEY_UNAVAILABLE`, `TX_NOT_SENT`) came as described. Inbound proofs of the funded test
+  wallet's earlier transactions to its own addresses were checked the same way. Not proven: a proof checked by an
+  independent checker, a failed daemon request of a proof (injected only).
 
 ## Sweeping the unlocked balance of an account
 
@@ -257,8 +267,8 @@ that wallet's worker.
   subaddresses; without them, in every subaddress with an unlocked balance of the asset) except outputs worth
   less than the fee of spending them (wallet2's `ignore-fractional-outputs`, on by default, compares an output
   with the per-byte fee times the weight one more input adds); they stay in the wallet, and a sweep of only such
-  outputs is refused with `NOT_ENOUGH_UNLOCKED`. Locked outputs stay. Read in the code; on real data only the
-  refusal of a wallet without funds is run in this version.
+  outputs is refused with `NOT_ENOUGH_UNLOCKED`. Locked outputs stay. Read in the code; the sweeps relayed on
+  mainnet (below) spent one output each.
 * The core's list of subaddresses without an account index tests one iterator and uses another (as the Java port
   documents): it lists every subaddress of a funded account. The library never reaches that branch (the
   account index is required); read in the code, the extra subaddresses would not change what is swept, because
@@ -277,8 +287,13 @@ that wallet's worker.
   chain does not have: every transaction since its genesis has version 2 or 3; the core would build nothing after
   one `get_output_histogram` request, and what it would build, in `ZEPH` with ring size 1, the chain refuses):
   both reject with `UNSUPPORTED_CAPABILITY`/`TRANSACTIONS`.
-* Not proven: a sweep relayed to the network, a sweep the core splits, the refusals for outputs that cannot pay
-  their fee (tested with injected failures).
+* Relayed on mainnet on 2026-11-22 (a wallet in the Node.js main thread, the default priority): a sweep of ZPH
+  and one of ZSD from account 0 of a new wallet that had received them in the same test, each one transaction
+  with one input and no change whose swept amount plus fee equalled the account's unlocked balance of the asset;
+  each was accepted by the daemon, mined, and after ten confirmations equal to its description: the sweeping
+  wallet held 0 of the asset and the destination wallet had received the swept amount.
+* Not proven: a sweep of ZRS or ZYS relayed, a sweep the core splits, a sweep from chosen subaddresses relayed,
+  the refusals for outputs that cannot pay their fee (tested with injected failures).
 
 ## Building conversions without relay
 
@@ -338,8 +353,13 @@ that wallet's worker.
   fee charged, the change, the balances and unlocked balances per asset in both accounts, and for a
   conversion the minted amount received. ZPH to ZSD and ZRS to ZPH were refused at build time by the
   reserve ratio.
-* Not proven: a refusal by a daemon on real data, a transfer the core splits, a conversion whose pricing
-  record aged before inclusion, the two conversions the ratio refused, relay from a browser or from a
+* Proven on mainnet on 2026-11-22 (wallets in the Node.js main thread, the default priority, one transaction
+  at a time): a transfer of 0.1 ZPH and one of 0.1 ZSD from the funded test wallet to the primary address of
+  a new wallet, and two sweeps back (above). Each of the four was accepted by the daemon, mined, and after ten
+  confirmations equal to its description in both wallets: the fee charged (the first tier of the daemon's
+  estimate), the balances per asset and the amount received.
+* Not proven: a refusal by a daemon on real data, a transfer or a sweep the core splits, a conversion whose
+  pricing record aged before inclusion, the two conversions the ratio refused, relay from a browser or from a
   wallet in a worker (`proxyToWorker`), and platforms other than Node.js on Linux x86_64. The refusal and
   failure paths are proven against a local sink that answers as the daemon does (acceptance, every refusal
   flag, a busy daemon, an HTTP error, an unreadable answer, a dropped connection, a late answer, a refused
@@ -421,9 +441,10 @@ button, an amount or an address. The library never copies such text into an erro
 * Failed openings of wrong-password bytes leak a few kilobytes inside the core; in worker mode the
   leak goes away with the construction's worker.
 * Balances other than zero are verified with a funded test wallet that received five transfers in
-  four assets (ZPH, ZSD, ZRS, ZYS) at two accounts and relayed nine transactions on mainnet on
-  2026-11-15: the wallet, account and subaddress maps equal the sums of its history (check `N20`), and
-  spent outputs, change and the balances after each spend were verified after confirmation.
+  four assets (ZPH, ZSD, ZRS, ZYS) at two accounts, relayed nine transactions on mainnet on
+  2026-11-15 and two to another wallet on 2026-11-22, and received two sweeps back: the wallet,
+  account and subaddress maps equal the sums of its history (check `N20`), and spent outputs, change
+  and the balances after each spend were verified after confirmation.
   Not verified on real data: how a locked balance appears in the maps (the comparisons ran at ten
   confirmations, when nothing was locked).
 * Account and subaddress calls check every index against the wallet's own listings, because the

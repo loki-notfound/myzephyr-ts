@@ -175,9 +175,9 @@ the first tier's fee or the last ten blocks fill more than 80 % of the full rewa
 reads fail, the first tier, and the build goes on (in 2.3.0-sec.2-ts.1 such a failed read rejected the
 build with `DAEMON_ERROR`). A wallet whose keys file turns the automatic low priority off or stores
 a default priority gets the first tier. So `"default"` is not always the cheapest tier: in the nine
-transactions relayed on mainnet on 2026-11-15 it took the second tier once. A wallet that wants the
-cheapest tier passes `"unimportant"`. Whatever the priority, the prepared description states the fee
-that will be charged.
+transactions relayed on mainnet on 2026-11-15 it took the second tier once, and in the four of
+2026-11-22 the first tier every time. A wallet that wants the cheapest tier passes `"unimportant"`.
+Whatever the priority, the prepared description states the fee that will be charged.
 
 Observed on mainnet with one input and two outputs at the default priority: 200,000 atomic units per
 byte of weight, about 0.000307 to 0.000309 in each of ZPH, ZSD, ZRS and ZYS; at the second tier
@@ -391,7 +391,10 @@ only outputs without RingCT, and every output on Zephyr's chain has RingCT, so i
 
 **What is proven.** Sweeps are checked offline (every rejection, a wallet without funds, the kept build
 shared with transfers and conversions, nothing left in the module after a refused or discarded sweep).
-A sweep has not been relayed on mainnet ([chapter 12](12-known-limitations.md)).
+On mainnet on 2026-11-22 a new wallet swept its ZPH and its ZSD back to a funded test wallet: each sweep
+was one transaction without change, its swept amount plus its fee equal to the unlocked balance, and
+after ten confirmations equal to its description. A sweep of ZRS or ZYS, a split sweep and a sweep from
+chosen subaddresses have not been relayed ([chapter 12](12-known-limitations.md)).
 
 ## What is proven
 
@@ -401,7 +404,12 @@ a time): one transfer per V2 asset and a transfer with two destinations were acc
 mined, and after ten confirmations equal to their descriptions (the fee charged, the change, the
 balances and unlocked balances per asset).
 
-Not proven: a refusal by a daemon on real data, a transfer the core splits, relay from a browser or
-from a wallet in a worker (`proxyToWorker`), and platforms other than Node.js on Linux x86_64. The
-refusal and failure paths are proven against a local sink that answers as the daemon does. See
+Proven on mainnet on 2026-11-22 (a wallet in the Node.js main thread, the default priority, one
+transaction at a time): a transfer of 0.1 ZPH and one of 0.1 ZSD to the primary address of another
+wallet, and two sweeps from that wallet back, each accepted, mined, and after ten confirmations equal
+to its description in both wallets, each paying the first fee tier.
+
+Not proven: a refusal by a daemon on real data, a transfer or a sweep the core splits, relay from a
+browser or from a wallet in a worker (`proxyToWorker`), and platforms other than Node.js on Linux
+x86_64. The refusal and failure paths are proven against a local sink that answers as the daemon does. See
 [chapter 12](12-known-limitations.md).

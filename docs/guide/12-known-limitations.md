@@ -6,10 +6,10 @@ deliberate or not yet addressed; none of them is hidden behind a default. This c
 library with real funds or public nodes. [docs/PLATFORMS.md](../PLATFORMS.md) lists what is tested
 where.
 
-## What was proven on mainnet on 2026-11-15
+## What was proven on mainnet
 
-A funded test wallet relayed nine transactions to its own addresses: one transfer per V2 asset (ZPH,
-ZSD, ZRS, ZYS), a transfer with two destinations (one of them at the sending account), and the
+On 2026-11-15 a funded test wallet relayed nine transactions to its own addresses: one transfer per V2
+asset (ZPH, ZSD, ZRS, ZYS), a transfer with two destinations (one of them at the sending account), and the
 conversions ZSD to ZPH, ZPH to ZRS, ZSD to ZYS and ZYS to ZSD. Each was accepted by the daemon on the
 first submit, mined, and after ten confirmations (eleven in two cases) equal to its description: the
 fee charged, the change, the balances and unlocked balances per asset in both accounts, and for a
@@ -20,6 +20,16 @@ The conditions of that test: a wallet in the Node.js main thread, on Linux x86_6
 priority, 0.1 or 0.05 of the source asset, only the wallet's own addresses, one transaction at a time.
 Once in the nine transactions the default priority took the second fee tier.
 
+On 2026-11-22, with wallets in the Node.js main thread on Linux x86_64, the default priority and one
+transaction at a time, the funded test wallet sent 0.1 ZPH and 0.1 ZSD to the primary address of a
+new wallet, and that wallet swept its ZPH and its ZSD back (`prepareSweepUnlocked`). Each
+of the four transactions paid the first fee tier, was accepted by the daemon, mined, and after ten
+confirmations equal to its description in both wallets; each sweep was one transaction without change.
+For the two transfers, the sending wallet's transaction keys, its outbound proofs (`OutProofV2`) to the
+receiving address and its spend proofs (`SpendProofV1`), and the receiving wallet's inbound proofs
+(`InProofV2`), were each checked good by the core's own check functions, which confirm a proof but not
+its amount.
+
 Also proven on real data: incoming transfers in ZPH, ZSD, ZRS and ZYS at two accounts; outgoing
 transfers with their destinations and fees; conversions with their burnt and minted amounts; the
 balance maps of the wallet, its accounts and subaddresses equal to the sums of its history.
@@ -29,7 +39,7 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
 - a refusal by a daemon on real data; the refusal and failure paths of relay are proven against a
   local sink that answers as the daemon does;
 - a transfer or a sweep the core splits into several transactions;
-- a sweep relayed to the network;
+- a sweep of ZRS or ZYS, or from chosen subaddresses, relayed to the network;
 - a conversion whose pricing record aged before inclusion;
 - the conversions ZPH to ZSD and ZRS to ZPH;
 - relay from a browser or from a wallet in a worker (`proxyToWorker`);
@@ -40,8 +50,7 @@ balance maps of the wallet, its accounts and subaddresses equal to the sums of i
 - how a locked balance appears in the balance maps;
 - the core's "not enough" failures, too few ring members and an oversized transaction (tested with
   injected failures only);
-- an outbound proof (`OutProofV2`) of a real transaction: the funded test wallet's transactions all paid
-  its own addresses, which give inbound proofs; a failed daemon request of a proof (tested with injected
+- a proof checked by an independent checker; a failed daemon request of a proof (tested with injected
   failures only).
 
 ## The daemon

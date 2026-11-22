@@ -315,7 +315,8 @@ The core's transaction proof itself would also be made for an address that recei
 check that funds were received does not refuse that case); the library refuses it before the core
 runs (`ADDRESS_NOT_IN_TX`), from the wallet's records.
 
-The forms and every refusal are tested offline. Proofs of real transactions are made and checked
-on copies of the funded test wallet, whose transactions all paid the wallet's own addresses: they
-give inbound proofs, so an outbound proof on real data is not proven yet
-([chapter 12](12-known-limitations.md)).
+The forms and every refusal are tested offline. On mainnet on 2026-11-22, for two transactions a
+funded test wallet sent to a new wallet, the transaction keys, the outbound proofs, the spend proofs
+and the receiving wallet's inbound proofs were each checked good by the core's own check functions,
+which confirm a proof but not its amount. A proof checked by an independent checker is not proven
+here ([chapter 12](12-known-limitations.md)).
