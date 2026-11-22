@@ -6,7 +6,7 @@ The [README](../../README.md) has the status and the supported surface in short,
 [API reference](reference/README.md) lists every exported name.
 
 zephyr-ts is an independent project, not affiliated with or endorsed by ZephyrProtocol. This guide
-describes version `2.3.0-sec.2-ts.1`.
+describes version `2.3.0-sec.2-ts.2`.
 
 | Chapter | What it covers |
 |---|---|

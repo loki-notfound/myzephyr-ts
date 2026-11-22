@@ -9,9 +9,9 @@ Protocol project. It is a port of [monero-ts](https://github.com/woodser/monero-
 wallet files, transactions, fees and network rules; this library adapts the TypeScript API, the
 worker and transport layers and the WebAssembly bridge around it and does not change those rules.
 
-The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.1`. It is not on the npm registry.
+The package is `@loki-notfound/zephyr-ts`, version `2.3.0-sec.2-ts.2`. It is not on the npm registry.
 Each release on GitHub carries the package tarball with signed checksums: download it, verify it and
-install it by path (`npm install ./loki-notfound-zephyr-ts-2.3.0-sec.2-ts.1.tgz`), as
+install it by path (`npm install ./loki-notfound-zephyr-ts-2.3.0-sec.2-ts.2.tgz`), as
 [the guide](docs/guide/01-getting-started.md#installing-from-the-signed-release) describes. To build it
 from source, see [BUILDING.md](BUILDING.md).
 
@@ -142,8 +142,8 @@ on a plain `http://` origin other than `localhost`) with `NATIVE_ERROR`/`WASM_MO
 This detects a wrong file next to the JavaScript; it is not a signature.
 
 Calls outside this surface reject with `UNSUPPORTED_CAPABILITY` before any native code runs.
-The changes of the declared surface since the release `2.3.0-sec.2-ts.1` are listed, with what a
-caller has to change, in [docs/CHANGES.md](docs/CHANGES.md).
+The changes of the declared surface from one release to the next are listed, with what a caller
+has to change, in [docs/CHANGES.md](docs/CHANGES.md).
 
 ### Accounts and subaddresses
 

@@ -22,14 +22,15 @@ sha256sum -c SHA256SUMS
 - `SHA256SUMS.asc` is a detached signature of `SHA256SUMS` by that key.
 - `SHA256SUMS` lists the tarball and `manifest.json` with their SHA-256.
 
-The release notes of v2.3.0-sec.2-ts.1 also give the SHA-256 of the tarball,
-`fcd8245e863ffbd516dfd1a0e11d78a849b2c612bd5818edab275f6afb26c0d8`, and of the `zephyr.wasm` inside it,
-`229b1534d60258c4be2f734f89effd38fba7a2ebf8ee7f95c33e96b9eda80333`. To check the module inside the
-tarball:
+The release notes also give the SHA-256 of the tarball and of the `zephyr.wasm` inside it. To check the
+module inside the tarball of v2.3.0-sec.2-ts.2:
 
 ```sh
-tar -xzOf loki-notfound-zephyr-ts-2.3.0-sec.2-ts.1.tgz package/dist/zephyr.wasm | sha256sum
+tar -xzOf loki-notfound-zephyr-ts-2.3.0-sec.2-ts.2.tgz package/dist/zephyr.wasm | sha256sum
 ```
+
+The module differs from one release to the next when the bridge or the build settings change, also with
+the same core pins; within a release it is one file for every platform.
 
 ## The signed tag
 
@@ -39,9 +40,9 @@ core tag. The package version is the tag without the `v`. Tags are annotated and
 maintainer key, and never moved or reused. In a clone of the repository, with the key imported:
 
 ```sh
-git fetch origin tag v2.3.0-sec.2-ts.1
-git verify-tag v2.3.0-sec.2-ts.1
-git rev-parse 'v2.3.0-sec.2-ts.1^{commit}'
+git fetch origin tag v2.3.0-sec.2-ts.2
+git verify-tag v2.3.0-sec.2-ts.2
+git rev-parse 'v2.3.0-sec.2-ts.2^{commit}'
 ```
 
 The last command prints the commit the release was built from; `manifest.json` names it too.
@@ -68,13 +69,14 @@ table below and `bin/pins.sh` at the tag.
 ## Reproducing the build
 
 The build is reproducible: at the tag, `bin/build.sh` and `bin/pack.sh` give the release tarball byte
-for byte. The release v2.3.0-sec.2-ts.1 was built on Debian 13 and on Ubuntu 24.04 with identical
-results. To repeat it:
+for byte. The first release, v2.3.0-sec.2-ts.1, was built on Debian 13 and on Ubuntu 24.04 with
+identical results; the release notes of each release say where it was built and compared. To repeat
+it:
 
 ```sh
 git clone https://github.com/loki-notfound/myzephyr-ts.git
 cd myzephyr-ts
-git checkout v2.3.0-sec.2-ts.1
+git checkout v2.3.0-sec.2-ts.2
 bin/build.sh
 bin/pack.sh
 sha256sum build/package/*.tgz

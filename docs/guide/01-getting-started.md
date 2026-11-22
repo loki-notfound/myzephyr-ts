@@ -57,8 +57,8 @@ the package tarball, `manifest.json`, `SHA256SUMS`, its signature `SHA256SUMS.as
 maintainer key `KEYS.asc`. Download the five files of the release into an empty directory:
 
 ```sh
-for f in loki-notfound-zephyr-ts-2.3.0-sec.2-ts.1.tgz manifest.json SHA256SUMS SHA256SUMS.asc KEYS.asc; do
-  curl -fLO "https://github.com/loki-notfound/myzephyr-ts/releases/download/v2.3.0-sec.2-ts.1/$f"
+for f in loki-notfound-zephyr-ts-2.3.0-sec.2-ts.2.tgz manifest.json SHA256SUMS SHA256SUMS.asc KEYS.asc; do
+  curl -fLO "https://github.com/loki-notfound/myzephyr-ts/releases/download/v2.3.0-sec.2-ts.2/$f"
 done
 ```
 
@@ -77,7 +77,7 @@ the library. [Chapter 13](13-building-and-verifying.md) explains the other check
 Then copy the tarball into your project and install it by path:
 
 ```sh
-npm install ./loki-notfound-zephyr-ts-2.3.0-sec.2-ts.1.tgz
+npm install ./loki-notfound-zephyr-ts-2.3.0-sec.2-ts.2.tgz
 ```
 
 npm records the dependency as a `file:` path in `package.json` and the tarball's integrity hash in

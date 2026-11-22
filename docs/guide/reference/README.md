@@ -1,6 +1,6 @@
 # API reference
 
-Every name the package `@loki-notfound/zephyr-ts` exports, version `2.3.0-sec.2-ts.1`, written from the
+Every name the package `@loki-notfound/zephyr-ts` exports, version `2.3.0-sec.2-ts.2`, written from the
 package entry (`src/main/ts/index.ts`) and the declarations it ships (`dist/src/main/ts/index.d.ts` and
 the files it re-exports). The signatures are copied from those declarations, and
 `bin/check_guide.sh` checks that each one appears there and that this list matches the exports.
@@ -80,5 +80,5 @@ Every declaration file the entry's declarations reach exports only names of this
 module's default export is `ZephyrWalletError`). The parsers, validators, constants, worker data shapes
 and test support the library uses are in internal modules that the entry does not export and that no
 declaration the entry reaches refers to.
-The changes of the declared surface since the release are listed in
+The changes of the declared surface from one release to the next are listed in
 [docs/CHANGES.md](../../CHANGES.md).

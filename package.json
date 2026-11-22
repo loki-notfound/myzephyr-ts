@@ -1,7 +1,7 @@
 {
   "name": "@loki-notfound/zephyr-ts",
   "description": "TypeScript wallet library for Zephyr: a port of monero-ts onto the signed zephyr-backports core",
-  "version": "2.3.0-sec.2-ts.1",
+  "version": "2.3.0-sec.2-ts.2",
   "private": true,
   "license": "MIT",
   "repository": {
