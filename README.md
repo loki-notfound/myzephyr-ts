@@ -26,14 +26,15 @@ are type-checked against the package and the offline ones are run (`bin/check_gu
 
 The supported surface is the wallet lifecycle, read-only daemon access, accounts and subaddresses,
 the read-only history of transactions and transfers, an explicit pool refresh, building same-asset
-transactions and conversions to inspect them, relaying a prepared transaction or conversion in two
-explicit steps, sweeping the unlocked balance of one asset in one account, the reserve, the circulating supply and the oracle's pricing record, the progress of a sync,
-listeners and background synchronization, and payment proofs and transaction keys, with the names of the Java port (below). Relay was proven on mainnet on 2026-11-15 for transfers in the four V2 assets
-and four of the six conversions, and on 2026-11-22 for transfers to another wallet and sweeps of ZPH
-and ZSD; its failure paths are proven against a local sink only. The library makes payment proofs and
-does not check them; on 2026-11-22 outbound and inbound proofs, spend proofs and transaction keys of real
-transactions were checked good by the core's own check functions. Read
-[docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
+transactions, conversions and sweeps of the unlocked balance of one asset in one account to inspect
+them, relaying a prepared build in two explicit steps, the reserve, the circulating supply and the
+oracle's pricing record, the progress of a sync, listeners and background synchronization, and payment
+proofs and transaction keys, with the names of the Java port (below). Relay was proven on mainnet on
+2026-11-15 for transfers in the four V2 assets and four of the six conversions, and on 2026-11-22 for
+transfers to another wallet and sweeps of ZPH and ZSD; its failure paths are proven against a local
+sink only. The library makes payment proofs and does not check them; on 2026-11-22 outbound and inbound
+proofs, spend proofs and transaction keys of real transactions were checked good by the core's own
+check functions. Read [docs/LIMITATIONS.md](docs/LIMITATIONS.md) before you use it with real funds or public nodes.
 Which systems, runtimes and browsers are tested, automatically or by hand, is in
 [docs/PLATFORMS.md](docs/PLATFORMS.md).
 
@@ -146,6 +147,48 @@ Calls outside this surface reject with `UNSUPPORTED_CAPABILITY` before any nativ
 The changes of the declared surface from one release to the next are listed, with what a caller
 has to change, in [docs/CHANGES.md](docs/CHANGES.md).
 
+```typescript
+import { createRandomWallet, openWalletData, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
+
+// a new wallet that starts at the daemon's height
+const wallet = await createRandomWallet({ networkType: "mainnet", password: "a strong password",
+  server: "https://node.example.org" });
+console.log(await wallet.getPrimaryAddress(), await wallet.getRestoreHeight());
+await wallet.sync();                                   // { numBlocksFetched, receivedMoney }
+const balances = await wallet.getBalance();            // ReadonlyMap<string, bigint>
+const { keys, cache } = await wallet.getData();        // persist these bytes yourself
+await wallet.close();
+
+// reopen from bytes, offline
+const reopened = await openWalletData({ networkType: "mainnet", password: "a strong password", keysData: keys, cacheData: cache });
+try {
+  await reopened.createTxs();
+} catch (err) {
+  if (err instanceof ZephyrWalletError) console.log(err.code); // UNSUPPORTED_CAPABILITY
+}
+await reopened.close();
+```
+
+The package has one entry with two builds, chosen by the conditions of its exports map. Node.js
+(`require` and `import`) gets the CommonJS build, which finds the worker script and `zephyr.wasm`
+inside the package. A browser bundler gets `dist/zephyr-ts.browser.mjs` through the `browser`
+condition: one ES module, built from the same sources, that needs no Node.js built-in, polyfill or
+bundler setting. It names the worker script and `zephyr.wasm` with
+`new URL("./...", import.meta.url)`, so the bundler emits both files with the application and the
+library loads them from there. Vite 8 (development server and production build, without a
+configuration file) and webpack 5 (without any resolve fallback) are tested. To serve the two files
+from another place, set their URLs before the first construction:
+
+```typescript
+import { setWorkerDistPath, setWasmModuleUrl } from "@loki-notfound/zephyr-ts";
+setWorkerDistPath("/static/zephyr.worker.js");
+setWasmModuleUrl("/static/zephyr.wasm");
+```
+
+The page needs a Content-Security-Policy that allows WebAssembly compilation and the daemon
+origin; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the policy, the three daemon address forms
+and proxy requirements.
+
 ### Accounts and subaddresses
 
 An account (`ZephyrAccount`) carries its `index`, `primaryAddress` (the address of its subaddress
@@ -255,48 +298,6 @@ const pending = await wallet.getTransfers({ status: "pool", direction: "incoming
 Labels, destination addresses and any other text that comes from wallet bytes or the chain are
 untrusted display text: see "Text from wallets and the chain" in
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
-
-```typescript
-import { createRandomWallet, openWalletData, ZephyrWalletError } from "@loki-notfound/zephyr-ts";
-
-// a new wallet that starts at the daemon's height
-const wallet = await createRandomWallet({ networkType: "mainnet", password: "a strong password",
-  server: "https://node.example.org" });
-console.log(await wallet.getPrimaryAddress(), await wallet.getRestoreHeight());
-await wallet.sync();                                   // { numBlocksFetched, receivedMoney }
-const balances = await wallet.getBalance();            // ReadonlyMap<string, bigint>
-const { keys, cache } = await wallet.getData();        // persist these bytes yourself
-await wallet.close();
-
-// reopen from bytes, offline
-const reopened = await openWalletData({ networkType: "mainnet", password: "a strong password", keysData: keys, cacheData: cache });
-try {
-  await reopened.createTxs();
-} catch (err) {
-  if (err instanceof ZephyrWalletError) console.log(err.code); // UNSUPPORTED_CAPABILITY
-}
-await reopened.close();
-```
-
-The package has one entry with two builds, chosen by the conditions of its exports map. Node.js
-(`require` and `import`) gets the CommonJS build, which finds the worker script and `zephyr.wasm`
-inside the package. A browser bundler gets `dist/zephyr-ts.browser.mjs` through the `browser`
-condition: one ES module, built from the same sources, that needs no Node.js built-in, polyfill or
-bundler setting. It names the worker script and `zephyr.wasm` with
-`new URL("./...", import.meta.url)`, so the bundler emits both files with the application and the
-library loads them from there. Vite 8 (development server and production build, without a
-configuration file) and webpack 5 (without any resolve fallback) are tested. To serve the two files
-from another place, set their URLs before the first construction:
-
-```typescript
-import { setWorkerDistPath, setWasmModuleUrl } from "@loki-notfound/zephyr-ts";
-setWorkerDistPath("/static/zephyr.worker.js");
-setWasmModuleUrl("/static/zephyr.wasm");
-```
-
-The page needs a Content-Security-Policy that allows WebAssembly compilation and the daemon
-origin; see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the policy, the three daemon address forms
-and proxy requirements.
 
 ### Building transactions without relay
 
@@ -600,15 +601,17 @@ ratio refused, relay from a browser or from a wallet in a worker, and other plat
 ## Not ported
 
 Everything else inherited from monero-ts stays in the source as unported classes under
-`src/main/ts/` and is not exported by the package: the
-connection manager, the inherited listener classes and their native glue (listeners are supported through
-the facade's own path), the inherited query-based history,
-the inherited transaction creation, its relay and sweeps (sweeping an account is `buildSweepUnlocked`), outputs, key images, rescans, reserve proofs, checking proofs, multisig and file-system wallets (the inherited models under `src/main/ts/daemon/model/`,
-most of `src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
+`src/main/ts/` and is not exported by the package: the connection manager, the inherited listener
+classes and their native glue (listeners are supported through the facade's own path), the inherited
+query-based history, the inherited transaction creation, its relay and sweeps (sweeping an account is
+`buildSweepUnlocked`), outputs, key images, rescans, reserve proofs, checking proofs, multisig and
+file-system wallets (the inherited models under `src/main/ts/daemon/model/`, most of
+`src/main/ts/wallet/`, including the inherited abstract wallet `ZephyrWalletBase` and the
 inherited account and subaddress models, renamed `ZephyrAccountInherited` and
 `ZephyrSubaddressInherited` because the entry's own results carry the names `ZephyrAccount` and
-`ZephyrSubaddress`). The inherited wallet RPC client is not part of the source or the package any more, and the
-inherited daemon RPC client was replaced by the supported `ZephyrDaemonRpc` (docs/CHANGES.md). The
+`ZephyrSubaddress`). The inherited wallet RPC client is not part of the source or the package any
+more, and the inherited daemon RPC client was replaced by the supported `ZephyrDaemonRpc`
+(docs/CHANGES.md). The
 inherited Monero test suite and its root entry point are not part of this repository's tree; the
 tests are under `src/test/lifecycle/`, `src/test/network/` and `src/test/transport/`.
 
@@ -625,8 +628,10 @@ Electron.
 Releases are tagged `v<zephyr version>-sec.<N>-ts.<M>`: `sec.<N>` is the zephyr-backports tag
 of the pinned core, `ts.<M>` counts releases of this library on that core and restarts at 1 with
 a new core tag. The package version is the tag without the `v`. Versions are semver
-prereleases, so install an exact version. The version does not encode API compatibility; breaking
-changes are announced in the release notes. Tags are annotated and signed by the maintainer key
+prereleases, so install an exact version. The version does not encode API compatibility, and there
+is no stability promise yet: every change of the documented surface is listed in
+[docs/CHANGES.md](docs/CHANGES.md), in the section of the release that makes it, with what a caller
+has to change, and the release notes point to it. Tags are annotated and signed by the maintainer key
 `31DA 39AB 43E0 CA67 F1F3  A661 BA2A FF22 DF8A 4A13`.
 
 ## License and provenance

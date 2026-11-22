@@ -67,6 +67,9 @@ not the wallet's creation height. Restores from a seed or keys use the `restoreH
 * The core sends notifications only while the wallet asks for them, i.e. while listeners are added (or for a sync with
   a listener). A listener added while a sync runs gets that sync's notifications only if another listener was added
   before the sync started.
+* If two listeners are added at once (the second before the first `addListener` resolves) and switching the core's
+  notifications on fails, the first call rejects and takes back only its own listener: the second stays listed and
+  receives notifications only during a sync with a listener, until every listener is removed and one is added again.
 * Callbacks run in the context that owns the wallet, never inside the core. In direct mode they run between the
   core's steps on the same thread, so a slow callback delays the scan; in a wallet's own worker it does not. A
   context whose event loop is blocked receives the queued notifications in order afterwards.

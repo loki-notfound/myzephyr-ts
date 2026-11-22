@@ -89,8 +89,8 @@ host.
 
 runs, with no network access:
 
-* the lifecycle suite (checks `C01`-`C46`) with the release module and the instrumented suite
-  (`T00`-`T24`) with the test module, in Node.js directly and through wallet workers, under a
+* the lifecycle suite (checks `C01`-`C52`) with the release module and the instrumented suite
+  (`T00`-`T33`) with the test module, in Node.js directly and through wallet workers, under a
   preloaded monitor that blocks every connection and records unexpected file writes (among them `C38`
   and `C39`: the relay calls' rejections before dispatch and the strict decoding of their results and
   worker messages; `T22`: every failure injected as the core throws it, each typed failure of a build
@@ -99,7 +99,15 @@ runs, with no network access:
   rejections without a daemon or on a keys-only wallet, `ZephyrDaemonRpc`'s address validation (the same as a
   wallet's), its not offered methods and argument rejections, and the strict reading of the reserve results;
   `T24`: the core's failed read of the pricing record and injected failures of the reserve calls, the
-  allocator unchanged);
+  allocator unchanged; `C47`, `C48` and `T25`-`T29`: listeners and background synchronization, their
+  rejections, the strict reading of the notifications, synthetic syncs whose notifications reach every
+  listener in order, listeners that throw, the background loop, a close or a forced stop during an
+  iteration and, through a worker, an owner whose event loop is blocked; `C49`, `C50`, `T30` and `T31`:
+  sweeps, their rejections before dispatch, the strict decoding of their descriptions, the core's failures
+  injected as it throws them and the objects the core's sweep wrapper returns per asset; `C51`, `C52` and
+  `T32`: payment proofs and transaction keys, their rejections, the strict decoding of their results with no
+  result text in an error, and the core's failures injected; `T33`: the core's fee tier fallback at the
+  default priority);
 * the module loading cases in Node.js, directly and through workers: a missing `zephyr.wasm`,
   a file that is not WebAssembly, a module of another program or build, a changed byte and a
   runtime without Web Crypto reject with fixed diagnostics before any worker starts, and a failed
@@ -122,6 +130,10 @@ runs, with no network access:
   without node text; `V02` (main thread and page): `ZephyrDaemonRpc` against constructed answers, with
   values above 2^53 read exactly, every malformed answer and failure a fixed error, no redirect followed,
   one request per call and none for a method it does not offer;
+* `V03` (test module, main thread): a constructed daemon started by its runner fails the pool backlog
+  read or the block header read; builds of a transfer, a conversion and a sweep without funds at the
+  default priority must end with the refusal the same build gets at an explicit priority, not `DAEMON_ERROR`, and the
+  daemon must see those reads at the default priority only;
 * `S03`: the relay checks with the test module in the main thread against the first server's
   constructed sink daemons (`/sink/<mode>`, answered by `src/test/network/relaySink.cjs`): a wallet
   without funds keeps a synthetic transaction (a test-module hook; it spends nothing and no chain

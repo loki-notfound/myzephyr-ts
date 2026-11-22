@@ -18,15 +18,16 @@ What it does:
 
 - creates, restores and opens wallets, keeps their bytes in memory and gives them to you to store;
 - reads from a Zephyr daemon: heights, synchronization with its progress, listeners and background
-  synchronization, balances per asset;
+  synchronization, balances per asset, the reserve and the circulating supply, and with
+  `ZephyrDaemonRpc` the node's information and block headers with the oracle's pricing record;
 - lists accounts and subaddresses, and reads the history of transactions and transfers per asset;
 - builds same-asset transfers in the four V2 assets, the six conversions between them and the sweep of
   the unlocked balance of an account, to inspect them, and relays a prepared build in two explicit steps;
 - makes payment proofs and gives the keys of the transactions it sent.
 
 What it does not do: a converting sweep, sweeping one output or dust, outputs, key images,
-rescans, reserve proofs, checking proofs, multisig, wallet files on disk, the daemon and wallet RPC clients, and
-transactions in the V1 assets. A call outside the supported surface rejects with
+rescans, reserve proofs, checking proofs, multisig, wallet files on disk, the wallet RPC client,
+daemon calls other than the read-only ones of `ZephyrDaemonRpc`, and transactions in the V1 assets. A call outside the supported surface rejects with
 `UNSUPPORTED_CAPABILITY` before any native code runs. Read
 [chapter 12](12-known-limitations.md) before you use the library with real funds or public nodes.
 
